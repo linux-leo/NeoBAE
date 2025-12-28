@@ -146,7 +146,10 @@ endif
 
 ifneq ($(filter 1,$(VORBIS_DEC) $(VORBIS_ENC)),) 
 	INC_PATH	+= -Isrc/thirdparty/libvorbis/include -Isrc/thirdparty/libvorbis/lib
-	BAE_FLAGS += -DHAVE_CONFIG_H=1
+	ifneq ($(filter 1,$(VORBIS_ENC)),)
+		BAE_LIBS := -lvorbisenc $(BAE_LIBS)
+	endif
+	BAE_LIBS := -lvorbisfile -lvorbis -logg $(BAE_LIBS)
 endif
 
 # default to ANSI
@@ -420,73 +423,21 @@ endif
 # Add libogg source files
 ifeq ($(OGG_SUPPORT),1)
 	BAE_FLAGS += -DUSE_OGG_FORMAT=1
-	ifneq ($(WASM),1)
-		SRC += src/thirdparty/libogg/src/bitwise.c src/thirdparty/libogg/src/framing.c
-	endif
+	# Use shared library instead of compiling sources
 endif
 
 # Add libvorbis decoder source files
 ifeq ($(VORBIS_DEC),1)
 	BAE_FLAGS += -DUSE_VORBIS_DECODER=1
-	ifneq ($(WASM),1)
-		SRC += src/thirdparty/libvorbis/lib/analysis.c \
-			src/thirdparty/libvorbis/lib/bitrate.c \
-			src/thirdparty/libvorbis/lib/block.c \
-			src/thirdparty/libvorbis/lib/codebook.c \
-			src/thirdparty/libvorbis/lib/envelope.c \
-			src/thirdparty/libvorbis/lib/floor0.c \
-			src/thirdparty/libvorbis/lib/floor1.c \
-			src/thirdparty/libvorbis/lib/info.c \
-			src/thirdparty/libvorbis/lib/lookup.c \
-			src/thirdparty/libvorbis/lib/lsp.c \
-			src/thirdparty/libvorbis/lib/mapping0.c \
-			src/thirdparty/libvorbis/lib/mdct.c \
-			src/thirdparty/libvorbis/lib/psy.c \
-			src/thirdparty/libvorbis/lib/registry.c \
-			src/thirdparty/libvorbis/lib/res0.c \
-			src/thirdparty/libvorbis/lib/sharedbook.c \
-			src/thirdparty/libvorbis/lib/smallft.c \
-			src/thirdparty/libvorbis/lib/synthesis.c \
-			src/thirdparty/libvorbis/lib/vorbisfile.c \
-			src/BAE_Source/Common/XVorbisFiles.c \
-			src/thirdparty/libvorbis/lib/lpc.c \
-			src/thirdparty/libvorbis/lib/window.c
-	else
-		SRC += src/BAE_Source/Common/XVorbisFiles.c
-	endif
+	# Use shared library instead of compiling sources
+	SRC += src/BAE_Source/Common/XVorbisFiles.c
 endif
 
 # Add libvorbis encoder source files  
 ifeq ($(VORBIS_ENC),1)
 	BAE_FLAGS += -DUSE_VORBIS_ENCODER=1
-	ifneq ($(WASM),1)	
-		SRC += src/thirdparty/libvorbis/lib/vorbisenc.c
-		# If decoder not already included, add required decoder files for encoder	
-		ifneq ($(VORBIS_DEC),1)
-			SRC += src/thirdparty/libvorbis/lib/analysis.c \
-				src/thirdparty/libvorbis/lib/bitrate.c \
-				src/thirdparty/libvorbis/lib/block.c \
-				src/thirdparty/libvorbis/lib/codebook.c \
-				src/thirdparty/libvorbis/lib/envelope.c \
-				src/thirdparty/libvorbis/lib/floor0.c \
-				src/thirdparty/libvorbis/lib/floor1.c \
-				src/thirdparty/libvorbis/lib/info.c \
-				src/thirdparty/libvorbis/lib/lookup.c \
-				src/thirdparty/libvorbis/lib/lsp.c \
-				src/thirdparty/libvorbis/lib/mapping0.c \
-				src/thirdparty/libvorbis/lib/mdct.c \
-				src/thirdparty/libvorbis/lib/psy.c \
-				src/thirdparty/libvorbis/lib/registry.c \
-				src/thirdparty/libvorbis/lib/res0.c \
-				src/thirdparty/libvorbis/lib/sharedbook.c \
-				src/thirdparty/libvorbis/lib/smallft.c \
-				src/thirdparty/libvorbis/lib/synthesis.c \
-				src/thirdparty/libvorbis/lib/vorbisfile.c \
-				src/BAE_Source/Common/XVorbisFiles.c \
-				src/thirdparty/libvorbis/lib/lpc.c \
-				src/thirdparty/libvorbis/lib/window.c
-		endif
-	endif
+	# Use shared library instead of compiling sources
+	# XVorbisFiles.c is added in decoder section if needed
 endif
 
 
