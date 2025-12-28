@@ -2264,6 +2264,10 @@ typedef int32_t UNIT_TYPE;
         ,
         FILE_VORBIS_TYPE
 #endif
+#if USE_OPUS_DECODER == TRUE
+        ,
+        FILE_OPUS_TYPE
+#endif
     } AudioFileType;
 
     // This will read into memory the entire file and return a GM_Waveform structure.

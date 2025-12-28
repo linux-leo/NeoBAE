@@ -856,6 +856,10 @@ typedef enum SndCompressionType
 #if USE_VORBIS_DECODER == TRUE
     C_VORBIS            = FOUR_CHAR('O','g','g','V'),   // 'OggV'   Ogg Vorbis audio
 #endif
+
+#if USE_OPUS_DECODER == TRUE
+    C_OPUS              = FOUR_CHAR('O','g','g','O'),   // 'OggO'   Ogg Opus audio
+#endif
                                                         // for all of these compression types
                                                         // the SndCompressionSubType (CS_DEFAULT)
                                                         // is CS_MPEG2.
@@ -1205,6 +1209,10 @@ OPErr XExpandFLAC(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst);
 
 #if USE_VORBIS_DECODER != 0
 OPErr XExpandVorbis(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst);
+#endif
+
+#if USE_OPUS_DECODER != 0
+OPErr XExpandOpus(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst);
 #endif
 
 

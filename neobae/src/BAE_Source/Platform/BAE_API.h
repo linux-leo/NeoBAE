@@ -114,6 +114,10 @@
 #define X_FILETYPE_XMF  "XMF "
 #define X_FILETYPE_AIFF "FORM"
 #define X_FILETYPE_WAVE "RIFF"
+#define X_FILETYPE_OGG  "OggS"
+#define X_FILETYPE_OPUS "OpusHead"
+#define X_FILETYPE_FLAC "fLaC"
+#define X_FILETYPE_VORBIS "vorbis"
 #include <stdint.h>
 
 // This file contains API's that need to be defined in order to get BAE (IgorAudio)

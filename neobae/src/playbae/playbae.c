@@ -414,6 +414,9 @@ static void init_playFileString(void)
 #if defined(USE_VORBIS_DECODER) && (USE_VORBIS_DECODER != 0)
    strcat(playFileString, ", Ogg Vorbis");
 #endif
+#if defined(USE_OPUS_DECODER) && (USE_OPUS_DECODER != 0)
+   strcat(playFileString, ", Ogg Opus");
+#endif
    strcat(playFileString, ")");
 }
 
@@ -1623,6 +1626,11 @@ BAEResult playFile(BAEMixer theMixer, char *parmFile, BAE_UNSIGNED_FIXED volume,
 #if USE_VORBIS_DECODER == TRUE
          case BAE_VORBIS_TYPE:
             playbae_printf("Playing Ogg Vorbis %s\n", parmFile);
+            break;
+#endif
+#if USE_OPUS_DECODER == TRUE
+         case BAE_OPUS_TYPE:
+            playbae_printf("Playing Ogg Opus %s\n", parmFile);
             break;
 #endif
          default:

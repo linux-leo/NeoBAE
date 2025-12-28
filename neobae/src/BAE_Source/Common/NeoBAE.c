@@ -1098,6 +1098,11 @@ AudioFileType BAE_TranslateBAEFileType(BAEFileType fileType)
         haeFileType = FILE_VORBIS_TYPE;
         break;
 #endif
+#if USE_OPUS_DECODER == TRUE
+    case BAE_OPUS_TYPE:
+        haeFileType = FILE_OPUS_TYPE;
+        break;
+#endif
     case BAE_AU_TYPE:
         haeFileType = FILE_AU_TYPE;
         break;
@@ -10616,6 +10621,9 @@ BAEResult BAEMixer_LoadFromFile(BAEMixer mixer, BAEPathName filePath, BAELoadRes
 #if USE_VORBIS_DECODER == TRUE
         || ftype == BAE_VORBIS_TYPE
 #endif
+#if USE_OPUS_DECODER == TRUE
+        || ftype == BAE_OPUS_TYPE
+#endif
     )
     {
         isAudio = TRUE;
@@ -10780,6 +10788,9 @@ BAEResult BAEMixer_LoadFromMemory(BAEMixer mixer, void const *pData, uint32_t da
 #endif
 #if USE_VORBIS_DECODER == TRUE
         || ftype == BAE_VORBIS_TYPE
+#endif
+#if USE_OPUS_DECODER == TRUE
+        || ftype == BAE_OPUS_TYPE
 #endif
     )
     {

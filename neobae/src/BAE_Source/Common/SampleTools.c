@@ -585,6 +585,11 @@ UINT32          const decodingBytes = decodingFrames * bytesPerFrame;
         return XExpandVorbis(src, startFrame, dst);
 #endif
 
+#if USE_OPUS_DECODER == TRUE
+    case C_OPUS:
+        return XExpandOpus(src, startFrame, dst);
+#endif
+
 #if X_PLATFORM == X_MACINTOSH_9
     case C_MACE3 :
     case C_MACE6 :

@@ -3,6 +3,7 @@
     {
       "name": "WSL2-MinGW-GUI-SDL3",
       "includePath": [
+        "/usr/x86_64-w64-mingw32/include/**",
         "${workspaceFolder}/neobae/src/BAE_Source/Common/**",
         "${workspaceFolder}/neobae/src/BAE_Source/Platform/**",
         "${workspaceFolder}/neobae/src/BAE_MPEG_Source_II/**",
@@ -42,7 +43,9 @@
         "SUPPORT_KARAOKE=1",
         "USE_XMF_SUPPORT=1",
         "_BUILT_IN_PATCHES=1",
-        "USE_NEO_EFFECTS=1"
+        "USE_NEO_EFFECTS=1",
+        "USE_OPUS_DECODER=1",
+        "USE_OPUS_ENCODER=1"
       ],
       "compilerPath": "/usr/bin/x86_64-w64-mingw32-gcc",
       "intelliSenseMode": "linux-gcc-x64",

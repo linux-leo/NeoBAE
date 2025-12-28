@@ -13,3 +13,9 @@
 [submodule "neobae/src/thirdparty/flac"]
 	path = neobae/src/thirdparty/flac
 	url = https://github.com/zefie/flac_android.git
+[submodule "neobae/src/thirdparty/opus"]
+	path = neobae/src/thirdparty/opus
+	url = https://github.com/xiph/opus
+[submodule "neobae/src/thirdparty/opusfile"]
+	path = neobae/src/thirdparty/opusfile
+	url = https://github.com/xiph/opusfile

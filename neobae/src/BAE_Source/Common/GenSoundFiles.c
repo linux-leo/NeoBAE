@@ -201,6 +201,10 @@
 #include <vorbis/vorbisenc.h>
 #endif
 #endif
+#if USE_OPUS_DECODER != FALSE
+#include <opusfile.h>
+#include <opus/opus.h>
+#endif
 #include <stdint.h>
 #include <limits.h>
 
@@ -287,6 +291,75 @@ static long PV_VorbisTellFunc(void *datasource)
     return XFileGetPosition(file);
 }
 #endif
+
+#if USE_OPUS_DECODER != FALSE
+
+// Callback functions for libopusfile to read from XFILE
+static int PV_OpusReadFunc(void *stream, unsigned char *ptr, int nbytes)
+{
+    XFILE file = (XFILE)stream;
+    XERR err;
+    
+    if (nbytes == 0) return 0;
+    
+    /* Cap the requested size to the remaining bytes to allow partial/EOF reads */
+    {
+        int32_t file_len = XFileGetLength(file);
+        int32_t file_pos = XFileGetPosition(file);
+        if (file_len >= 0 && file_pos >= 0) {
+            int32_t remaining = file_len - file_pos;
+            if (remaining <= 0) return 0; /* EOF */
+            if (nbytes > remaining) {
+                nbytes = remaining;
+            }
+        }
+    }
+    
+    err = XFileRead(file, ptr, nbytes);
+    if (err != 0) {
+        return 0; /* Error reading */
+    }
+    
+    return nbytes;
+}
+
+static int PV_OpusSeekFunc(void *stream, opus_int64 offset, int whence)
+{
+    XFILE file = (XFILE)stream;
+    
+    switch (whence) {
+        case SEEK_SET:
+            return XFileSetPosition(file, (long)offset) == NO_ERR ? 0 : -1;
+        case SEEK_CUR:
+            return XFileSetPositionRelative(file, (long)offset) == NO_ERR ? 0 : -1;
+        case SEEK_END:
+            {
+                int32_t file_length = XFileGetLength(file);
+                if (file_length >= 0) {
+                    int32_t new_pos = file_length + (int32_t)offset;
+                    return XFileSetPosition(file, new_pos) == NO_ERR ? 0 : -1;
+                }
+                return -1;
+            }
+        default:
+            return -1;
+    }
+}
+
+static opus_int64 PV_OpusTellFunc(void *stream)
+{
+    XFILE file = (XFILE)stream;
+    return (opus_int64)XFileGetPosition(file);
+}
+
+static OpusFileCallbacks PV_OpusCallbacks = {
+    PV_OpusReadFunc,
+    PV_OpusSeekFunc,
+    PV_OpusTellFunc,
+    NULL  // close_func - we handle closing ourselves
+};
+
+#endif // USE_OPUS_DECODER != FALSE
 
 #undef X_PACK_FAST
 #include "X_PackStructures.h"
@@ -3458,7 +3531,338 @@ OPErr XExpandVorbis(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst)
 
 #endif // USE_VORBIS_DECODER != FALSE
 
-#if USE_VORBIS_DECODER != FALSE
+#if USE_OPUS_DECODER != FALSE
+
+// Read an Opus file into memory and return a GM_Waveform structure
+static GM_Waveform* PV_ReadIntoMemoryOpusFile(XFILE file, XBOOL decodeData, 
+                                             int32_t *pFormat, void **ppBlockPtr, uint32_t *pBlockSize, OPErr *pError)
+{
+    GM_Waveform *wave = NULL;
+    OggOpusFile *of;
+    int error;
+    const OpusHead *head;
+    long bytes_read;
+    uint32_t total_read = 0;
+    uint32_t capacity = 0;
+    long pos;
+    
+    if (file == NULL || pError == NULL) {
+        if (pError) *pError = PARAM_ERR;
+        return NULL;
+    }
+    
+    // Initialize output parameters
+    if (pFormat) *pFormat = X_NONE;
+    if (ppBlockPtr) *ppBlockPtr = NULL;
+    if (pBlockSize) *pBlockSize = 0;
+    
+    // Save current file position
+    pos = XFileGetPosition(file);
+    
+    // Try to open as Opus file
+    of = op_open_callbacks(file, &PV_OpusCallbacks, NULL, 0, &error);
+    if (of == NULL) {
+        XFileSetPosition(file, pos);
+        *pError = PARAM_ERR;
+        return NULL;
+    }
+    
+    // Get file information
+    head = op_head(of, -1);
+    if (head == NULL) {
+        op_free(of);
+        *pError = BAD_FILE;
+        return NULL;
+    }
+    
+    // Allocate waveform structure
+    wave = (GM_Waveform*)XNewPtr(sizeof(GM_Waveform));
+    if (wave == NULL) {
+        op_free(of);
+        *pError = MEMORY_ERR;
+        return NULL;
+    }
+    
+    // Set basic info
+    wave->sampledRate = 48000 << 16L; // Opus always decodes to 48kHz (store as 16.16 fixed point)
+    wave->channels = head->channel_count;
+    wave->bitSize = 16; // 16-bit PCM output
+    wave->baseMidiPitch = 60; // Default middle C
+    wave->compressionType = decodeData ? C_NONE : C_OPUS;
+    wave->startLoop = 0;
+    wave->endLoop = 0;
+    
+    if (decodeData) {
+        // Decode the entire file
+        ogg_int64_t pcm_total = op_pcm_total(of, -1);
+        uint32_t expected_size = 0;
+        if (pcm_total > 0 && pcm_total <= (ogg_int64_t)0xFFFFFFFF) {
+            wave->waveFrames = (UINT32)pcm_total;
+            expected_size = wave->waveFrames * wave->channels * 2; // 16-bit samples
+        } else {
+            // Unknown length - proceed to decode until EOF
+            wave->waveFrames = 0;
+        }
+
+        // Start with a reasonable buffer size (don't shrink to 0 when expected_size==0)
+        capacity = 65536;
+        if (expected_size > 0 && capacity > expected_size) {
+            capacity = expected_size;
+        }
+
+        wave->theWaveform = (SBYTE*)XNewPtr(capacity);
+        if (wave->theWaveform == NULL) {
+            op_free(of);
+            XDisposePtr(wave);
+            *pError = MEMORY_ERR;
+            return NULL;
+        }
+
+        // Decode in chunks — if expected_size==0 we loop until op_read returns 0
+        while (expected_size == 0 ? 1 : (total_read < expected_size)) {
+            uint32_t readChunk = capacity - total_read;
+            if (readChunk > 4096) {
+                readChunk = 4096;
+            }
+            
+            if (capacity - total_read < readChunk) {
+                uint32_t newCapacity = capacity * 2;
+                while (newCapacity - total_read < readChunk) {
+                    newCapacity *= 2;
+                }
+                {
+                    SBYTE *resized = (SBYTE*)XResizePtr(wave->theWaveform, (int32_t)newCapacity);
+                    if (resized == NULL) {
+                        op_free(of);
+                        XDisposePtr(wave->theWaveform);
+                        XDisposePtr(wave);
+                        *pError = MEMORY_ERR;
+                        return NULL;
+                    }
+                    wave->theWaveform = resized;
+                    capacity = newCapacity;
+                }
+            }
+            
+            bytes_read = op_read(of,
+                                (opus_int16*)((char*)wave->theWaveform + total_read),
+                                (int)(readChunk / (wave->channels * 2)), // samples per channel
+                                NULL);
+
+            if (bytes_read == 0) {
+                break; // EOF
+            }
+            if (bytes_read < 0) {
+                op_free(of);
+                XDisposePtr(wave->theWaveform);
+                XDisposePtr(wave);
+                *pError = BAD_FILE;
+                return NULL;
+            }
+            total_read += (uint32_t)bytes_read * wave->channels * 2; // bytes (16-bit samples)
+
+            // If buffer is full, grow it
+            if (capacity - total_read < 4096) {
+                uint32_t newCapacity = capacity * 2;
+                SBYTE *resized = (SBYTE*)XResizePtr(wave->theWaveform, (int32_t)newCapacity);
+                if (resized == NULL) {
+                    op_free(of);
+                    XDisposePtr(wave->theWaveform);
+                    XDisposePtr(wave);
+                    *pError = MEMORY_ERR;
+                    return NULL;
+                }
+                wave->theWaveform = resized;
+                capacity = newCapacity;
+            }
+        }
+
+        if (total_read == 0) {
+            op_free(of);
+            XDisposePtr(wave->theWaveform);
+            XDisposePtr(wave);
+            *pError = BAD_FILE;
+            return NULL;
+        }
+        
+        // Shrink to the actual decoded size
+        {
+            SBYTE *shrunk = (SBYTE*)XResizePtr(wave->theWaveform, (int32_t)total_read);
+            if (shrunk) {
+                wave->theWaveform = shrunk;
+            }
+        }
+        
+        wave->waveSize = total_read;
+        wave->waveFrames = total_read / (wave->channels * 2);
+
+        /* If int16 output is nearly silent, try a float decode fallback and convert to int16 */
+        {
+            int maxAbsInt = 0;
+            int16_t *pInt = (int16_t*)wave->theWaveform;
+            uint32_t sampleCount = wave->waveSize / 2; /* total int16 samples */
+            for (uint32_t __i = 0; __i < sampleCount; __i++) {
+                int v = pInt[__i]; if (v < 0) v = -v; if (v > maxAbsInt) maxAbsInt = v;
+            }
+            if (maxAbsInt <= 8) {
+                if (op_pcm_seek(of, 0) == 0) {
+                    /* allocate a new buffer and decode floats into it, converting to int16 */
+                    uint32_t newCapacity = 64 * 1024;
+                    SBYTE *newBuf = (SBYTE*)XNewPtr(newCapacity);
+                    if (newBuf) {
+                        uint32_t new_total = 0;
+                        float *fbuf = NULL;
+                        int floatBufCount = 0;
+
+                        for (;;) {
+                            if (newCapacity - new_total < 4096) {
+                                uint32_t nc = newCapacity * 2;
+                                SBYTE *r = (SBYTE*)XResizePtr(newBuf, (int32_t)nc);
+                                if (r == NULL) break;
+                                newBuf = r; newCapacity = nc;
+                            }
+
+                            int samples_per_channel = (int)((newCapacity - new_total) / (wave->channels * 2));
+                            if (samples_per_channel <= 0) break;
+
+                            int neededFloats = samples_per_channel * wave->channels;
+                            if (floatBufCount < neededFloats) {
+                                if (fbuf) {
+                                    float *tmp = (float*)XResizePtr(fbuf, (int32_t)(sizeof(float) * neededFloats));
+                                    if (tmp == NULL) break;
+                                    fbuf = tmp;
+                                } else {
+                                    fbuf = (float*)XNewPtr((int32_t)(sizeof(float) * neededFloats));
+                                    if (fbuf == NULL) break;
+                                }
+                                floatBufCount = neededFloats;
+                            }
+
+                            int got = op_read_float(of, fbuf, samples_per_channel, NULL);
+                            if (got <= 0) break;
+
+                            int totalFloats = got * wave->channels;
+                            /* ensure room */
+                            if (newCapacity - new_total < (uint32_t)(totalFloats * 2)) {
+                                uint32_t nc = newCapacity * 2;
+                                while (nc - new_total < (uint32_t)(totalFloats * 2)) nc *= 2;
+                                SBYTE *r = (SBYTE*)XResizePtr(newBuf, (int32_t)nc);
+                                if (r == NULL) break;
+                                newBuf = r; newCapacity = nc;
+                            }
+
+                            int16_t *out16 = (int16_t*)(newBuf + new_total);
+                            for (int fi = 0; fi < totalFloats; fi++) {
+                                float v = fbuf[fi];
+                                if (v > 1.0f) v = 1.0f; if (v < -1.0f) v = -1.0f;
+                                int32_t vi = (int32_t)(v * 32767.0f);
+                                if (vi > 32767) vi = 32767; if (vi < -32768) vi = -32768;
+                                out16[fi] = (int16_t)vi;
+                            }
+                            new_total += (uint32_t)totalFloats * 2;
+                        }
+
+                        if (fbuf) XDisposePtr(fbuf);
+
+                        if (new_total > 0) {
+                            XDisposePtr(wave->theWaveform);
+                            wave->theWaveform = newBuf;
+                            wave->waveSize = new_total;
+                            wave->waveFrames = new_total / (wave->channels * 2);
+                        } else {
+                            XDisposePtr(newBuf);
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Don't decode, just get metadata
+        wave->theWaveform = NULL;
+        
+        ogg_int64_t pcm_total = op_pcm_total(of, -1);
+        if (pcm_total > 0 && pcm_total <= (ogg_int64_t)0xFFFFFFFF) {
+            wave->waveFrames = (UINT32)pcm_total;
+            wave->waveSize = wave->waveFrames * wave->channels * 2;
+        }
+    }
+    
+    op_free(of);
+    *pError = NO_ERR;
+    return wave;
+}
+
+// Expand/decode Opus compressed data from memory
+OPErr XExpandOpus(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst)
+{
+    OPErr err = NO_ERR;
+    GM_Waveform *decoded = NULL;
+
+    if (!src || !dst)
+        return PARAM_ERR;
+
+    // Create XFILE from memory and decode Opus data
+    XFILE file = XFileOpenForReadFromMemory((void*)src->theWaveform, src->waveSize);
+    if (!file)
+        return FILE_NOT_FOUND;
+
+    decoded = PV_ReadIntoMemoryOpusFile(file, TRUE, NULL, NULL, NULL, &err);
+    XFileClose(file);
+
+    if (!decoded)
+    {
+        return err != NO_ERR ? err : BAD_FILE;
+    }
+
+    // Determine bytes per frame of decoded data
+    {
+        const uint32_t bytesPerFrame = decoded->channels * (decoded->bitSize / 8);
+        uint32_t availableFrames = 0;
+        if (decoded->waveFrames > startFrame)
+        {
+            availableFrames = decoded->waveFrames - startFrame;
+        }
+
+        if (availableFrames > 0)
+        {
+            // Copy metadata from decoded waveform
+            dst->sampledRate = decoded->sampledRate;
+            dst->bitSize = decoded->bitSize;
+            dst->channels = decoded->channels;
+            dst->baseMidiPitch = decoded->baseMidiPitch;
+            dst->compressionType = C_NONE; // Decoded is uncompressed
+            dst->startLoop = decoded->startLoop > startFrame ? decoded->startLoop - startFrame : 0;
+            dst->endLoop = decoded->endLoop > startFrame ? decoded->endLoop - startFrame : 0;
+            
+            // Calculate the size we need for the requested frames
+            const uint32_t requestedBytes = availableFrames * bytesPerFrame;
+            
+            // Allocate memory for decoded audio data
+            dst->theWaveform = (SBYTE*)XNewPtr(requestedBytes);
+            if (!dst->theWaveform)
+            {
+                GM_FreeWaveform(decoded);
+                return MEMORY_ERR;
+            }
+
+            // Copy the decoded audio data starting from the requested frame
+            XBlockMove(decoded->theWaveform + (startFrame * bytesPerFrame), 
+                      dst->theWaveform, requestedBytes);
+            
+            dst->waveSize = requestedBytes;
+            dst->waveFrames = availableFrames;
+        }
+        else
+        {
+            err = PARAM_ERR; // startFrame is beyond the end of the data
+        }
+    }
+
+    GM_FreeWaveform(decoded);
+    return err;
+}
+
+#endif // USE_OPUS_DECODER != FALSE
 
 // Read a Vorbis file into memory and return a GM_Waveform structure
 static GM_Waveform* PV_ReadIntoMemoryVorbisFile(XFILE file, XBOOL decodeData, 
@@ -3650,10 +4054,6 @@ static GM_Waveform* PV_ReadIntoMemoryVorbisFile(XFILE file, XBOOL decodeData,
 }
 
 #endif // USE_VORBIS_DECODER != FALSE
-
-// -----------------------------------------------------------------------------
-// Streaming decode support for Vorbis + FLAC (BAEStream)
-// -----------------------------------------------------------------------------
 
 #if USE_VORBIS_DECODER != FALSE
 typedef struct
@@ -4323,6 +4723,11 @@ GM_Waveform     *waveform;
     #if USE_VORBIS_DECODER != FALSE
         case FILE_VORBIS_TYPE:
             waveform = PV_ReadIntoMemoryVorbisFile(file, decodeData, NULL, NULL, NULL, &err);
+            break;
+    #endif
+    #if USE_OPUS_DECODER != FALSE
+        case FILE_OPUS_TYPE:
+            waveform = PV_ReadIntoMemoryOpusFile(file, decodeData, NULL, NULL, NULL, &err);
             break;
     #endif
         default :
@@ -5451,7 +5856,6 @@ OPErr GM_FinalizeFileHeader(XFILE file, AudioFileType fileType)
 
     return err;
 }
-#endif  // #if USE_HIGHLEVEL_FILE_API == TRUE
 
 // for 16 bit data. samples are from -32767 to 32768 and 0 is silent
 // for 8 bit data. samples are from -127 to 128 and 0 is silent. This is oppsite for BAE

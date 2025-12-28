@@ -178,6 +178,11 @@ static const char AUDIO_EXT_FILTER[] =
 #else
     ""
 #endif
+#if USE_OPUS_DECODER == TRUE && SUPPORT_OGG_FORMAT == TRUE
+    "*.opus;"
+#else
+    ""
+#endif
 #if USE_XMF_SUPPORT == TRUE && _USING_FLUIDSYNTH == TRUE
     "*.xmf;*.mxmf;";
 #else
@@ -253,6 +258,11 @@ static const char AUDIO_EXT_FILTER[] =
 #endif
 #if USE_VORBIS_DECODER == TRUE && SUPPORT_OGG_FORMAT == TRUE
     "*.ogg "
+#else
+    ""
+#endif
+#if USE_OPUS_DECODER == TRUE && SUPPORT_OGG_FORMAT == TRUE
+    "*.opus  "
 #else
     ""
 #endif

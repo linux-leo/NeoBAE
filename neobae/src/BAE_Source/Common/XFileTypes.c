@@ -49,6 +49,7 @@
 // OGG codec identifiers
 #define OGG_VORBIS_MAGIC    0x01766F72  // "\x01vor" - Vorbis identification header
 #define OGG_FLAC_MAGIC      0x7F464C41  // "\x7fFLA" - FLAC mapping header
+#define OGG_OPUS_MAGIC      0x4F707573  // "Opus" - Opus identification header
 
 // Function prototypes for internal helpers
 static uint32_t PV_ReadBigEndian32(const unsigned char *data);
@@ -141,7 +142,7 @@ static BAEFileType PV_DetectOGGType(const unsigned char *buffer, int32_t bufferS
         
         if (payloadOffset + 8 <= bufferSize)
         {
-#if USE_VORBIS_DECODER == TRUE || USE_FLAC_DECODER == TRUE
+#if USE_VORBIS_DECODER == TRUE || USE_FLAC_DECODER == TRUE || USE_OPUS_DECODER == TRUE
             uint32_t magic = PV_ReadBigEndian32(&buffer[payloadOffset]);
 #endif
             
@@ -164,6 +165,18 @@ static BAEFileType PV_DetectOGGType(const unsigned char *buffer, int32_t bufferS
                 return BAE_FLAC_TYPE;
             }
 #endif
+
+#if USE_OPUS_DECODER == TRUE
+            // Check for Opus identification header
+            if (magic == OGG_OPUS_MAGIC && payloadOffset + 8 < bufferSize &&
+                buffer[payloadOffset + 4] == 'H' &&
+                buffer[payloadOffset + 5] == 'e' &&
+                buffer[payloadOffset + 6] == 'a' &&
+                buffer[payloadOffset + 7] == 'd')
+            {
+                return BAE_OPUS_TYPE;
+            }
+#endif
         }
 
         // Look for next OGG page
@@ -178,9 +191,12 @@ static BAEFileType PV_DetectOGGType(const unsigned char *buffer, int32_t bufferS
         if (offset + 4 > bufferSize)
             break;
     }
-#if USE_VORBIS_DECODER == TRUE    
-    // Default to Vorbis if we can't determine specifically
+#if USE_VORBIS_DECODER == TRUE
+    /* Prefer Vorbis by default for .ogg if we can't determine; historically .ogg=>Vorbis */
     return BAE_VORBIS_TYPE;
+#elif USE_OPUS_DECODER == TRUE
+    /* Fallback to Opus only if Vorbis isn't available */
+    return BAE_OPUS_TYPE;
 #else
     return BAE_INVALID_TYPE;
 #endif
@@ -285,9 +301,14 @@ BAEFileType X_DetermineFileTypeByPath(const char *filePath)
     else if (strcmp(extLower, ".flac") == 0)
         return BAE_FLAC_TYPE;
 #endif
-#if USE_VORBIS_DECODER == TRUE        
+#if USE_VORBIS_DECODER == TRUE || USE_OPUS_DECODER == TRUE
+    /* Don't assume .ogg/.oga is Vorbis; let content-based detection decide (could be Opus or Vorbis) */
     else if (strcmp(extLower, ".ogg") == 0 || strcmp(extLower, ".oga") == 0)
-        return BAE_VORBIS_TYPE;
+        return BAE_INVALID_TYPE;
+#endif
+#if USE_OPUS_DECODER == TRUE        
+    else if (strcmp(extLower, ".opus") == 0)
+        return BAE_OPUS_TYPE;
 #endif
     // Check for MIDI/music file extensions
     else if (strcmp(extLower, ".mid") == 0 || strcmp(extLower, ".midi") == 0)
@@ -583,6 +604,9 @@ const char *X_GetFileTypeString(BAEFileType fileType)
 #if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE        
         case BAE_VORBIS_TYPE:   return "Vorbis";
 #endif
+#if USE_OPUS_DECODER == TRUE
+        case BAE_OPUS_TYPE:     return "Opus";
+#endif
         case BAE_GROOVOID:      return "Groovoid";
         case BAE_RAW_PCM:       return "Raw PCM";
         case BAE_INVALID_TYPE:  return "Unknown";
@@ -614,6 +638,17 @@ BAEFileType X_ConvertFileTypeString(const char *typeString)
         return BAE_AIFF_TYPE;
     else if (strcmp(typeString, X_FILETYPE_WAVE) == 0)
         return BAE_WAVE_TYPE;
-    
+#if USE_OPUS_DECODER == TRUE
+    else if (strcmp(typeString, X_FILETYPE_OPUS) == 0)
+        return BAE_OPUS_TYPE;
+#endif
+#if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE        
+    else if (strcmp(typeString, X_FILETYPE_VORBIS) == 0)
+        return BAE_VORBIS_TYPE;
+#endif
+#if USE_FLAC_DECODER == TRUE || USE_FLAC_ENCODER == TRUE        
+    else if (strcmp(typeString, X_FILETYPE_FLAC) == 0)
+        return BAE_FLAC_TYPE;
+#endif
     return BAE_INVALID_TYPE;
 }

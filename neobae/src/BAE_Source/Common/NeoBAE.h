@@ -203,6 +203,11 @@ extern "C"
         BAE_COMPRESSION_VORBIS_128,
         BAE_COMPRESSION_VORBIS_256,
         BAE_COMPRESSION_VORBIS_320,
+        // Opus quality-bitrate mappings (codec export targets)
+        BAE_COMPRESSION_OPUS_64,
+        BAE_COMPRESSION_OPUS_96,
+        BAE_COMPRESSION_OPUS_128,
+        BAE_COMPRESSION_OPUS_256,
         BAE_COMPRESSION_TYPE_COUNT
     } BAECompressionType;
 
@@ -296,6 +301,9 @@ extern "C"
 #endif        
 #if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE
         BAE_VORBIS_TYPE,
+#endif        
+#if USE_OPUS_DECODER == TRUE
+        BAE_OPUS_TYPE,
 #endif        
 
         // meta types
