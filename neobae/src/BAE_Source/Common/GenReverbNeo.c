@@ -368,6 +368,43 @@ NeoReverbParams* GetNeoReverbParams(void)
     return &gNeoReverbParams;
 }
 
+// Return TRUE if Neo reverb internal state indicates activity or an active tail
+XBOOL BAENeoReverb_IsActive(void)
+{
+    NeoReverbParams* params = GetNeoReverbParams();
+    if (!params || !params->mIsInitialized)
+        return FALSE;
+
+    // Quick checks: active flag or filter memory non-zero
+    if (params->mWasActive)
+        return TRUE;
+    if (params->mFilterMemoryL != 0 || params->mFilterMemoryR != 0)
+        return TRUE;
+
+    // Check recent tap buffer samples (last 2 frames) if present
+    if (params->mTapBuffer && params->mTapWriteIdx >= 2)
+    {
+        int idx1 = (params->mTapWriteIdx - 1) & NEO_TAP_BUFFER_MASK;
+        int idx2 = (params->mTapWriteIdx - 2) & NEO_TAP_BUFFER_MASK;
+        if (params->mTapBuffer[idx1] != 0 || params->mTapBuffer[idx2] != 0)
+            return TRUE;
+    }
+
+    // Check a couple of samples from custom comb buffers
+    for (int ci = 0; ci < NEO_CUSTOM_MAX_COMBS; ++ci)
+    {
+        if (params->mCustomBuffer[ci] && params->mCustomWriteIdx[ci] >= 2)
+        {
+            int wi = params->mCustomWriteIdx[ci];
+            int idx1 = (wi - 1) & NEO_CUSTOM_BUFFER_MASK;
+            int idx2 = (wi - 2) & NEO_CUSTOM_BUFFER_MASK;
+            if (params->mCustomBuffer[ci][idx1] != 0 || params->mCustomBuffer[ci][idx2] != 0)
+                return TRUE;
+        }
+    }
+
+    return FALSE;
+}
 //++------------------------------------------------------------------------------
 //  InitNeoReverb()
 //

@@ -857,8 +857,15 @@ typedef struct NewReverbParams NewReverbParams;
 
 extern NewReverbParams      gNewReverbParams;
 
+typedef struct NeoReverbParams NeoReverbParams;
+
 /* prototypes */
 NewReverbParams*    GetNewReverbParams();
+NeoReverbParams*    GetNeoReverbParams();
+
+/* Query whether Neo reverb is currently active or still decaying.
+   Returns TRUE if Neo reverb reports activity or non-zero internal state. */
+XBOOL   BAENeoReverb_IsActive(void);
 XBOOL InitNewReverb();  // returns TRUE if success
 void ShutdownNewReverb();
 XBOOL CheckReverbType();
