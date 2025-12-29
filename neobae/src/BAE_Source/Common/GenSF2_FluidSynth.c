@@ -479,7 +479,7 @@ void GM_SoftResetSF2(void) {
 }
 
 // FluidSynth default controller setup
-void GM_SF2_SetDefaultControllers(int16_t channel)
+void GM_SF2_SetDefaultControllers()
 {
     if (!g_fluidsynth_synth)
         return;
@@ -1836,7 +1836,6 @@ void GM_SF2_KillChannelNotes(int16_t channel)
     if (!g_fluidsynth_synth)
         return;        
 
-    fluid_synth_all_notes_off(g_fluidsynth_synth, channel);
     fluid_synth_all_sounds_off(g_fluidsynth_synth, channel);
 }
 

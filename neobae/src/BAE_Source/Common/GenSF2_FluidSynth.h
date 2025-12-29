@@ -112,7 +112,7 @@ void GM_SF2_CheckAndDisableSF2ForRMFEmbedded(GM_Song* pSong);
 void sf2_get_channel_amplitudes(float channelAmplitudes[16][2]);
 
 // Private helper functions
-void GM_SF2_SetDefaultControllers(int16_t channel);
+void GM_SF2_SetDefaultControllers();
 void PV_SF2_SetBankPreset(GM_Song* pSong, int16_t channel, int16_t bank, int16_t preset);
 
 // Query whether the currently loaded soundfont exposes any presets at all.

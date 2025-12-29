@@ -28,22 +28,12 @@ void gui_panic_all_notes(BAESong s)
 {
     if (!s)
         return;
+
     for (int ch = 0; ch < BAE_MAX_MIDI_CHANNELS; ++ch)
     {
-        BAESong_ControlChange(s, (unsigned char)ch, 64, 0, 0);  // Sustain Off
-        BAESong_ControlChange(s, (unsigned char)ch, 120, 0, 0); // All Sound Off
-        BAESong_ControlChange(s, (unsigned char)ch, 123, 0, 0); // All Notes Off
+        gui_panic_channel_notes(s, ch);
     }
-    for (int ch = 0; ch < BAE_MAX_MIDI_CHANNELS; ++ch)
-    {
-#if USE_SF2_SUPPORT == TRUE
-        GM_SF2_KillChannelNotes(ch);
-#endif
-        for (int n = 0; n < BAE_MAX_NOTES; ++n)
-        {
-            BAESong_NoteOff(s, (unsigned char)ch, (unsigned char)n, 0, 0);
-        }
-    }
+    GM_SF2_SetDefaultControllers();
 }
 
 void gui_panic_channel_notes(BAESong s, int ch)
@@ -52,13 +42,10 @@ void gui_panic_channel_notes(BAESong s, int ch)
         return;
     if (ch < 0 || ch >= BAE_MAX_MIDI_CHANNELS)
         return;
-    // Safety controls first
-    BAESong_ControlChange(s, (unsigned char)ch, 64, 0, 0);  // Sustain Off
-    BAESong_ControlChange(s, (unsigned char)ch, 120, 0, 0); // All Sound Off
-    BAESong_ControlChange(s, (unsigned char)ch, 123, 0, 0); // All Notes Off
+
     // Explicit NoteOff for any keys we believe are active from MIDI-in
 #if USE_SF2_SUPPORT == TRUE
-    GM_SF2_KillAllNotes();
+    GM_SF2_KillChannelNotes(ch);
 #endif
     for (int n = 0; n < BAE_MAX_NOTES; ++n)
     {
