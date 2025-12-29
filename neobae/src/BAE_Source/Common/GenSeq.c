@@ -1778,7 +1778,39 @@ static void PV_ProcessProgramChange(GM_Song *pSong, INT16 MIDIChannel, INT16 cur
 #if USE_SF2_SUPPORT == TRUE
 
 
-            
+            if (pSong->songFlags == SONG_FLAG_IS_RMF) {
+                uint32_t bankId, progId = 0, noteId = 0;
+                INT16 thePatch = PV_ConvertPatchBank(pSong, program, MIDIChannel);                        
+                TranslateInstrumentToBankProgram(thePatch, &bankId, &progId, &noteId);                        
+                XBOOL foundPatch = FALSE;
+                for (uint32_t i = 1; i <= pSong->RMFInstrumentIDs[0]; i++)
+                {
+                    if (pSong->RMFInstrumentIDs[i] == thePatch || pSong->RMFInstrumentIDs[i] == progId)
+                    {
+                        foundPatch = TRUE;
+                        break;
+                    }
+                    for (uint32_t j = 0; j < MAX_CHANNELS; j++) {
+                        if (pSong->channelProgram[MIDIChannel] == pSong->RMFInstrumentIDs[i]) {
+                            foundPatch = TRUE;
+                            break;
+                        }
+                    }
+                }
+                if (!foundPatch && ((thePatch >=  384 && thePatch < 512) || (thePatch >= 640 && thePatch < 768)))
+                {
+                    // The patch ID matches a known beatnik percussion instrument
+                    // either MSB 1 or 2
+                    foundPatch = TRUE;
+                }
+
+                if (foundPatch || bankId == 1 || bankId == 2) {
+                    pSong->channelType[MIDIChannel] = CHANNEL_TYPE_RMF;
+                } else {
+                    pSong->channelType[MIDIChannel] = CHANNEL_TYPE_GM;
+                }
+            }
+
             if (pSong->channelType[MIDIChannel] != CHANNEL_TYPE_RMF) {
                 // Calculate bank/program for SF2 or XMF overlay check
                 INT32 theBank = pSong->channelRawBank[MIDIChannel];
@@ -2027,12 +2059,9 @@ static void PV_ProcessNoteOff(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTr
             {
                 GM_SF2_ProcessNoteOff(pSong, MIDIChannel, note, volume);
             }
-            else
 #endif
-            {
-                thePatch = PV_DetermineInstrumentToUse(pSong, note, MIDIChannel);
-                PV_StopMIDINote(pSong, thePatch, MIDIChannel, currentTrack, note);
-            }
+            thePatch = PV_DetermineInstrumentToUse(pSong, note, MIDIChannel);
+            PV_StopMIDINote(pSong, thePatch, MIDIChannel, currentTrack, note);
         }
         else
         {
@@ -2091,7 +2120,7 @@ static void PV_ProcessNoteOn(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTra
                     uint32_t bankId = 0, progId = 0, noteId = 0;
                     if (pSong->songFlags == SONG_FLAG_IS_RMF) {
                         INT16 thePatch = PV_ConvertPatchBank(pSong, note, MIDIChannel);                        
-                        TranslateInstrumentToBankProgram(thePatch, &bankId, &progId, &noteId);
+                        TranslateInstrumentToBankProgram(thePatch, &bankId, &progId, &noteId);                        
                         XBOOL foundPatch = FALSE;
                         for (uint32_t i = 1; i <= pSong->RMFInstrumentIDs[0]; i++)
                         {
@@ -2126,12 +2155,12 @@ static void PV_ProcessNoteOn(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTra
                         // RMF
                         volume = (INT16)((float)volume * 0.85f); // RMF seems to be louder, so turn it down a bit
                         thePatch = PV_DetermineInstrumentToUse(pSong, note, MIDIChannel);
-                        PV_StartMIDINote(pSong, thePatch, MIDIChannel, currentTrack, note, volume);
+                        PV_StartMIDINote(pSong, thePatch, MIDIChannel, currentTrack, note, volume);                       
                     } else {
                         // Standard MIDI
                         if (GM_SF2_isDLS() && bankId == 128) {
                             bankId = 120;
-                        }
+                        }                       
                         GM_SF2_ProcessNoteOn(pSong, MIDIChannel, note, volume);
                         if (pSong->songFlags == SONG_FLAG_IS_RMF) {
                             if (bankId != 0) {
@@ -2145,6 +2174,7 @@ static void PV_ProcessNoteOn(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTra
                 {
                     thePatch = PV_DetermineInstrumentToUse(pSong, note, MIDIChannel);
                     PV_StartMIDINote(pSong, thePatch, MIDIChannel, currentTrack, note, volume);
+                    BAE_PRINTF("ProcessNoteOn Debug: Channel %d is using RMF Instrument (note=%d)\n", MIDIChannel, note);
                 }
             }
             else
@@ -2320,7 +2350,7 @@ static void PV_ProcessRegisteredParameters(GM_Song *pSong, INT16 MIDIChannel, UI
 }
 
 // Process midi controlers
-void PV_ProcessController(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTrack, INT16 controler, UINT16 value)
+void PV_ProcessController(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTrack, INT16 controller, UINT16 value)
 {
     UBYTE valueLSB, valueMSB;
     INT16 valueB;
@@ -2331,7 +2361,7 @@ void PV_ProcessController(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTrack,
         if (GM_IsSF2Song(pSong) || pSong->channelType[MIDIChannel] == CHANNEL_TYPE_SF2)
         {
             if (pSong->songFlags == SONG_FLAG_IS_RMF) {
-                if (controler == 0 && (value == 1 || value == 2)) {
+                if (controller == 0 && (value == 1 || value == 2)) {
                     // if we are an RMF file and just set a bank MSB of 1 or 2, we are now in RMF mode for this channel
                     pSong->channelType[MIDIChannel] = CHANNEL_TYPE_RMF;
                 } else if (pSong->lastThreeControl[MIDIChannel][0].control == 0 &&
@@ -2344,7 +2374,7 @@ void PV_ProcessController(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTrack,
 #if DISABLE_BEATNIK_SF2_NRPN != TRUE
             pSong->lastThreeControl[MIDIChannel][2] = pSong->lastThreeControl[MIDIChannel][1];
             pSong->lastThreeControl[MIDIChannel][1] = pSong->lastThreeControl[MIDIChannel][0];
-            pSong->lastThreeControl[MIDIChannel][0].control = controler;
+            pSong->lastThreeControl[MIDIChannel][0].control = controller;
             pSong->lastThreeControl[MIDIChannel][0].value = (UINT16)value;
 
             // check for Beatnik NRPN 
@@ -2365,15 +2395,15 @@ void PV_ProcessController(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTrack,
                     ) {
                         if (pSong->lastThreeControl[MIDIChannel][1].control == 6 &&
                             pSong->lastThreeControl[MIDIChannel][1].value == 2 &&
-                            controler == 0) {
+                            controller == 0) {
                                 // we just set NRPN mode and the MIDI is trying to reset the MSB again, ignore it
-                                BAE_PRINTF("Ignoring control %i directly after NRPN on channel %i\n", controler, MIDIChannel);                                
+                                BAE_PRINTF("Ignoring control %i directly after NRPN on channel %i\n", controller, MIDIChannel);                                
                             } else
 #endif
                             {
                                 // send to SF2
                                 if (pSong->channelType[MIDIChannel] != CHANNEL_TYPE_RMF) {
-                                    GM_SF2_ProcessController(pSong, MIDIChannel, controler, value);
+                                    GM_SF2_ProcessController(pSong, MIDIChannel, controller, value);
                                 }
                             }                        
 #if DISABLE_BEATNIK_SF2_NRPN != TRUE
@@ -2386,7 +2416,7 @@ void PV_ProcessController(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTrack,
             //}
         }    
 #endif
-        switch (controler)
+        switch (controller)
         {
             
         case B_BANK_LSB: // bank select LSB. This is GS.
@@ -2623,7 +2653,7 @@ void PV_ProcessController(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTrack,
     if (pSong->AnalyzeMode == SCAN_NORMAL)
     {
         // process special mute track controlers
-        switch (controler)
+        switch (controller)
         {
         case 85: // looping off (value = 0) otherwise its a max loop count
             GM_SetSongLoopMax(pSong, value);
@@ -2652,7 +2682,7 @@ void PV_ProcessController(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTrack,
     else
     {
         // only in prescan
-        switch (controler)
+        switch (controller)
         {
         default:
             break;
