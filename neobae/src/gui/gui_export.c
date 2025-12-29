@@ -771,6 +771,12 @@ void bae_service_wav_export()
             BAESong_IsDone(g_bae.song, &done);
             if (done)
             {
+                for (int drain = 0; drain < 128; drain++)
+                {
+                    BAEMixer_ServiceAudioOutputToFile(g_bae.mixer); // final service to flush any pending audio
+                    BAE_WaitMicroseconds(1000);
+                }
+                
                 BAESong_Stop(g_bae.song, FALSE);
                 pcm_wav_finalize();
                 if (g_bae.loop_was_enabled_before_export && g_bae.song)
@@ -852,10 +858,10 @@ static void *export_thread_proc(void *param)
 
             // Always add a small drain period to ensure all audio is captured
             // This helps prevent cutting off the end of notes
-            for (int drain = 0; drain < 20 && !g_export_thread_should_stop; drain++)
+            for (int drain = 0; drain < 128 && !g_export_thread_should_stop; drain++)
             {
                 BAEMixer_ServiceAudioOutputToFile(g_bae.mixer);
-                BAE_WaitMicroseconds(5000);
+                BAE_WaitMicroseconds(1000);
             }
 
             // If exporting MPEG, wait for device-samples to stabilize before stopping (encoder drain)
