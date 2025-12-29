@@ -61,7 +61,7 @@ endif
 
 # Force OGG support if VORBIS is chosen
 ifneq ($(OGG_SUPPORT),1)
-	ifneq ($(filter 1,$(VORBIS_ENC) $(VORBIS_DEC)),) 
+	ifneq ($(filter 1,$(VORBIS_ENC) $(VORBIS_DEC) $(FLAC_DEC) $(FLAC_ENC) $(OPUS_DEC)),) 
 		OGG_SUPPORT := 1
 	endif
 endif
@@ -145,17 +145,12 @@ ifeq ($(OPUS_DEC),1)
 	SRC += src/BAE_Source/Common/XOpusFiles.c
 endif
 
-ifeq ($(OGG_SUPPORT),1)
-	INC_PATH	+= -Isrc/thirdparty/libogg/include
-	BAE_FLAGS	+= -DSUPPORT_OGG_FORMAT=1
-endif
-
 ifneq ($(filter 1,$(VORBIS_DEC) $(VORBIS_ENC)),) 
 	INC_PATH	+= -Isrc/thirdparty/libvorbis/include -Isrc/thirdparty/libvorbis/lib
 	ifneq ($(filter 1,$(VORBIS_ENC)),)
 		BAE_LIBS := -lvorbisenc $(BAE_LIBS)
 	endif
-	BAE_LIBS := -lvorbisfile -lvorbis -logg $(BAE_LIBS)
+	BAE_LIBS := -lvorbisfile -lvorbis $(BAE_LIBS)
 endif
 
 # default to ANSI
@@ -383,19 +378,21 @@ ifeq ($(OGG_SUPPORT),1)
 endif
 
 # Add libvorbis decoder source files
-ifeq ($(VORBIS_DEC),1)
-	BAE_FLAGS += -DUSE_VORBIS_DECODER=1
-	# Use shared library instead of compiling sources
+ifneq ($(filter 1,$(VORBIS_DEC) $(VORBIS_ENC)),) 
 	SRC += src/BAE_Source/Common/XVorbisFiles.c
+	ifeq ($(VORBIS_DEC),1)
+		BAE_FLAGS += -DUSE_VORBIS_DECODER=1
+	endif
+	ifeq ($(VORBIS_ENC),1)
+		BAE_FLAGS += -DUSE_VORBIS_ENCODER=1
+	endif
 endif
 
-# Add libvorbis encoder source files  
-ifeq ($(VORBIS_ENC),1)
-	BAE_FLAGS += -DUSE_VORBIS_ENCODER=1
-	# Use shared library instead of compiling sources
-	# XVorbisFiles.c is added in decoder section if needed
+ifeq ($(OGG_SUPPORT),1)
+	INC_PATH	+= -Isrc/thirdparty/libogg/include
+	BAE_FLAGS	+= -DSUPPORT_OGG_FORMAT=1
+	BAE_LIBS 	+= -logg
 endif
-
 
 ifeq ($(BUILD_GUI),1)
 	BAE_FLAGS += -D_ZEFI_GUI=1

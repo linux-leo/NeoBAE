@@ -21,14 +21,16 @@ By default, all builds will build with SF2 support via FluidSynth. FluidSynth pr
    - Place it in the `neobae/src/thirdparty/libogg` folder
 - Get the [Vorbis source](https://xiph.org/vorbis/)
    - Place it in the `neobae/src/thirdparty/libvorbis` folder
+- Get the [Opus source](https://www.opus-codec.org/downloads/)
+   - Place it in the `neobae/src/thirdparty/opus` folder
+- Get the [Opusfile source](https://www.opus-codec.org/downloads/)
+   - Place it in the `neobae/src/thirdparty/opusfile` folder
 - Get the [RtMidi source](https://github.com/thestk/rtmidi)
    - Place it in the `neobae/src/thirdparty/rtmidi` folder
 
 # Linux only
-- Get the [FluidSynth source](https://github.com/fluidsynth/fluidsynth)
+- Get the [FluidSynth source](https://github.com/zefie/fluidsynth)
    - Place it in the `neobae/src/thirdparty/fluidsynth` folder
-- Get then [zefie libinstpatch source](https://github.com/zefie/libinstpatch)
-   - Place it in the `neobae/src/thirdparty/libinstpatch` folder
 
 - A slimmed down copy of Lame v3.100 is included in the main source tree, for mp3 encoding.
 - You only need to grab what you want to support, [see below](#modular-build-system).
@@ -38,7 +40,13 @@ By default, all builds will build with SF2 support via FluidSynth. FluidSynth pr
 #### Setup & Compile Linux SDL3
 - Install dependencies support (one time):
     - `apt-get update`
-    - `apt-get install libc6-dev libsdl3-dev libfluidsynth-dev`
+    - `apt-get install libc6-dev libsdl3-dev libsndfile-dev libogg-dev libvorbis-dev libopus-dev libopusfile-dev libflac-dev`
+- Build Fluidsynth
+    - `cd neobae/src/thirdparty/fluidsynth`
+    - `mkdir build && cd build`
+    - `cmake ..`
+    - `make -j$(nproc)`
+    - `sudo make install`
 - Build playbae
     - `cd neobae`
     - `make clean`
@@ -49,7 +57,13 @@ By default, all builds will build with SF2 support via FluidSynth. FluidSynth pr
 #### Setup & Compile Linux SDL3 with clang
 - Install dependencies support (one time):
     - `apt-get update`
-    - `apt-get install libc6-dev clang libsdl3-dev libfluidsynth-dev`
+    - `apt-get install clang libc6-dev libsdl3-dev libsndfile-dev libogg-dev libvorbis-dev libopus-dev libopusfile-dev libflac-dev`
+- Build Fluidsynth
+    - `cd neobae/src/thirdparty/fluidsynth`
+    - `mkdir build && cd build`
+    - `cmake ..`
+    - `make -j$(nproc)`
+    - `sudo make install`
 - Build playbae
     - `cd neobae`
     - `make clean`
@@ -60,7 +74,13 @@ By default, all builds will build with SF2 support via FluidSynth. FluidSynth pr
 #### Setup & Compile zefidi GUI
 - Install dependencies:
     - `apt-get update`
-    - `apt-get install libsdl3-dev libsdl3-ttf-dev libfluidsynth-dev`
+    - `apt-get install libsdl3-dev libsdl3-ttf-dev libsndfile-dev libogg-dev libvorbis-dev libopus-dev libopusfile-dev libflac-dev`
+- Build Fluidsynth
+    - `cd neobae/src/thirdparty/fluidsynth`
+    - `mkdir build && cd build`
+    - `cmake ..`
+    - `make -j$(nproc)`
+    - `sudo make install`    
 - Build GUI
     - `make clean && -f Makefile.gui -j$(nproc)`
     - If you want hardware MIDI (in/out) support, you will have to choose if you want the ALSA backend, JACK backend, or both:
@@ -75,6 +95,8 @@ By default, all builds will build with SF2 support via FluidSynth. FluidSynth pr
     - If you do not have these installed, the `Open`, `Load Bank`, `Export`, and `Record` buttons may not function.
 
 ## Windows
+
+The repository includes a binary copy of zefie's modified libfluidsynth.dll (better DLS support). Building for Windows may require libogg, libvorbis, libopus, libopusfile, and libflac to be compiled or installed in your environment.
 
 #### Setup & Compile Win32 mingw build (using Debian WSL2)
 - Install mingw into your Debian WSL2:

@@ -3864,6 +3864,9 @@ OPErr XExpandOpus(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst)
 
 #endif // USE_OPUS_DECODER != FALSE
 
+
+
+#if USE_VORBIS_DECODER != FALSE
 // Read a Vorbis file into memory and return a GM_Waveform structure
 static GM_Waveform* PV_ReadIntoMemoryVorbisFile(XFILE file, XBOOL decodeData, 
                                                int32_t *pFormat, void **ppBlockPtr, uint32_t *pBlockSize, OPErr *pError)
@@ -4086,6 +4089,7 @@ static OPErr PV_VorbisStreamEnsureInit(VorbisStreamState *st, XFILE file)
     st->initialized = TRUE;
     return NO_ERR;
 }
+#endif
 #endif
 
 #if USE_FLAC_DECODER != FALSE

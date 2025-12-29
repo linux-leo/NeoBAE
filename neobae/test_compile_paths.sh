@@ -8,6 +8,9 @@ if [ -n "${1}" ]; then
 fi
 
 CURRENT=1
+if [ -n "${2}" ]; then
+    export VERBOSE=1
+fi
 
 runtest() {
     echo "${CURRENT}) Testing ${@} ..."
@@ -17,12 +20,16 @@ runtest() {
         return
     fi
     make clean > /dev/null
-    ${@} -j16 > /dev/null
-    CURRENT=$((CURRENT + 1))
+    if [ "${VERBOSE}" == "1" ]; then
+        ${@} -j16
+    else
+        ${@} -j16 > /dev/null
+    fi
     if [ $? -ne 0 ]; then
         echo "Test failed: ${@}"
         exit 1
     fi
+    CURRENT=$((CURRENT + 1))
 }
 
 for f in Makefile.gui-mingw Makefile.mingw Makefile.gui Makefile Makefile.clang; do
@@ -42,6 +49,8 @@ for f in Makefile.gui-mingw Makefile.mingw Makefile.gui Makefile Makefile.clang;
     runtest make -f ${f} FLAC_ENC=1
     # flac full
     runtest make -f ${f} FLAC_ENC=1 FLAC_DEC=1
+    # Opus support
+    runtest make -f ${f} OPUS_DEC=1
     # karaoke support
     runtest make -f ${f} KARAOKE=1
     # ogg support, no vorbis
@@ -60,10 +69,10 @@ for f in Makefile.gui-mingw Makefile.mingw Makefile.gui Makefile Makefile.clang;
         # playlist support only
         runtest make -f ${f} PLAYLIST=1
         # full build (gui)
-        runtest make -f ${f} ENABLE_MIDI_HW=1 MP3_ENC=1 MP3_DEC=1 FLAC_ENC=1 FLAC_DEC=1 KARAOKE=1 VORBIS_ENC=1 VORBIS_DEC=1 PLAYLIST=1 SF2_SUPPORT=1
+        runtest make -f ${f} ENABLE_MIDI_HW=1 MP3_ENC=1 MP3_DEC=1 FLAC_ENC=1 FLAC_DEC=1 KARAOKE=1 VORBIS_ENC=1 VORBIS_DEC=1 PLAYLIST=1 SF2_SUPPORT=1 OPUS_DEC=1
     else
         # full build (cli)
-        runtest make -f ${f} MP3_ENC=1 MP3_DEC=1 FLAC_ENC=1 FLAC_DEC=1 KARAOKE=1 VORBIS_ENC=1 VORBIS_DEC=1 SF2_SUPPORT=1
+        runtest make -f ${f} MP3_ENC=1 MP3_DEC=1 FLAC_ENC=1 FLAC_DEC=1 KARAOKE=1 VORBIS_ENC=1 VORBIS_DEC=1 SF2_SUPPORT=1 OPUS_DEC=1
         # SDL3
         runtest make -f ${f} USE_SDL3=1
         # SDL3 MP3_ENC=1
@@ -73,13 +82,13 @@ for f in Makefile.gui-mingw Makefile.mingw Makefile.gui Makefile Makefile.clang;
         # SDL3 VORBIS_ENC=1
         runtest make -f ${f} USE_SDL3=1 VORBIS_ENC=1
         # SDL3 ALL
-        runtest make -f ${f} USE_SDL3=1 MP3_ENC=1 FLAC_ENC=1 VORBIS_ENC=1
+        runtest make -f ${f} USE_SDL3=1 MP3_ENC=1 FLAC_ENC=1 VORBIS_ENC=1 OPUS_DEC=1
     fi
     if [ "${f}" == "Makefile.gui" ]; then
         # Linux HW Midi Drivers
-        runtest make -f ${f} ENABLE_MIDI_HW=1 MP3_ENC=1 MP3_DEC=1 FLAC_ENC=1 FLAC_DEC=1 ENABLE_ALSA=1
-        runtest make -f ${f} ENABLE_MIDI_HW=1 MP3_ENC=1 MP3_DEC=1 FLAC_ENC=1 FLAC_DEC=1 ENABLE_JACK=1
-        runtest make -f ${f} ENABLE_MIDI_HW=1 MP3_ENC=1 MP3_DEC=1 FLAC_ENC=1 FLAC_DEC=1 ENABLE_ALSA=1 ENABLE_JACK=1
+        runtest make -f ${f} ENABLE_MIDI_HW=1 MP3_ENC=1 MP3_DEC=1 FLAC_ENC=1 FLAC_DEC=1 OPUS_DEC=1 ENABLE_ALSA=1
+        runtest make -f ${f} ENABLE_MIDI_HW=1 MP3_ENC=1 MP3_DEC=1 FLAC_ENC=1 FLAC_DEC=1 OPUS_DEC=1 ENABLE_JACK=1
+        runtest make -f ${f} ENABLE_MIDI_HW=1 MP3_ENC=1 MP3_DEC=1 FLAC_ENC=1 FLAC_DEC=1 OPUS_DEC=1 ENABLE_ALSA=1 ENABLE_JACK=1
     fi
     if [ "${f}" == "Makefile.mingw" ]; then
         # Windows playbae SDL
