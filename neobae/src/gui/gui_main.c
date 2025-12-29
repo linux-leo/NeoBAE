@@ -2325,63 +2325,69 @@ int main(int argc, char *argv[])
 
 #if SUPPORT_PLAYLIST == TRUE
                 if (g_playlist.enabled) {
-                    // Handle playlist advancement
-                    if (g_playlist.count > 0 && g_playlist.current_index >= 0)
-                    {
-                        int next_index = playlist_get_next_song_for_end_of_song();
-
-                        if (next_index >= 0 && next_index < g_playlist.count)
+                    // If we're exporting, do not auto-advance the playlist. This prevents the GUI
+                    // from briefly starting the next track while rendering/exporting the current one.
+                    if (g_exporting) {
+                        BAE_PRINTF("Playlist: advancement suppressed while exporting\n");
+                    } else {
+                        // Handle playlist advancement
+                        if (g_playlist.count > 0 && g_playlist.current_index >= 0)
                         {
-                            // Load and play the next song
-                            const char *next_file = g_playlist.entries[next_index].filename;
+                            int next_index = playlist_get_next_song_for_end_of_song();
 
-                            BAE_PRINTF("Playlist: advancing to index %d: %s\n", next_index, next_file);
-
-                            if (bae_load_song_with_settings(next_file, transpose, tempo, volume, loopPlay, reverbType, ch_enable, true))
+                            if (next_index >= 0 && next_index < g_playlist.count)
                             {
-                                // Update playlist current index
-                                g_playlist.current_index = next_index;
+                                // Load and play the next song
+                                const char *next_file = g_playlist.entries[next_index].filename;
 
-                                // Start playback
-                                duration = bae_get_len_ms();
-                                progress = 0;
-                                playing = false;
-                                // Robust auto-start sequence: ensure at position 0, preroll again (defensive), then start
-                                if (!g_bae.is_audio_file && g_bae.song)
-                                {                                    
-                                    if (bae_play(&playing))
-                                    {
-                                        g_bae.is_playing = true;
-                                        g_bae.song_finished = false;
-                                        BAE_PRINTF("Playlist: next song started successfully\n");
+                                BAE_PRINTF("Playlist: advancing to index %d: %s\n", next_index, next_file);
+
+                                if (bae_load_song_with_settings(next_file, transpose, tempo, volume, loopPlay, reverbType, ch_enable, true))
+                                {
+                                    // Update playlist current index
+                                    g_playlist.current_index = next_index;
+
+                                    // Start playback
+                                    duration = bae_get_len_ms();
+                                    progress = 0;
+                                    playing = false;
+                                    // Robust auto-start sequence: ensure at position 0, preroll again (defensive), then start
+                                    if (!g_bae.is_audio_file && g_bae.song)
+                                    {                                    
+                                        if (bae_play(&playing))
+                                        {
+                                            g_bae.is_playing = true;
+                                            g_bae.song_finished = false;
+                                            BAE_PRINTF("Playlist: next song started successfully\n");
+                                        }
+                                        else
+                                        {
+                                            BAE_PRINTF("Playlist: failed to start next song\n");
+                                        }
                                     }
-                                    else
+                                    else if (g_bae.is_audio_file && g_bae.sound)
                                     {
-                                        BAE_PRINTF("Playlist: failed to start next song\n");
+                                        if (bae_play(&playing))
+                                        {
+                                            g_bae.is_playing = true;
+                                            g_bae.song_finished = false;
+                                            BAE_PRINTF("Playlist: next audio file started successfully\n");
+                                        }
+                                        else
+                                        {
+                                            BAE_PRINTF("Playlist: failed to start next audio file\n");
+                                        }
                                     }
                                 }
-                                else if (g_bae.is_audio_file && g_bae.sound)
+                                else
                                 {
-                                    if (bae_play(&playing))
-                                    {
-                                        g_bae.is_playing = true;
-                                        g_bae.song_finished = false;
-                                        BAE_PRINTF("Playlist: next audio file started successfully\n");
-                                    }
-                                    else
-                                    {
-                                        BAE_PRINTF("Playlist: failed to start next audio file\n");
-                                    }
+                                    BAE_PRINTF("Playlist: failed to load next song: %s\n", next_file);
                                 }
                             }
                             else
                             {
-                                BAE_PRINTF("Playlist: failed to load next song: %s\n", next_file);
+                                BAE_PRINTF("Playlist: end of playlist reached\n");
                             }
-                        }
-                        else
-                        {
-                            BAE_PRINTF("Playlist: end of playlist reached\n");
                         }
                     }
                 }
