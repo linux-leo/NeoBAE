@@ -10871,7 +10871,7 @@ BAEResult BAEMixer_LoadFromMemory(BAEMixer mixer, void const *pData, uint32_t da
     }
 }
 
-XBOOL BAEMixer_IsAudioTailActive(GM_Mixer *mixer)
+XBOOL GM_IsAudioTailActive(GM_Mixer *mixer)
 {
     if (!mixer)
         return FALSE;
@@ -11006,9 +11006,9 @@ XBOOL BAEMixer_IsAudioTailActive(GM_Mixer *mixer)
 /* Public wrapper that accepts a BAEMixer handle and checks the underlying
  * GM_Mixer for an active audio tail. This avoids exposing sBAEMixer internals
  * to callers that only have a BAEMixer opaque pointer. */
-BAE_BOOL BAEMixer_IsAudioTailActiveForBAEMixer(BAEMixer mixer)
+XBOOL BAEMixer_IsAudioTailActive(BAEMixer mixer)
 {
     if (!mixer) return FALSE;
     if (!mixer->pMixer) return FALSE;
-    return BAEMixer_IsAudioTailActive(mixer->pMixer) ? TRUE : FALSE;
+    return GM_IsAudioTailActive(mixer->pMixer) ? TRUE : FALSE;
 }

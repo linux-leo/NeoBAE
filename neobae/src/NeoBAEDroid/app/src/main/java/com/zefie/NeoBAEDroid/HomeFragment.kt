@@ -1368,6 +1368,29 @@ class HomeFragment : Fragment() {
         }
         currentSong?.pause()
         currentSound?.pause()
+        // Start a background job to wait for the audio tail to finish before
+        // disengaging the audio thread. This prevents cutting off reverb/release
+        // tails when the user pauses playback.
+        mixerIdleJob?.cancel()
+        mixerIdleJob = lifecycleScope.launch {
+            try {
+                val maxWaitMs = 10000L
+                val start = System.currentTimeMillis()
+                while (Mixer.isAudioTailActive()) {
+                    if (System.currentTimeMillis() - start > maxWaitMs) {
+                        android.util.Log.w("HomeFragment", "pausePlayback: audio tail timeout")
+                        break
+                    }
+                    delay(50)
+                }
+                val r = Mixer.disengageAudio()
+                android.util.Log.d("HomeFragment", "Mixer audio disengaged after pause (r=$r)")
+            } catch (e: Exception) {
+                android.util.Log.e("HomeFragment", "Error while waiting for audio tail: ${e.message}")
+            } finally {
+                mixerIdleJob = null
+            }
+        }
     }
     
     private fun resumePlayback() {
@@ -2623,7 +2646,7 @@ class HomeFragment : Fragment() {
                         currentSong?.let { applyMidiChannelMuteState(it) }
                         
                         // Apply reverb
-                        // Mixer.setReverbType(reverbType.value)
+                        Mixer.setDefaultReverb(reverbType.value)
 
                         android.util.Log.d("HomeFragment", "Song started, letting first audio callback settle...")
                         
@@ -2724,9 +2747,10 @@ class HomeFragment : Fragment() {
                         
                         // Drain period: service a few more times to capture trailing audio
                         android.util.Log.d("HomeFragment", "Draining export buffer...")
-                        for (drain in 0 until 20) {
+                        exportStatus.value = "Exporting audio... waiting for reverb tail"
+                        while (Mixer.isAudioTailActive()) {
                             Mixer.getMixer()?.serviceOutputToFile()
-                            Thread.sleep(5)
+                            Thread.sleep(2)
                         }
                         
                         android.util.Log.d("HomeFragment", "Export playback completed")

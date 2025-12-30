@@ -2827,11 +2827,11 @@ BAEResult BAELoadResult_Cleanup(BAELoadResult *result);
 
 BAEResult BAESong_LoadRmiFromFile(BAESong song, BAEPathName filePath, BAE_BOOL ignoreBadInstruments, BAE_BOOL useEmbeddedBank);
 BAEResult BAESong_LoadRmiFromMemory(BAESong song, void const *pRmiData, uint32_t rmiSize, BAE_BOOL ignoreBadInstruments, BAE_BOOL useEmbeddedBank);
-XBOOL BAEMixer_IsAudioTailActive(GM_Mixer *mixer);
+XBOOL GM_IsAudioTailActive(GM_Mixer *mixer);
 
 /* Wrapper that accepts a BAEMixer (opaque) and returns whether the audio tail is active.
  * Implemented in NeoBAE.c so callers without access to sBAEMixer internals can use it. */
-BAE_BOOL BAEMixer_IsAudioTailActiveForBAEMixer(BAEMixer mixer);
+XBOOL BAEMixer_IsAudioTailActive(BAEMixer mixer);
 
 #ifdef __cplusplus
 } // extern "C"

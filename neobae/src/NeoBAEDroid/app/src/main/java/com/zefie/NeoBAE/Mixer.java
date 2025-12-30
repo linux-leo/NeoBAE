@@ -21,6 +21,7 @@ public class Mixer
 	private static native int _disengageAudio(long reference);
 	private static native int _reengageAudio(long reference);
 	private static native int _isAudioEngaged(long reference);
+	private static native int _isAudioTailActive(long reference);
 	
 	// keep static constructor private.
 	private Mixer(AssetManager assetManager)
@@ -70,6 +71,11 @@ public class Mixer
 	public static boolean isAudioEngaged() {
 		if (mMixer == null || mMixer.mReference == 0L) return false;
 		return _isAudioEngaged(mMixer.mReference) != 0;
+	}
+
+	public static boolean isAudioTailActive() {
+		if (mMixer == null || mMixer.mReference == 0L) return false;
+		return _isAudioTailActive(mMixer.mReference) != 0;
 	}
 
 	public static Sound create()

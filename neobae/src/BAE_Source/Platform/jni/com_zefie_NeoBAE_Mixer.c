@@ -149,6 +149,17 @@ JNIEXPORT jint JNICALL Java_com_zefie_NeoBAE_Mixer__1isAudioEngaged
 	return engaged ? 1 : 0;
 }
 
+JNIEXPORT jint JNICALL Java_com_zefie_NeoBAE_Mixer__1isAudioTailActive
+    (JNIEnv* env, jclass clazz, jlong reference)
+{
+    (void)env;
+    (void)clazz;
+    BAEMixer mixer = (BAEMixer)(intptr_t)reference;
+    if (!mixer) return 0;
+    /* BAEMixer_IsAudioTailActive returns XBOOL; convert to jint 0/1 */
+    return BAEMixer_IsAudioTailActive(mixer) ? 1 : 0;
+}
+
 /* Mixer helper JNI wrappers */
 JNIEXPORT jint JNICALL Java_com_zefie_NeoBAE_Mixer__1setDefaultReverb
     (JNIEnv* env, jclass clazz, jlong reference, jint reverbType)

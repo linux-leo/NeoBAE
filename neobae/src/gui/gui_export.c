@@ -791,7 +791,7 @@ void bae_service_wav_export()
                     {
                         BAEMixer_ServiceAudioOutputToFile(g_bae.mixer);
 
-                        bool foundNonZero = BAEMixer_IsAudioTailActive(GM_GetCurrentMixer());
+                        bool foundNonZero = BAEMixer_IsAudioTailActive(g_bae.mixer);
                         if (foundNonZero)
                         {
                             silentConsec = 0; // reverb still present; continue draining
@@ -929,7 +929,7 @@ static void *export_thread_proc(void *param)
                 {
                     BAEMixer_ServiceAudioOutputToFile(g_bae.mixer);
 
-                    bool foundNonZero = BAEMixer_IsAudioTailActive(GM_GetCurrentMixer());
+                    bool foundNonZero = BAEMixer_IsAudioTailActive(g_bae.mixer);
                     if (foundNonZero)
                     {
                         silentConsec = 0; // reverb still present; continue draining
