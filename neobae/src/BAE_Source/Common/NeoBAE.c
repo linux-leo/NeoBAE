@@ -10878,16 +10878,15 @@ XBOOL BAEMixer_IsAudioTailActive(GM_Mixer *mixer)
       
     NewReverbParams *nr = GetNewReverbParams();
 
-    bool needCheck = false;
+    XBOOL needCheck = FALSE;
     if (mixer && mixer->reverbBuffer && mixer->reverbBufferSize > 0)
-        needCheck = true;
+        needCheck = TRUE;
     if (nr && nr->mIsInitialized)
-        needCheck = true;
-
+        needCheck = TRUE;
     if (!needCheck && !BAENeoReverb_IsActive())
         return FALSE; // no reverb buffers allocated
                     
-    bool foundNonZero = false;
+    XBOOL foundNonZero = FALSE;
 
     // 1) Legacy fixed reverb buffer
     if (!foundNonZero && mixer && mixer->reverbBuffer && mixer->reverbBufferSize > 0)
@@ -10901,7 +10900,7 @@ XBOOL BAEMixer_IsAudioTailActive(GM_Mixer *mixer)
             XDWORD idx = (start + j) % wb;
             if (mixer->reverbBuffer[idx] != 0)
             {
-                foundNonZero = true;
+                foundNonZero = TRUE;
                 break;
             }
         }
@@ -10927,7 +10926,7 @@ XBOOL BAEMixer_IsAudioTailActive(GM_Mixer *mixer)
                     XDWORD idx = (start + j) % wb;
                     if (nr->mReverbBuffer[ci][idx] != 0)
                     {
-                        foundNonZero = true;
+                        foundNonZero = TRUE;
                         break;
                     }
                 }
@@ -10946,7 +10945,7 @@ XBOOL BAEMixer_IsAudioTailActive(GM_Mixer *mixer)
                 XDWORD idx = (start + j) % wb;
                 if (nr->mEarlyReflectionBuffer[idx] != 0)
                 {
-                    foundNonZero = true;
+                    foundNonZero = TRUE;
                     break;
                 }
             }
@@ -10966,7 +10965,7 @@ XBOOL BAEMixer_IsAudioTailActive(GM_Mixer *mixer)
                     XDWORD idx = (start + j) % wb;
                     if (nr->mDiffusionBuffer[di][idx] != 0)
                     {
-                        foundNonZero = true;
+                        foundNonZero = TRUE;
                         break;
                     }
                 }
@@ -10986,7 +10985,7 @@ XBOOL BAEMixer_IsAudioTailActive(GM_Mixer *mixer)
                 if ((nr->mStereoizerBufferL && nr->mStereoizerBufferL[idx] != 0) ||
                     (nr->mStereoizerBufferR && nr->mStereoizerBufferR[idx] != 0))
                 {
-                    foundNonZero = true;
+                    foundNonZero = TRUE;
                     break;
                 }
             }
@@ -10997,13 +10996,11 @@ XBOOL BAEMixer_IsAudioTailActive(GM_Mixer *mixer)
     // 3) Neo reverb: use public helper to determine if Neo is still active.
     if (!foundNonZero && BAENeoReverb_IsActive())
     {
-        foundNonZero = true;
+        foundNonZero = TRUE;
     }
 #endif
-    if (foundNonZero)
-        return TRUE;
 
-    return FALSE;
+    return foundNonZero;
 }
 
 /* Public wrapper that accepts a BAEMixer handle and checks the underlying
