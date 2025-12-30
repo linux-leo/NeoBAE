@@ -2622,6 +2622,9 @@ class HomeFragment : Fragment() {
                         // Reapply MIDI channel mutes after restarting song for export
                         currentSong?.let { applyMidiChannelMuteState(it) }
                         
+                        // Apply reverb
+                        // Mixer.setReverbType(reverbType.value)
+
                         android.util.Log.d("HomeFragment", "Song started, letting first audio callback settle...")
                         
                         // CRITICAL: Give the mixer/song a moment to actually start processing
@@ -2629,7 +2632,7 @@ class HomeFragment : Fragment() {
                         Thread.sleep(100) // 100ms should be enough for initial scheduling
                         
                         android.util.Log.d("HomeFragment", "Priming export pipeline...")
-                        
+                        val positionMs1 = currentSong?.getPositionMs() ?: 0
                         // CRITICAL: Prime the export pipeline (matching gui_export.c behavior)
                         // Service several times to ensure audio engine starts processing
                         for (prime in 0 until 8) {
@@ -2639,7 +2642,15 @@ class HomeFragment : Fragment() {
                             }
                             Thread.sleep(1) // Small delay between primes
                         }
-                        
+                        val positionMs2 = currentSong?.getPositionMs() ?: 0
+
+                        if (positionMs1 == positionMs2) {
+                            //throw Exception("Export failed (song must be playing to export)")
+                            resumePlayback()
+                            exportToFile(uri)
+                            return@Thread
+
+                        }
                         // Keep priming while song reports done (hasn't started processing yet)
                         var primeCount = 0
                         val maxPrimes = 32
