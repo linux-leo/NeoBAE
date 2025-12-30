@@ -2593,7 +2593,8 @@ class HomeFragment : Fragment() {
                 currentSong?.stop(false)
                 currentSong?.seekToMs(0)
                 viewModel.isPlaying = false
-                
+                currentSong?.setDefaultReverb(reverbType.value)
+
                 android.util.Log.d("HomeFragment", "Current song stopped and seeked to start for export")
                     
                 try {
@@ -2679,6 +2680,10 @@ class HomeFragment : Fragment() {
                                 
                                 // Check if song is done (end of MIDI events reached)
                                 isDone = currentSong?.isDone() ?: false
+
+                                if (isDone) {
+                                    isDone = !Mixer.getMixer()?.isOutputToFileTailActive()
+                                }
                                 
                                 // Update progress every 5% to avoid excessive UI updates
                                 if (lengthMs > 0) {

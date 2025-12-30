@@ -779,16 +779,8 @@ void bae_service_wav_export()
                 // by servicing the output and checking for any non-zero samples in the
                 // legacy reverb buffer, new reverb buffers, or Neo reverb state. This helps
                 // catch reverb trails that would otherwise be truncated if we stop immediately.
-                GM_Mixer *mixer = GM_GetCurrentMixer();
-                NewReverbParams *nr = GetNewReverbParams();
 
-                bool needCheck = false;
-                if (mixer && mixer->reverbBuffer && mixer->reverbBufferSize > 0)
-                    needCheck = true;
-                if (nr && nr->mIsInitialized)
-                    needCheck = true;
-
-                if (needCheck && !g_export_thread_should_stop)
+                if (!g_export_thread_should_stop)
                 {
                     BAE_PRINTF("Export: checking for reverb tail (will wait up to ~600ms)...\n");
                     int silentConsec = 0;
@@ -799,119 +791,7 @@ void bae_service_wav_export()
                     {
                         BAEMixer_ServiceAudioOutputToFile(g_bae.mixer);
 
-                        bool foundNonZero = false;
-
-                        // 1) Legacy fixed reverb buffer
-                        if (!foundNonZero && mixer && mixer->reverbBuffer && mixer->reverbBufferSize > 0)
-                        {
-                            XDWORD wb = mixer->reverbBufferSize;
-                            XDWORD wp = (XDWORD)mixer->reverbPtr;
-                            XDWORD window = (wb < 1024) ? wb : 1024;
-                            XDWORD start = (wp >= window) ? (wp - window) : 0;
-                            for (XDWORD j = 0; j < window; ++j)
-                            {
-                                XDWORD idx = (start + j) % wb;
-                                if (mixer->reverbBuffer[idx] != 0)
-                                {
-                                    foundNonZero = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        // 2) New reverb buffers (comb filters, early reflections, diffusion, stereoizer)
-                        if (!foundNonZero && nr && nr->mIsInitialized)
-                        {
-                            // sample a small window around each write pointer for signs of activity
-                            const XDWORD sampleWindow = 256;
-
-                            // comb filters
-                            for (int ci = 0; ci < kNumberOfCombFilters && !foundNonZero; ++ci)
-                            {
-                                if (nr->mReverbBuffer[ci])
-                                {
-                                    XDWORD wb = (XDWORD)kCombBufferFrameSize;
-                                    XDWORD wp = (XDWORD)nr->mWriteIndex[ci];
-                                    XDWORD window = (wb < sampleWindow) ? wb : sampleWindow;
-                                    XDWORD start = (wp >= window) ? (wp - window) : 0;
-                                    for (XDWORD j = 0; j < window; ++j)
-                                    {
-                                        XDWORD idx = (start + j) % wb;
-                                        if (nr->mReverbBuffer[ci][idx] != 0)
-                                        {
-                                            foundNonZero = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-
-                            // early reflections
-                            if (!foundNonZero && nr->mEarlyReflectionBuffer)
-                            {
-                                XDWORD wb = (XDWORD)kEarlyReflectionBufferFrameSize;
-                                XDWORD wp = (XDWORD)nr->mReflectionWriteIndex;
-                                XDWORD window = (wb < sampleWindow) ? wb : sampleWindow;
-                                XDWORD start = (wp >= window) ? (wp - window) : 0;
-                                for (XDWORD j = 0; j < window; ++j)
-                                {
-                                    XDWORD idx = (start + j) % wb;
-                                    if (nr->mEarlyReflectionBuffer[idx] != 0)
-                                    {
-                                        foundNonZero = true;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            // diffusion buffers
-                            for (int di = 0; di < kNumberOfDiffusionStages && !foundNonZero; ++di)
-                            {
-                                if (nr->mDiffusionBuffer[di])
-                                {
-                                    XDWORD wb = (XDWORD)kDiffusionBufferFrameSize;
-                                    XDWORD wp = (XDWORD)nr->mDiffWriteIndex[di];
-                                    XDWORD window = (wb < sampleWindow) ? wb : sampleWindow;
-                                    XDWORD start = (wp >= window) ? (wp - window) : 0;
-                                    for (XDWORD j = 0; j < window; ++j)
-                                    {
-                                        XDWORD idx = (start + j) % wb;
-                                        if (nr->mDiffusionBuffer[di][idx] != 0)
-                                        {
-                                            foundNonZero = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-
-                            // stereoizer buffers
-                            if (!foundNonZero && (nr->mStereoizerBufferL || nr->mStereoizerBufferR))
-                            {
-                                XDWORD wb = (XDWORD)kStereoizerBufferFrameSize;
-                                XDWORD wp = (XDWORD)nr->mStereoWriteIndex;
-                                XDWORD window = (wb < sampleWindow) ? wb : sampleWindow;
-                                XDWORD start = (wp >= window) ? (wp - window) : 0;
-                                for (XDWORD j = 0; j < window && !foundNonZero; ++j)
-                                {
-                                    XDWORD idx = (start + j) % wb;
-                                    if ((nr->mStereoizerBufferL && nr->mStereoizerBufferL[idx] != 0) ||
-                                        (nr->mStereoizerBufferR && nr->mStereoizerBufferR[idx] != 0))
-                                    {
-                                        foundNonZero = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-#if USE_NEO_EFFECTS == TRUE
-                        // 3) Neo reverb: use public helper to determine if Neo is still active.
-                        if (!foundNonZero && BAENeoReverb_IsActive())
-                        {
-                            foundNonZero = true;
-                        }
-#endif
+                        bool foundNonZero = BAEMixer_IsAudioTailActive(GM_GetCurrentMixer());
                         if (foundNonZero)
                         {
                             silentConsec = 0; // reverb still present; continue draining
@@ -1038,20 +918,7 @@ static void *export_thread_proc(void *param)
                 }
             }
 
-            // Before completing, give the mixer a chance to drain any reverb/FX tail
-            // by servicing the output and checking for any non-zero samples in the
-            // legacy reverb buffer, new reverb buffers, or Neo reverb state. This helps
-            // catch reverb trails that would otherwise be truncated if we stop immediately.
-            GM_Mixer *mixer = GM_GetCurrentMixer();
-            NewReverbParams *nr = GetNewReverbParams();
-
-            bool needCheck = false;
-            if (mixer && mixer->reverbBuffer && mixer->reverbBufferSize > 0)
-                needCheck = true;
-            if (nr && nr->mIsInitialized)
-                needCheck = true;
-
-            if (needCheck && !g_export_thread_should_stop)
+            if (!g_export_thread_should_stop)
             {
                 BAE_PRINTF("Export: checking for reverb tail (will wait up to ~600ms)...\n");
                 int silentConsec = 0;
@@ -1062,120 +929,7 @@ static void *export_thread_proc(void *param)
                 {
                     BAEMixer_ServiceAudioOutputToFile(g_bae.mixer);
 
-                    bool foundNonZero = false;
-
-                    // 1) Legacy fixed reverb buffer
-                    if (!foundNonZero && mixer && mixer->reverbBuffer && mixer->reverbBufferSize > 0)
-                    {
-                        XDWORD wb = mixer->reverbBufferSize;
-                        XDWORD wp = (XDWORD)mixer->reverbPtr;
-                        XDWORD window = (wb < 1024) ? wb : 1024;
-                        XDWORD start = (wp >= window) ? (wp - window) : 0;
-                        for (XDWORD j = 0; j < window; ++j)
-                        {
-                            XDWORD idx = (start + j) % wb;
-                            if (mixer->reverbBuffer[idx] != 0)
-                            {
-                                foundNonZero = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    // 2) New reverb buffers (comb filters, early reflections, diffusion, stereoizer)
-                    if (!foundNonZero && nr && nr->mIsInitialized)
-                    {
-                        // sample a small window around each write pointer for signs of activity
-                        const XDWORD sampleWindow = 256;
-
-                        // comb filters
-                        for (int ci = 0; ci < kNumberOfCombFilters && !foundNonZero; ++ci)
-                        {
-                            if (nr->mReverbBuffer[ci])
-                            {
-                                XDWORD wb = (XDWORD)kCombBufferFrameSize;
-                                XDWORD wp = (XDWORD)nr->mWriteIndex[ci];
-                                XDWORD window = (wb < sampleWindow) ? wb : sampleWindow;
-                                XDWORD start = (wp >= window) ? (wp - window) : 0;
-                                for (XDWORD j = 0; j < window; ++j)
-                                {
-                                    XDWORD idx = (start + j) % wb;
-                                    if (nr->mReverbBuffer[ci][idx] != 0)
-                                    {
-                                        foundNonZero = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        // early reflections
-                        if (!foundNonZero && nr->mEarlyReflectionBuffer)
-                        {
-                            XDWORD wb = (XDWORD)kEarlyReflectionBufferFrameSize;
-                            XDWORD wp = (XDWORD)nr->mReflectionWriteIndex;
-                            XDWORD window = (wb < sampleWindow) ? wb : sampleWindow;
-                            XDWORD start = (wp >= window) ? (wp - window) : 0;
-                            for (XDWORD j = 0; j < window; ++j)
-                            {
-                                XDWORD idx = (start + j) % wb;
-                                if (nr->mEarlyReflectionBuffer[idx] != 0)
-                                {
-                                    foundNonZero = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        // diffusion buffers
-                        for (int di = 0; di < kNumberOfDiffusionStages && !foundNonZero; ++di)
-                        {
-                            if (nr->mDiffusionBuffer[di])
-                            {
-                                XDWORD wb = (XDWORD)kDiffusionBufferFrameSize;
-                                XDWORD wp = (XDWORD)nr->mDiffWriteIndex[di];
-                                XDWORD window = (wb < sampleWindow) ? wb : sampleWindow;
-                                XDWORD start = (wp >= window) ? (wp - window) : 0;
-                                for (XDWORD j = 0; j < window; ++j)
-                                {
-                                    XDWORD idx = (start + j) % wb;
-                                    if (nr->mDiffusionBuffer[di][idx] != 0)
-                                    {
-                                        foundNonZero = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        // stereoizer buffers
-                        if (!foundNonZero && (nr->mStereoizerBufferL || nr->mStereoizerBufferR))
-                        {
-                            XDWORD wb = (XDWORD)kStereoizerBufferFrameSize;
-                            XDWORD wp = (XDWORD)nr->mStereoWriteIndex;
-                            XDWORD window = (wb < sampleWindow) ? wb : sampleWindow;
-                            XDWORD start = (wp >= window) ? (wp - window) : 0;
-                            for (XDWORD j = 0; j < window && !foundNonZero; ++j)
-                            {
-                                XDWORD idx = (start + j) % wb;
-                                if ((nr->mStereoizerBufferL && nr->mStereoizerBufferL[idx] != 0) ||
-                                    (nr->mStereoizerBufferR && nr->mStereoizerBufferR[idx] != 0))
-                                {
-                                    foundNonZero = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-#if USE_NEO_EFFECTS == TRUE
-                    // 3) Neo reverb: use public helper to determine if Neo is still active.
-                    if (!foundNonZero && BAENeoReverb_IsActive())
-                    {
-                        foundNonZero = true;
-                    }
-#endif
-
+                    bool foundNonZero = BAEMixer_IsAudioTailActive(GM_GetCurrentMixer());
                     if (foundNonZero)
                     {
                         silentConsec = 0; // reverb still present; continue draining

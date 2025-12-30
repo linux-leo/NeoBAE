@@ -165,7 +165,7 @@ typedef struct NeoReverbParams
     
 } NeoReverbParams;
 
-static NeoReverbParams gNeoReverbParams;
+NeoReverbParams gNeoReverbParams;
 
 static INLINE INT32 PV_Clamp32From64(int64_t v)
 {

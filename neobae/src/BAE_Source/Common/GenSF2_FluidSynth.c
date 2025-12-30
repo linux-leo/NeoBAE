@@ -2269,9 +2269,7 @@ static void PV_SF2_SetValidDefaultProgramsForAllChannels(void)
     if (!g_fluidsynth_synth)
         return;
 
-    for (int i = 0; i < MAX_CHANNELS; i++) {
-        GM_SF2_SetDefaultControllers(i);
-    }
+    GM_SF2_SetDefaultControllers();
 
     // If no font loaded, nothing else to do
     if (g_fluidsynth_soundfont_id < 0)

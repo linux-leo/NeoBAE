@@ -859,6 +859,8 @@ extern NewReverbParams      gNewReverbParams;
 
 typedef struct NeoReverbParams NeoReverbParams;
 
+extern NeoReverbParams      gNeoReverbParams;
+
 /* prototypes */
 NewReverbParams*    GetNewReverbParams();
 NeoReverbParams*    GetNeoReverbParams();
