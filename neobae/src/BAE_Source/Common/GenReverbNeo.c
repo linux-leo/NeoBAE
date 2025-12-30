@@ -304,10 +304,10 @@ void GetNeoReverbPresetParams(int reverbType, int *combCount, int *delaysMs, int
             break;
         case REVERB_TYPE_16: // Nokia-style
             *combCount = 4;
-            delaysMs[0] = 27; delaysMs[1] = 15; delaysMs[2] = 37; delaysMs[3] = 33;
-            feedback[0] = 127; feedback[1] = 125; feedback[2] = 127; feedback[3] = 127;
-            gain[0] = 254; gain[1] = 254; gain[2] = 254; gain[3] = 254;
-            *lowpass = 10;
+            delaysMs[0] = 26; delaysMs[1] = 14; delaysMs[2] = 36; delaysMs[3] = 32;
+            feedback[0] = 127; feedback[1] = 124; feedback[2] = 127; feedback[3] = 127;
+            gain[0] = 214; gain[1] = 207; gain[2] = 182; gain[3] = 178;
+            *lowpass = 63;
             *mix = 110;
             break;
         case REVERB_TYPE_17: // Tap delay - doesn't use custom reverb params
