@@ -195,6 +195,7 @@ class HomeFragment : Fragment() {
         private val currentLine = StringBuilder()
         private var lastFragment = ""
         private var haveMetaLyrics = false
+        private var seenGenericTextLyric = false
         private var currentExtension = ""
 
         fun setFileExtension(ext: String) {
@@ -215,17 +216,28 @@ class HomeFragment : Fragment() {
             if (markerType == 0x05) {
                 processFragment(text)
             } else if (markerType == 0x01) {
-                val isKaraokeMarker = text.startsWith("@") || text.startsWith("/") || text.startsWith("\\")
-                
-                if (isKaraokeMarker) {
-                     if (text.startsWith("@")) {
-                         commitLine()
-                     } else {
-                         processFragment(text)
-                     }
+                // "@" is a common control/info prefix in KAR-style text meta events.
+                // Treat it as a line reset like the native lyric callback does.
+                if (text.startsWith("@")) {
+                    commitLine()
+                    return
+                }
+
+                // Some MIDI files (not just .kar) encode lyrics as generic text (0x01),
+                // using a leading '\\' on the first fragment to indicate "this is lyric text".
+                // Subsequent fragments often omit the prefix. Track that and keep consuming 0x01.
+                if (text.startsWith("\\")) {
+                    seenGenericTextLyric = true
+                }
+
+                val isKaraokeDelimiter = text.startsWith("/") || text.startsWith("\\")
+                if (isKaraokeDelimiter) {
+                    processFragment(text)
                 } else if (!haveMetaLyrics) {
-                    // Plain text fallback - only if .kar file
-                    if (currentExtension == "kar") {
+                    // Plain text fallback:
+                    // - Always accept for .kar
+                    // - Also accept for .mid/.midi once we've seen a '\\' lyric indicator
+                    if (currentExtension == "kar" || seenGenericTextLyric) {
                         processFragment(text)
                     }
                 }
@@ -286,6 +298,7 @@ class HomeFragment : Fragment() {
             currentLine.setLength(0)
             lastFragment = ""
             haveMetaLyrics = false
+            seenGenericTextLyric = false
             activity?.runOnUiThread {
                 viewModel.currentLyric = ""
             }

@@ -39,7 +39,7 @@ BEGIN
             VALUE "FileDescription", "zefidi Media Player, Powered by NeoBAE"
             VALUE "FileVersion", "1.0.0.0"
             VALUE "InternalName", "zefidi"
-            VALUE "LegalCopyright", "Copyright (C) 2025 Zefie Networks"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Zefie Networks"
             VALUE "OriginalFilename", "zefidi.exe"
             VALUE "ProductName", "zefidi"
             VALUE "ProductVersion", "1.0.0.0"
