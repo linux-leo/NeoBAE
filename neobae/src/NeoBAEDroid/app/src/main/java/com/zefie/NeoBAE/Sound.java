@@ -72,7 +72,7 @@ public class Sound
         if (currentVolume == 0 || currentVolume == 0x10000) {
             // If volume hasn't been set yet (0) or is still default (0x10000), use 100% boosted
             double engineGain = 1.0;
-            double soundMultiplier = 12.0 * (1.0 + 1.0);
+            double soundMultiplier = 2.5 * (1.0 + 1.0);
             double soundGain = engineGain * soundMultiplier;
             currentVolume = (int)(soundGain * 65536L);
         }
@@ -111,13 +111,8 @@ public class Sound
 
     public int setVolumePercent(int percent){
         if(percent<0) percent=0; if(percent>100) percent=100;
-        // Audio files need a boost multiplier to match MIDI loudness
-        // GUI uses: soundMultiplier = 3.0 * (1.0 + percent/100.0)
-        // We use 12.0 for even more boost
-        double engineGain = percent / 100.0;
-        double soundMultiplier = 12.0 * (1.0 + percent / 100.0);
-        double soundGain = engineGain * soundMultiplier;
-        int fixed = (int)(soundGain * 65536L);
+        // 16.16 fixed where 1.0 == 65536. Map 0..100% -> 0..1.0.
+        int fixed = (int)((percent * 65536L) / 100L);
         return _setSoundVolume(mReference, fixed);
     }
     
