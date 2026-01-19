@@ -126,6 +126,11 @@ class HomeFragment : Fragment() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    // Track which file produced the currently loaded Song/Sound so we can tell when we're
+    // transitioning away from a track that used an embedded bank.
+    private var currentLoadedFilePath: String? = null
+    private var restoreAfterEmbeddedBankInProgress: Boolean = false
+
     private fun postToMain(block: () -> Unit) {
         mainHandler.post(block)
     }
@@ -755,9 +760,18 @@ class HomeFragment : Fragment() {
                                         if (viewModel.hasNext()) {
                                             playNext()
                                         } else {
-                                            viewModel.isPlaying = false
-                                            // No more songs to play - schedule cleanup
-                                            scheduleMixerCleanup()
+                                            // No more songs to play.
+                                            // If the finished song used an embedded bank, restore the previous bank now.
+                                            if (currentSong?.hasEmbeddedBank() == true) {
+                                                viewModel.isPlaying = false
+                                                restoreLastKnownBankAfterEmbeddedSong {
+                                                    // stopPlayback() inside restore already schedules cleanup.
+                                                }
+                                            } else {
+                                                viewModel.isPlaying = false
+                                                // No more songs to play - schedule cleanup
+                                                scheduleMixerCleanup()
+                                            }
                                         }
                                     }
                                 }
@@ -1134,18 +1148,7 @@ class HomeFragment : Fragment() {
             return
         }
 
-        // Use the current folder or search results as the playlist
-        if (currentSong?.hasEmbeddedBank() == true) {
-            android.util.Log.d("HomeFragment", "The previous song had an embedded bank, restoring last known bank")
-            val prefs = requireContext().getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
-            val lastBankPath = prefs.getString("last_bank_path", "__builtin__")
-            if (lastBankPath == "__builtin__") {
-                loadBuiltInPatches()
-            } else if (!lastBankPath.isNullOrEmpty()) {
-                loadBankFromFile(java.io.File(lastBankPath))
-            }
-        }
-        stopPlayback(true)
+        // Playlist/file switching: bank restoration (if needed) is handled inside startPlayback().
         viewModel.clearPlaylist()
         
         // Add all files from source list to playlist
@@ -1207,9 +1210,129 @@ class HomeFragment : Fragment() {
             "HSB bank refresh before song load: bank=$bankKey result=$r"
         )
     }
+
+    private fun restoreLastKnownBankAfterEmbeddedSong(attempt: Int = 0, onComplete: () -> Unit) {
+        if (!isAdded) {
+            onComplete()
+            return
+        }
+
+        val ctx = requireContext()
+        val prefs = ctx.getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
+        val lastBankPath = prefs.getString("last_bank_path", "__builtin__") ?: "__builtin__"
+        val targetName = when {
+            lastBankPath == "__builtin__" -> "Built-in patches"
+            lastBankPath.isNotBlank() -> java.io.File(lastBankPath).name
+            else -> "Built-in patches"
+        }
+
+        // If a manual bank swap is already underway, wait briefly rather than racing.
+        if (!bankSwapInProgress.compareAndSet(false, true)) {
+            if (attempt >= 20) {
+                android.util.Log.w("HomeFragment", "Bank restore skipped: bank swap busy")
+                onComplete()
+                return
+            }
+            mainHandler.postDelayed({ restoreLastKnownBankAfterEmbeddedSong(attempt + 1, onComplete) }, 100)
+            return
+        }
+
+        // Stop the embedded-bank song before restoring the user's bank.
+        // Also cancel any pending mixer cleanup so we don't race bank load.
+        runCatching {
+            runOnMainSync {
+                stopPlayback(delete = true)
+                cancelMixerCleanup()
+            }
+        }
+
+        isLoadingBank.value = true
+        Thread {
+            var status = 0
+            try {
+                if (Mixer.getMixer() == null) {
+                    status = 0
+                } else {
+                    val wantsHsb = lastBankPath == "__builtin__" || lastBankPath.endsWith(".hsb", ignoreCase = true)
+                    if (wantsHsb) {
+                        // HSB bank swapping on Android can require a full mixer teardown/recreate.
+                        val recreateStatus = runCatching {
+                            runOnMainSync {
+                                try {
+                                    Mixer.delete()
+                                } catch (_: Exception) {
+                                }
+                                val s = Mixer.create(requireActivity().assets, 44100, 2, 64, 8, 64)
+                                if (s == 0) {
+                                    Mixer.setNativeCacheDir(ctx.cacheDir.absolutePath)
+                                    try {
+                                        Mixer.setDefaultReverb(reverbType.value)
+                                    } catch (_: Exception) {
+                                    }
+                                    try {
+                                        applyVolume()
+                                    } catch (_: Exception) {
+                                    }
+                                    try {
+                                        Mixer.reengageAudio()
+                                    } catch (_: Exception) {
+                                    }
+                                }
+                                s
+                            }
+                        }.getOrDefault(-1)
+                        if (recreateStatus != 0) {
+                            status = recreateStatus
+                        }
+                    }
+
+                    if (status == 0) {
+                        status = if (lastBankPath == "__builtin__") {
+                            loadBuiltInPatchesFromAssets(ctx)
+                        } else {
+                            // Load by path to avoid OOM for large SF2/DLS; also works for HSB.
+                            Mixer.addBankFromFile(lastBankPath)
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                status = -1
+            } finally {
+                postToMain {
+                    isLoadingBank.value = false
+                    bankSwapInProgress.set(false)
+
+                    if (status == 0) {
+                        currentBankName.value = targetName
+                        android.util.Log.d("HomeFragment", "Restored bank after embedded song: $targetName")
+                    } else {
+                        android.util.Log.w("HomeFragment", "Failed restoring bank after embedded song (err=$status)")
+                    }
+
+                    onComplete()
+                }
+            }
+        }.start()
+    }
     
     private fun startPlayback(file: File) {
         try {
+            // If we're transitioning away from a Song that used an embedded bank, restore the
+            // user's previously selected bank BEFORE loading the next track.
+            val previousPath = currentLoadedFilePath
+            val leavingEmbeddedBankSong = (currentSong?.hasEmbeddedBank() == true)
+                && (previousPath != null)
+                && (previousPath != file.absolutePath)
+
+            if (leavingEmbeddedBankSong && !restoreAfterEmbeddedBankInProgress) {
+                restoreAfterEmbeddedBankInProgress = true
+                restoreLastKnownBankAfterEmbeddedSong {
+                    restoreAfterEmbeddedBankInProgress = false
+                    startPlayback(file)
+                }
+                return
+            }
+
             stopPlayback(true)
             cancelMixerCleanup()
             viewModel.currentPositionMs = 0
@@ -1271,6 +1394,7 @@ class HomeFragment : Fragment() {
 
                             viewModel.isPlaying = true
                             viewModel.currentTitle = file.nameWithoutExtension
+                            currentLoadedFilePath = file.absolutePath
                         } else {
                             viewModel.isPlaying = false
                             Toast.makeText(requireContext(), "Failed to start (err=$r)", Toast.LENGTH_SHORT).show()
@@ -1294,6 +1418,7 @@ class HomeFragment : Fragment() {
                             viewModel.isPlaying = true
                             viewModel.currentTitle = file.nameWithoutExtension
                             android.util.Log.d("HomeFragment", "Started ${loadResult.fileTypeString} sound: ${file.name}")
+                            currentLoadedFilePath = file.absolutePath
                         } else {
                             viewModel.isPlaying = false
                             Toast.makeText(requireContext(), "Failed to start sound (err=$r)", Toast.LENGTH_SHORT).show()
@@ -1424,6 +1549,7 @@ class HomeFragment : Fragment() {
         if (delete) {
             setCurrentSong(null)
             setCurrentSound(null)
+            currentLoadedFilePath = null
             scheduleMixerCleanup()
         }
     }
