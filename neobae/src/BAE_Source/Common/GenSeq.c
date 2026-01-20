@@ -2174,7 +2174,7 @@ static void PV_ProcessNoteOn(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTra
                 {
                     thePatch = PV_DetermineInstrumentToUse(pSong, note, MIDIChannel);
                     PV_StartMIDINote(pSong, thePatch, MIDIChannel, currentTrack, note, volume);
-                    BAE_PRINTF("ProcessNoteOn Debug: Channel %d is using RMF Instrument (note=%d)\n", MIDIChannel, note);
+                    //BAE_PRINTF("ProcessNoteOn Debug: Channel %d is using RMF Instrument (note=%d)\n", MIDIChannel, note);
                 }
             }
             else

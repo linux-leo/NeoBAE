@@ -420,8 +420,13 @@ ifeq ($(RMF2MID),1)
 	# libNeoBAE srcs + rmf2mid.c
 	SRC_BIN	:= $(SRC) src/rmf2mid/rmf2mid.c
 else
+	ifeq ($(MID2RMI),1)
+		# libNeoBAE srcs + mid2rmi.c
+		SRC_BIN	:= $(SRC) src/mid2rmi/mid2rmi.c
+	else
 	# playbae = libNeoBAE srcs + playbae.c
 	SRC_BIN	:= $(SRC) src/playbae/playbae.c
+	endif
 endif
 endif
 endif
