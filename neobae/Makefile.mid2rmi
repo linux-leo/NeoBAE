@@ -51,6 +51,9 @@ ifneq ($(BAE_LIBS),)
 	LIBS += $(BAE_LIBS)
 endif
 
+include inc/Makefile.versioning
+CFLAGS		+= -D_VERSION=\""$(VERSION)"\"
+
 CXXFLAGS 	:= $(CFLAGS)
 # Use C++ linker if we have any C++ sources
 ifneq ($(filter %.cpp,$(SRC) $(SRC_BIN)),)

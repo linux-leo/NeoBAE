@@ -75,7 +75,7 @@ if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 2 ]; then
 	runcmd make -f Makefile.mingw "-j$(nproc)" all
     signit "${BDIR}/playbae.exe" "${BDIR}/playbae_signed.exe"
     mv "${BDIR}/playbae_signed.exe" "${BDIR}/playbae.exe"
-	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/playbae_win_sdl3_x32.zip" -- playbae.exe libfluid*.dll SDL*.dll sndfile.dll
+	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/playbae_win_sdl3_x32.zip" -- playbae.exe libfluid*.dll SDL*.dll
 	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/libNeoBAE_win_sdl3_x32.zip" -- *.dll *.lib *.a
 	runcmd cd "${RDIR}" || exit 1
 	runcmd make -f Makefile.mingw clean
@@ -89,7 +89,7 @@ if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 3 ]; then
 	runcmd make -f Makefile.mingw "-j$(nproc)" all
     signit "${BDIR}/playbae.exe" "${BDIR}/playbae_signed.exe"
     mv "${BDIR}/playbae_signed.exe" "${BDIR}/playbae.exe"
-	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/playbae_win_sdl3_x64.zip" -- playbae.exe libfluid*.dll SDL*.dll sndfile.dll
+	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/playbae_win_sdl3_x64.zip" -- playbae.exe libfluid*.dll SDL*.dll
 	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/libNeoBAE_win_sdl3_x64.zip" -- *.dll *.lib *.a
 	runcmd cd "${RDIR}" || exit 1
 	runcmd make -f Makefile.mingw clean
@@ -105,7 +105,7 @@ if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 4 ]; then
     mv "${BDIR}/zefidi_signed.exe" "${BDIR}/zefidi.exe"
 	signit "${BDIR}/RegisterFiletypes.exe" "${BDIR}/RegisterFiletypes_signed.exe"
 	mv "${BDIR}/RegisterFiletypes_signed.exe" "${BDIR}/RegisterFiletypes.exe"
-	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/zefidi_win_sdl3_x32.zip" -- zefidi.exe RegisterFiletypes.exe libfluid*.dll SDL*.dll sndfile.dll
+	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/zefidi_win_sdl3_x32.zip" -- zefidi.exe RegisterFiletypes.exe libfluid*.dll SDL*.dll
 	runcmd cd "${RDIR}" || exit 1
 	runcmd make -f Makefile.gui-mingw clean
 fi
@@ -120,7 +120,7 @@ if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 5 ]; then
     mv "${BDIR}/zefidi_signed.exe" "${BDIR}/zefidi.exe"
 	signit "${BDIR}/RegisterFiletypes.exe" "${BDIR}/RegisterFiletypes_signed.exe"
 	mv "${BDIR}/RegisterFiletypes_signed.exe" "${BDIR}/RegisterFiletypes.exe"	
-	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/zefidi_win_sdl3_x64.zip" -- zefidi.exe RegisterFiletypes.exe libfluid*.dll SDL*.dll sndfile.dll
+	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/zefidi_win_sdl3_x64.zip" -- zefidi.exe RegisterFiletypes.exe libfluid*.dll SDL*.dll
 	runcmd cd "${RDIR}" || exit 1
 	runcmd make -f Makefile.gui-mingw clean
 fi
@@ -130,7 +130,7 @@ if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 6 ]; then
 	echo "Building RMFInfo (x32)..."
 	runcmd make clean
 	runcmd make -f Makefile.rmfinfo-mingw "-j$(nproc)" all
-	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/rmfinfo_win_x32.zip" -- rmfinfo.exe
+	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9u "${ODIR}/clitools_win_x32.zip" -- rmfinfo.exe
 	runcmd cd "${RDIR}" || exit 1
 	runcmd make -f Makefile.rmfinfo-mingw clean
 fi
@@ -140,7 +140,7 @@ if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 7 ]; then
 	echo "Building RMFInfo (x64)..."
 	runcmd make clean
 	runcmd make -f Makefile.rmfinfo-mingw "-j$(nproc)" all
-	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/rmfinfo_win_x64.zip" -- rmfinfo.exe
+	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9u "${ODIR}/clitools_win_x64.zip" -- rmfinfo.exe
 	runcmd cd "${RDIR}" || exit 1
 	runcmd make -f Makefile.rmfinfo-mingw clean
 fi
@@ -150,7 +150,7 @@ if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 8 ]; then
 	echo "Building RMF2MID (x32)..."
 	runcmd make clean
 	runcmd make -f Makefile.rmf2mid-mingw "-j$(nproc)" all
-	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/rmf2mid_win_x32.zip" -- rmf2mid.exe
+	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9u "${ODIR}/clitools_win_x32.zip" -- rmf2mid.exe
 	runcmd cd "${RDIR}" || exit 1
 	runcmd make -f Makefile.rmf2mid-mingw clean
 fi
@@ -160,9 +160,29 @@ if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 9 ]; then
 	echo "Building RMF2MID (x64)..."
 	runcmd make clean
 	runcmd make -f Makefile.rmf2mid-mingw "-j$(nproc)" all
-	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9 "${ODIR}/rmf2mid_win_x64.zip" -- rmf2mid.exe
+	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9u "${ODIR}/clitools_win_x64.zip" -- rmf2mid.exe
 	runcmd cd "${RDIR}" || exit 1
 	runcmd make -f Makefile.rmf2mid-mingw clean
+fi
+
+if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 10 ]; then
+	export BITS=32
+	echo "Building MID2RMI (x32)..."
+	runcmd make clean
+	runcmd make -f Makefile.mid2rmi-mingw "-j$(nproc)" all
+	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9u "${ODIR}/clitools_win_x32.zip" -- mid2rmi.exe
+	runcmd cd "${RDIR}" || exit 1
+	runcmd make -f Makefile.mid2rmi-mingw clean
+fi
+
+if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 11 ]; then
+	export BITS=64
+	echo "Building MID2RMI (x64)..."
+	runcmd make clean
+	runcmd make -f Makefile.mid2rmi-mingw "-j$(nproc)" all
+	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9u "${ODIR}/clitools_win_x64.zip" -- mid2rmi.exe
+	runcmd cd "${RDIR}" || exit 1
+	runcmd make -f Makefile.mid2rmi-mingw clean
 fi
 
 cd "${RDIR}" || exit 1
