@@ -1080,47 +1080,7 @@ void render_settings_dialog(SDL_Renderer *R, int mx, int my, bool mclick, bool m
     // Note: ui_dropdown_two_column handles the button click internally, so we don't handle clicks here
 #endif
     // Right column controls (checkboxes)
-    Rect cbRect = {rightX, dlg.y + 36, 18, 18};
-    if (ui_toggle(R, cbRect, &g_stereo_output, "Stereo Output", mx, my, mclick))
-    {
-        bool wasPlayingBefore = g_bae.is_playing;     
-        if (recreate_mixer_and_restore(g_sample_rate_hz, g_stereo_output, *reverbType, *transpose, *tempo, *volume, *loopPlay, ch_enable))
-        {
-
-            if (wasPlayingBefore && progress > 0)
-            {
-                bae_seek_ms(*progress);
-            } 
-            else {
-                *playing = false;
-            }
-
-#if SUPPORT_MIDI_HW == TRUE
-            // If MIDI input was active, reinitialize it so hardware stays in a consistent state
-            if (g_midi_input_enabled)
-            {
-                // Stop service thread prior to changing devices
-                midi_service_stop();
-                midi_input_shutdown();
-                if (g_midi_input_device_index >= 0 && g_midi_input_device_index < g_midi_input_device_count)
-                {
-                    int api = g_midi_device_api[g_midi_input_device_index];
-                    int port = g_midi_device_port[g_midi_input_device_index];
-                    midi_input_init("miniBAE", api, port);
-                    midi_service_start();
-                }
-                else
-                {
-                    midi_input_init("miniBAE", -1, -1);
-                    midi_service_start();
-                }
-            }
-#endif
-        }
-        save_settings(g_current_bank_path[0] ? g_current_bank_path : NULL, *reverbType, *loopPlay);
-    }
-
-    Rect kbRect = {rightX, dlg.y + 72, 18, 18};
+    Rect kbRect = {rightX, dlg.y + 36, 18, 18};
     if (ui_toggle(R, kbRect, &g_show_virtual_keyboard, "Show Virtual Keyboard", mx, my, mclick))
     {
         save_settings(g_current_bank_path[0] ? g_current_bank_path : NULL, *reverbType, *loopPlay);
@@ -1128,7 +1088,7 @@ void render_settings_dialog(SDL_Renderer *R, int mx, int my, bool mclick, bool m
             g_keyboard_channel_dd_open = false;
     }
 
-    Rect playlistRect = {rightX, dlg.y + 108, 18, 18};
+    Rect playlistRect = {rightX, dlg.y + 72, 18, 18};
 #if SUPPORT_PLAYLIST == TRUE
     if (ui_toggle(R, playlistRect, &g_playlist.enabled, "Enable Playlist", mx, my, mclick))
     {
@@ -1140,7 +1100,7 @@ void render_settings_dialog(SDL_Renderer *R, int mx, int my, bool mclick, bool m
     draw_text(R, playlistRect.x + playlistRect.w + 6, playlistRect.y + 2, "Enable Playlist (disabled)", g_text_color);
 #endif
 
-    Rect wtvRect = {rightX, dlg.y + 144, 18, 18};
+    Rect wtvRect = {rightX, dlg.y + 108, 18, 18};
     bool webtv_enabled = !g_disable_webtv_progress_bar;
     if (ui_toggle(R, wtvRect, &webtv_enabled, "WebTV Style Bar", mx, my, mclick))
     {
@@ -1192,7 +1152,7 @@ void render_settings_dialog(SDL_Renderer *R, int mx, int my, bool mclick, bool m
                 if (changed)
                 {
                     bool wasPlayingBefore = g_bae.is_playing;
-                    if (recreate_mixer_and_restore(g_sample_rate_hz, g_stereo_output, *reverbType, *transpose, *tempo, *volume, *loopPlay, ch_enable))
+                    if (recreate_mixer_and_restore(g_sample_rate_hz, *reverbType, *transpose, *tempo, *volume, *loopPlay, ch_enable))
                     {
                         if (wasPlayingBefore && progress > 0)
                         {

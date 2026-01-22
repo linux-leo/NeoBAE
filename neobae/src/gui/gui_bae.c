@@ -235,7 +235,7 @@ bool load_bank(const char *path, bool current_playing_state, int transpose, int 
             if (g_midi_input_enabled && !g_in_bank_load_recreate)
             {
                 g_in_bank_load_recreate = true;
-                recreate_mixer_and_restore(g_sample_rate_hz, g_stereo_output, reverb_type,
+                recreate_mixer_and_restore(g_sample_rate_hz, reverb_type,
                                            transpose, tempo, volume, loop_enabled, ch_enable);
                 g_in_bank_load_recreate = false;
             }
@@ -314,7 +314,7 @@ bool load_bank(const char *path, bool current_playing_state, int transpose, int 
         {
             g_in_bank_load_recreate = true;
             // reuse current GUI settings (sample rate & stereo output)
-            recreate_mixer_and_restore(g_sample_rate_hz, g_stereo_output, reverb_type,
+            recreate_mixer_and_restore(g_sample_rate_hz, reverb_type,
                                        transpose, tempo, volume, loop_enabled, ch_enable);
             g_in_bank_load_recreate = false;
         }
@@ -441,7 +441,7 @@ void get_audio_total_frames(void)
     }
 }
 
-bool bae_init(int sampleRateHz, bool stereo)
+bool bae_init(int sampleRateHz)
 {
     // Initialize BAE mixer
     g_bae.mixer = BAEMixer_New();
@@ -451,7 +451,7 @@ bool bae_init(int sampleRateHz, bool stereo)
         return false;
     }
 
-    BAEAudioModifiers modifiers = BAE_USE_16 | (stereo ? BAE_USE_STEREO : 0);
+    BAEAudioModifiers modifiers = BAE_USE_16 | BAE_USE_STEREO;
     BAEResult result = BAEMixer_Open(g_bae.mixer,
                                      sampleRateHz,
                                      E_LINEAR_INTERPOLATION,
@@ -469,8 +469,7 @@ bool bae_init(int sampleRateHz, bool stereo)
         return false;
     }
 
-    BAE_PRINTF("BAE initialized: %d Hz, %s\n",
-               sampleRateHz, stereo ? "stereo" : "mono");
+    BAE_PRINTF("BAE initialized: %d Hz\n", sampleRateHz);
 
     return true;
 }

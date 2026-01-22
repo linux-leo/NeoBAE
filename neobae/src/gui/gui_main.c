@@ -120,7 +120,7 @@ void bae_seek_ms(int ms);
 int bae_get_pos_ms(void);
 bool bae_play(bool *playing);
 void bae_apply_current_settings(int transpose, int tempo, int volume, bool loop_enabled, int reverb_type, bool ch_enable[BAE_MAX_MIDI_CHANNELS]);
-bool recreate_mixer_and_restore(int sampleRateHz, bool stereo, int reverbType,
+bool recreate_mixer_and_restore(int sampleRateHz, int reverbType,
                                 int transpose, int tempo, int volume, bool loopPlay,
                                 bool ch_enable[BAE_MAX_MIDI_CHANNELS]);
 bool load_bank(const char *path, bool current_playing_state, int transpose, int tempo, int volume, bool loop_enabled, int reverb_type, bool ch_enable[BAE_MAX_MIDI_CHANNELS], bool save_to_settings);
@@ -488,8 +488,8 @@ static BAERate map_rate_from_hz(int hz)
     }
 }
 
-// Recreate mixer with new sample rate / stereo setting preserving current playback state where possible.
-bool recreate_mixer_and_restore(int sampleRateHz, bool stereo, int reverbType,
+// Recreate mixer with new sample rate setting preserving current playback state where possible.
+bool recreate_mixer_and_restore(int sampleRateHz, int reverbType,
                                 int transpose, int tempo, int volume, bool loopPlay,
                                 bool ch_enable[BAE_MAX_MIDI_CHANNELS])
 {
@@ -545,7 +545,6 @@ bool recreate_mixer_and_restore(int sampleRateHz, bool stereo, int reverbType,
 #if USE_SF2_SUPPORT == TRUE
     if (GM_SF2_IsActive())
     {
-        GM_SF2_SetStereoMode(stereo, FALSE); // Don't apply now because we are going to apply next
         GM_SF2_SetSampleRate(sampleRateHz);
     }
 #endif    
@@ -563,7 +562,7 @@ bool recreate_mixer_and_restore(int sampleRateHz, bool stereo, int reverbType,
     GM_SetMixerSF2Mode(wasSF2);
 #endif
     BAERate rate = map_rate_from_hz(sampleRateHz);
-    BAEAudioModifiers mods = BAE_USE_16 | (stereo ? BAE_USE_STEREO : 0);
+    BAEAudioModifiers mods = BAE_USE_16 | BAE_USE_STEREO;
     BAEResult mr = BAEMixer_Open(g_bae.mixer, rate, BAE_LINEAR_INTERPOLATION, mods, 32, 8, 32, TRUE);
     if (mr != BAE_NO_ERROR)
     {
@@ -851,10 +850,6 @@ int main(int argc, char *argv[])
     {
         g_volume_curve = (settings.volume_curve >= 0 && settings.volume_curve <= 4) ? settings.volume_curve : 0;
     }
-    if (settings.has_stereo)
-    {
-        g_stereo_output = settings.stereo_output;
-    }
     if (settings.has_sample_rate)
     {
         g_sample_rate_hz = map_rate_from_hz(settings.sample_rate_hz);
@@ -878,10 +873,10 @@ int main(int argc, char *argv[])
     {
         BAE_SetDefaultVelocityCurve(g_volume_curve);
     }
-    if (!bae_init(g_sample_rate_hz, g_stereo_output))
+    if (!bae_init(g_sample_rate_hz))
     {
-        BAE_PRINTF("NeoBAE init failed (rate=%d, stereo=%d)\n", g_sample_rate_hz, g_stereo_output);
-        if (!bae_init(g_sample_rate_hz, g_stereo_output))
+        BAE_PRINTF("NeoBAE init failed (rate=%d)\n", g_sample_rate_hz);
+        if (!bae_init(g_sample_rate_hz))
         {
             BAE_PRINTF("NeoBAE init failed (2nd try)\n");
         }
@@ -5055,7 +5050,7 @@ int main(int argc, char *argv[])
                                     if (g_midiRecordFormatIndex == 1) // WAV
                                     {
                                         // start our own PCM WAV writer and start song/live-song to drive audio
-                                        int wav_channels = g_stereo_output ? 2 : 1;
+                                        int wav_channels = 2;
                                         int wav_sr = g_sample_rate_hz > 0 ? g_sample_rate_hz : 44100;
                                         bool started = pcm_wav_start(export_file, wav_channels, wav_sr, 16);
                                         if (!started)
@@ -5108,7 +5103,7 @@ int main(int argc, char *argv[])
                                     else if (g_midiRecordFormatIndex == 2) // FLAC
                                     {
                                         // start our own PCM FLAC writer and start song/live-song to drive audio
-                                        int flac_channels = g_stereo_output ? 2 : 1;
+                                        int flac_channels = 2;
                                         int flac_sr = g_sample_rate_hz > 0 ? g_sample_rate_hz : 44100;
                                         set_status_message("Attempting FLAC recording...");
                                         BAE_PRINTF("GUI: Attempting FLAC recording - channels=%d, sr=%d, file=%s\n", flac_channels, flac_sr, export_file);
@@ -5171,7 +5166,7 @@ int main(int argc, char *argv[])
                                             if (g_midi_input_enabled)
                                             {
                                                 // Use platform MP3 recorder for MIDI-in; do not start BAESong
-                                                int mp3_channels = g_stereo_output ? 2 : 1;
+                                                int mp3_channels = 2;
                                                 int mp3_sr = g_sample_rate_hz > 0 ? g_sample_rate_hz : 44100;
                                                 int bitrate = format_info.bitrate;
                                                 int rc = BAE_Platform_MP3Recorder_Start(export_file, (uint32_t)mp3_channels, (uint32_t)mp3_sr, 16, (uint32_t)bitrate);
@@ -5223,7 +5218,7 @@ int main(int argc, char *argv[])
                                         {
 #if USE_VORBIS_ENCODER == TRUE
                                             // Use our own PCM Vorbis writer for real-time recording
-                                            int vorbis_channels = g_stereo_output ? 2 : 1;
+                                            int vorbis_channels = 2;
                                             int vorbis_sr = g_sample_rate_hz > 0 ? g_sample_rate_hz : 44100;
                                             int bitrate = format_info.bitrate;
                                             bool started = pcm_vorbis_start(export_file, vorbis_channels, vorbis_sr, 16, bitrate);
@@ -5600,58 +5595,30 @@ int main(int argc, char *argv[])
                     // VU sampling: use the single-sample snapshot returned above to
                     // update smoothed VU levels. The PCM writer handles bulk
                     // captures elsewhere.
-                    if (!g_stereo_output)
+                    float rawL = fabsf((float)sL) / 32768.0f * g_vu_gain;
+                    float rawR = fabsf((float)sR) / 32768.0f * g_vu_gain;
+                    float fL = sqrtf(MIN(1.0f, rawL));
+                    float fR = sqrtf(MIN(1.0f, rawR));
+                    const float alpha = MAIN_VU_ALPHA;
+                    g_vu_left_level = g_vu_left_level * (1.0f - alpha) + fL * alpha;
+                    g_vu_right_level = g_vu_right_level * (1.0f - alpha) + fR * alpha;
+                    Uint32 now = SDL_GetTicks();
+                    int il = (int)(g_vu_left_level * 100.0f);
+                    int ir = (int)(g_vu_right_level * 100.0f);
+                    if (il > g_vu_peak_left)
                     {
-                        float mono = (fabsf((float)sL) + fabsf((float)sR)) * 0.5f / 32768.0f * g_vu_gain;
-                        float v = sqrtf(MIN(1.0f, mono));
-                        const float alpha = MAIN_VU_ALPHA;
-                        g_vu_left_level = g_vu_left_level * (1.0f - alpha) + v * alpha;
-                        g_vu_right_level = g_vu_right_level * (1.0f - alpha) + v * alpha;
-                        Uint32 now = SDL_GetTicks();
-                        int iv = (int)(v * 100.0f);
-                        if (iv > g_vu_peak_left)
-                        {
-                            g_vu_peak_left = iv;
-                            g_vu_peak_hold_until = now + 600;
-                        }
-                        if (iv > g_vu_peak_right)
-                        {
-                            g_vu_peak_right = iv;
-                            g_vu_peak_hold_until = now + 600;
-                        }
-                        if (now > g_vu_peak_hold_until)
-                        {
-                            g_vu_peak_left = (int)(g_vu_left_level * 100.0f);
-                            g_vu_peak_right = (int)(g_vu_right_level * 100.0f);
-                        }
+                        g_vu_peak_left = il;
+                        g_vu_peak_hold_until = now + 600;
                     }
-                    else
+                    if (ir > g_vu_peak_right)
                     {
-                        float rawL = fabsf((float)sL) / 32768.0f * g_vu_gain;
-                        float rawR = fabsf((float)sR) / 32768.0f * g_vu_gain;
-                        float fL = sqrtf(MIN(1.0f, rawL));
-                        float fR = sqrtf(MIN(1.0f, rawR));
-                        const float alpha = MAIN_VU_ALPHA;
-                        g_vu_left_level = g_vu_left_level * (1.0f - alpha) + fL * alpha;
-                        g_vu_right_level = g_vu_right_level * (1.0f - alpha) + fR * alpha;
-                        Uint32 now = SDL_GetTicks();
-                        int il = (int)(g_vu_left_level * 100.0f);
-                        int ir = (int)(g_vu_right_level * 100.0f);
-                        if (il > g_vu_peak_left)
-                        {
-                            g_vu_peak_left = il;
-                            g_vu_peak_hold_until = now + 600;
-                        }
-                        if (ir > g_vu_peak_right)
-                        {
-                            g_vu_peak_right = ir;
-                            g_vu_peak_hold_until = now + 600;
-                        }
-                        if (now > g_vu_peak_hold_until)
-                        {
-                            g_vu_peak_left = (int)(g_vu_left_level * 100.0f);
-                            g_vu_peak_right = (int)(g_vu_right_level * 100.0f);
-                        }
+                        g_vu_peak_right = ir;
+                        g_vu_peak_hold_until = now + 600;
+                    }
+                    if (now > g_vu_peak_hold_until)
+                    {
+                        g_vu_peak_left = (int)(g_vu_left_level * 100.0f);
+                        g_vu_peak_right = (int)(g_vu_right_level * 100.0f);
                     }
                 }
             }

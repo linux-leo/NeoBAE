@@ -57,7 +57,6 @@ extern BAESong g_live_song;
 // Globals from other modules used by gui_bae
 extern bool g_in_bank_load_recreate;
 extern int g_sample_rate_hz;
-extern bool g_stereo_output;
 
 // Sound volume tracking
 extern double g_last_applied_sound_volume;
@@ -87,7 +86,7 @@ void gui_audio_task(void *reference);
 void set_status_message(const char *msg);
 
 // BAE initialization and management
-bool bae_init(int sampleRateHz, bool stereo);
+bool bae_init(int sampleRateHz);
 void bae_shutdown(void);
 
 // Song loading and playback
@@ -123,7 +122,7 @@ const char *get_bank_friendly_name();
 void load_bankinfo(void);
 
 // Mixer recreation
-bool recreate_mixer_and_restore(int sampleRateHz, bool stereo, int reverbType,
+bool recreate_mixer_and_restore(int sampleRateHz, int reverbType,
                                 int transpose, int tempo, int volume, bool loopPlay,
                                 bool ch_enable[16]);
 
