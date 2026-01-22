@@ -1267,6 +1267,20 @@ class HomeFragment : Fragment() {
                                     Mixer.setNativeCacheDir(ctx.cacheDir.absolutePath)
                                     try {
                                         Mixer.setDefaultReverb(reverbType.value)
+                                        // Re-apply Neo Reverb custom parameters after mixer recreation.
+                                        val prefs = ctx.getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
+                                        val currentReverb = prefs.getInt("default_reverb", reverbType.value)
+                                        if (currentReverb == 18) {
+                                            val active = getActiveCustomReverbPresetName(ctx)
+                                            if (!active.isNullOrEmpty()) {
+                                                loadCustomReverbPreset(ctx, active)?.let { preset ->
+                                                    applyCustomReverbPresetToEngine(ctx, preset)
+                                                }
+                                            } else {
+                                                val lp = prefs.getInt("custom_reverb_lowpass", 64).coerceIn(0, 127)
+                                                Mixer.setNeoCustomReverbLowpass(lp)
+                                            }
+                                        }
                                     } catch (_: Exception) {
                                     }
                                     try {
@@ -2436,6 +2450,19 @@ class HomeFragment : Fragment() {
                                 Mixer.setNativeCacheDir(requireContext().cacheDir.absolutePath)
                                 try {
                                     Mixer.setDefaultReverb(reverbType.value)
+                                    val prefs = requireContext().getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
+                                    val currentReverb = prefs.getInt("default_reverb", reverbType.value)
+                                    if (currentReverb == 18) {
+                                        val active = getActiveCustomReverbPresetName(requireContext())
+                                        if (!active.isNullOrEmpty()) {
+                                            loadCustomReverbPreset(requireContext(), active)?.let { preset ->
+                                                applyCustomReverbPresetToEngine(requireContext(), preset)
+                                            }
+                                        } else {
+                                            val lp = prefs.getInt("custom_reverb_lowpass", 64).coerceIn(0, 127)
+                                            Mixer.setNeoCustomReverbLowpass(lp)
+                                        }
+                                    }
                                 } catch (_: Exception) {
                                 }
                                 try {
@@ -2590,6 +2617,19 @@ class HomeFragment : Fragment() {
                             Mixer.setNativeCacheDir(requireContext().cacheDir.absolutePath)
                             try {
                                 Mixer.setDefaultReverb(reverbType.value)
+                                val prefs = requireContext().getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
+                                val currentReverb = prefs.getInt("default_reverb", reverbType.value)
+                                if (currentReverb == 18) {
+                                    val active = getActiveCustomReverbPresetName(requireContext())
+                                    if (!active.isNullOrEmpty()) {
+                                        loadCustomReverbPreset(requireContext(), active)?.let { preset ->
+                                            applyCustomReverbPresetToEngine(requireContext(), preset)
+                                        }
+                                    } else {
+                                        val lp = prefs.getInt("custom_reverb_lowpass", 64).coerceIn(0, 127)
+                                        Mixer.setNeoCustomReverbLowpass(lp)
+                                    }
+                                }
                             } catch (_: Exception) {
                             }
                             try {

@@ -368,6 +368,20 @@ class MainActivity : AppCompatActivity() {
             Mixer.setMasterVolumePercent(volumePercent)
             Mixer.setDefaultReverb(reverbType)
 
+            // Re-apply Neo Reverb custom parameters after bank swaps.
+            // Bank swaps may tear down/recreate the mixer or reset global Neo reverb state.
+            if (reverbType == 18) {
+                val active = getActiveCustomReverbPresetName(this)
+                if (!active.isNullOrEmpty()) {
+                    loadCustomReverbPreset(this, active)?.let { preset ->
+                        applyCustomReverbPresetToEngine(this, preset)
+                    }
+                } else {
+                    val lp = prefs.getInt("custom_reverb_lowpass", 64).coerceIn(0, 127)
+                    Mixer.setNeoCustomReverbLowpass(lp)
+                }
+            }
+
             viewModel.isPlaying = false
 
             if (loadResult.isSong) {
@@ -402,6 +416,25 @@ class MainActivity : AppCompatActivity() {
                         Toast.makeText(this, "Failed to start song (err=$startResult)", Toast.LENGTH_SHORT).show()
                     }
                     return
+                }
+
+                // IMPORTANT: Song start/preroll can overwrite the global reverb type with the
+                // song's embedded default (see GM_StartSong/GM_StartLiveSong). Force the user's
+                // selected reverb back on after start.
+                try {
+                    Mixer.setDefaultReverb(reverbType)
+                    if (reverbType == 18) {
+                        val active = getActiveCustomReverbPresetName(this)
+                        if (!active.isNullOrEmpty()) {
+                            loadCustomReverbPreset(this, active)?.let { preset ->
+                                applyCustomReverbPresetToEngine(this, preset)
+                            }
+                        } else {
+                            val lp = prefs.getInt("custom_reverb_lowpass", 64).coerceIn(0, 127)
+                            Mixer.setNeoCustomReverbLowpass(lp)
+                        }
+                    }
+                } catch (_: Exception) {
                 }
 
                 // Must set loops AFTER start (start clears songMaxLoopCount).
