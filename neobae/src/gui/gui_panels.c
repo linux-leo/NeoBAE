@@ -306,6 +306,7 @@ void render_custom_reverb_dialog(SDL_Renderer *R, int mx, int my, bool mclick, b
     static int cached_feedback[8] = {90, 90, 90, 90, 90, 90, 90, 90};
     static int cached_gain[8] = {127, 127, 127, 127, 127, 127, 127, 127};
     static int cached_lowpass = 64;
+    static int cached_mix = 110;  // Default to 110 (full range 0-255)
 
     // Consume pending wheel ticks for this frame (so they can't apply later after the mouse moves).
     int wheel = g_custom_reverb_wheel_delta;
@@ -325,7 +326,7 @@ void render_custom_reverb_dialog(SDL_Renderer *R, int mx, int my, bool mclick, b
 
     // Dialog dimensions
     int dlgW = 480;
-    int dlgH = 650;
+    int dlgH = 700;  // Increased to accommodate wet/dry mix slider
     int pad = 10;
     Rect dlg = {(WINDOW_W - dlgW) / 2, (window_h - dlgH) / 2, dlgW, dlgH};
 
@@ -389,6 +390,7 @@ void render_custom_reverb_dialog(SDL_Renderer *R, int mx, int my, bool mclick, b
             cached_gain[i] = g_current_custom_reverb_gain[i];
         }
         cached_lowpass = g_current_custom_reverb_lowpass;
+        cached_mix = GetNeoReverbMix();
         initialized = true;
         last_sync_serial = g_custom_reverb_dialog_sync_serial;
     }
@@ -533,6 +535,30 @@ void render_custom_reverb_dialog(SDL_Renderer *R, int mx, int my, bool mclick, b
     char lowpassBuf[64];
     snprintf(lowpassBuf, sizeof(lowpassBuf), "%d", cached_lowpass);
     draw_text(R, sliderX + sliderW - 40, y + 2, lowpassBuf, g_text_color);
+
+    // Wet/Dry Mix slider
+    y += rowH;
+    draw_text(R, labelX, y + 4, "Wet/Dry Mix:", g_text_color);
+    Rect mixSlider = {sliderX, y, sliderW - 50, sliderH};
+    int old_mix = cached_mix;
+    ui_slider(R, mixSlider, &cached_mix, 0, 255, mx, my, mdown, false);
+    if (!wheel_used && wheel != 0 && point_in(mx, my, mixSlider))
+    {
+        cached_mix += wheel;
+        if (cached_mix < 0)
+            cached_mix = 0;
+        if (cached_mix > 256)
+            cached_mix = 256;
+        wheel_used = true;
+    }
+    if (cached_mix != old_mix)
+    {
+        SetNeoReverbMix(cached_mix);
+    }
+    
+    char mixBuf[64];
+    snprintf(mixBuf, sizeof(mixBuf), "%d", cached_mix);
+    draw_text(R, sliderX + sliderW - 40, y + 2, mixBuf, g_text_color);
 
     // Info text at bottom
     y += rowH - 10;

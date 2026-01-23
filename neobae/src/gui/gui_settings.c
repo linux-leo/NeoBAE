@@ -1621,6 +1621,10 @@ void load_custom_reverb_preset_list(void)
         {
             tmp[idx].lowpass = atoi(value);
         }
+        else if (strcmp(key, "mix") == 0)
+        {
+            tmp[idx].mix = atoi(value);
+        }
     }
 
     fclose(f);
@@ -1830,6 +1834,8 @@ void save_custom_reverb_preset(const char *name)
         fprintf(f, "custom_reverb_%d_gain_%d=%d\n", preset_idx, i, g_current_custom_reverb_gain[i]);
     }
     fprintf(f, "custom_reverb_%d_lowpass=%d\n", preset_idx, g_current_custom_reverb_lowpass);
+    int current_mix = GetNeoReverbMix();
+    fprintf(f, "custom_reverb_%d_mix=%d\n", preset_idx, current_mix);
     
     fclose(f);
     
@@ -1876,6 +1882,8 @@ void load_custom_reverb_preset(const char *name)
 
     g_current_custom_reverb_lowpass = preset->lowpass;
     SetNeoCustomReverbLowpass(g_current_custom_reverb_lowpass);
+    
+    SetNeoReverbMix(preset->mix);
     
     // Update current preset name
     safe_strncpy(g_current_custom_reverb_preset, name, sizeof(g_current_custom_reverb_preset) - 1);
@@ -1982,6 +1990,8 @@ bool export_custom_reverb_neoreverb(const char *preset_name, const char *path)
     ensure_current_custom_reverb_state_synced_from_engine();
     fprintf(f, "  <combCount>%d</combCount>\n", g_current_custom_reverb_comb_count);
     fprintf(f, "  <lowpass>%d</lowpass>\n", g_current_custom_reverb_lowpass);
+    int current_mix = GetNeoReverbMix();
+    fprintf(f, "  <mix>%d</mix>\n", current_mix);
     for (int i = 0; i < NEO_CUSTOM_MAX_COMBS; i++)
     {
         fprintf(f,
@@ -2040,6 +2050,7 @@ bool import_custom_reverb_neoreverb(const char *path, char *out_preset_name, siz
         preset.gain[i] = 127;
     }
     preset.lowpass = 64;
+    preset.mix = 110;  // Default to 110
 
     if (!xml_get_tag_text(xml, "name", preset.name, sizeof(preset.name)))
     {
@@ -2052,6 +2063,8 @@ bool import_custom_reverb_neoreverb(const char *path, char *out_preset_name, siz
         preset.comb_count = atoi(buf);
     if (xml_get_tag_text(xml, "lowpass", buf, sizeof(buf)))
         preset.lowpass = atoi(buf);
+    if (xml_get_tag_text(xml, "mix", buf, sizeof(buf)))
+        preset.mix = atoi(buf);
 
     // Parse <comb .../> entries
     const char *p = xml;
@@ -2099,6 +2112,7 @@ bool import_custom_reverb_neoreverb(const char *path, char *out_preset_name, siz
     }
     g_current_custom_reverb_lowpass = preset.lowpass;
     SetNeoCustomReverbLowpass(g_current_custom_reverb_lowpass);
+    SetNeoReverbMix(preset.mix);
     save_custom_reverb_preset(preset.name);
 
     if (out_preset_name && out_preset_name_size)

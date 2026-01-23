@@ -841,18 +841,19 @@ void RunNeoReverb(INT32 *sourceP, INT32 *destP, int numFrames)
 //  SetNeoReverbMix()
 //
 //  Set the wet/dry mix for the reverb
-//  wetLevel: 0-127 (MIDI style)
+//  wetLevel: 0-255 (extended range for wetter reverb)
 //++------------------------------------------------------------------------------
 void SetNeoReverbMix(int wetLevel)
 {
     NeoReverbParams* params = GetNeoReverbParams();
     
     if (wetLevel < 0) wetLevel = 0;
-    if (wetLevel > 127) wetLevel = 127;
+    if (wetLevel > 255) wetLevel = 255;
     
-    // Convert MIDI level (0-127) to fixed-point gain
-    params->mWetGain = (wetLevel * NEO_COEFF_MULTIPLY) / 127;
-    params->mDryGain = ((127 - (wetLevel / 2)) * NEO_COEFF_MULTIPLY) / 127;  // Reduce dry less aggressively
+    // Convert extended level (0-255) to fixed-point gain
+    // At 255, wet gain is 2.0x for extra wetness
+    params->mWetGain = (wetLevel * NEO_COEFF_MULTIPLY) / 128;
+    params->mDryGain = ((255 - (wetLevel / 2)) * NEO_COEFF_MULTIPLY) / 255;  // Reduce dry less aggressively
 }
 
 //++------------------------------------------------------------------------------
@@ -1036,6 +1037,18 @@ int GetNeoCustomReverbLowpass()
 {
     NeoReverbParams* params = GetNeoReverbParams();
     return (int)((params->mLopassK * 254) / NEO_COEFF_MULTIPLY) + 1;
+}
+
+//++------------------------------------------------------------------------------
+//  GetNeoReverbMix()
+//
+//  Get the current wet/dry mix level (0-256)
+//++------------------------------------------------------------------------------
+int GetNeoReverbMix(void)
+{
+    NeoReverbParams* params = GetNeoReverbParams();
+    // Convert fixed-point gain back to extended level (0-256)
+    return (int)((params->mWetGain * 128) / NEO_COEFF_MULTIPLY);
 }
 
 #endif  // USE_NEO_EFFECTS

@@ -47,6 +47,7 @@ typedef struct
     int feedback[NEO_CUSTOM_MAX_COMBS];
     int gain[NEO_CUSTOM_MAX_COMBS];
     int lowpass; // 0-127 (MIDI-style)
+    int mix;     // 0-255 (wet/dry mix)
 } CustomReverbPreset;
 
 // Custom reverb preset list

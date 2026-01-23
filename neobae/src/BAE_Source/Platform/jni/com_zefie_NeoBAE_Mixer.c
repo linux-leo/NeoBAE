@@ -264,6 +264,24 @@ JNIEXPORT void JNICALL Java_com_zefie_NeoBAE_Mixer__1setNeoCustomReverbLowpass
 	SetNeoCustomReverbLowpass((int)lowpass);
 }
 
+JNIEXPORT void JNICALL Java_com_zefie_NeoBAE_Mixer__1setNeoReverbMix
+	(JNIEnv* env, jclass clazz, jlong reference, jint wetLevel)
+{
+	(void)env;
+	(void)clazz;
+	(void)reference;
+	SetNeoReverbMix((int)wetLevel);
+}
+
+JNIEXPORT jint JNICALL Java_com_zefie_NeoBAE_Mixer__1getNeoReverbMix
+	(JNIEnv* env, jclass clazz, jlong reference)
+{
+	(void)env;
+	(void)clazz;
+	(void)reference;
+	return (jint)GetNeoReverbMix();
+}
+
 /*
  * Class:     com_zefie_NeoBAE_Mixer
  * Method:    _getNeoReverbPresetParams
@@ -290,8 +308,8 @@ JNIEXPORT void JNICALL Java_com_zefie_NeoBAE_Mixer__1getNeoReverbPresetParams
 	(*env)->SetIntArrayRegion(env, delaysMs, 0, NEO_CUSTOM_MAX_COMBS, cDelaysMs);
 	(*env)->SetIntArrayRegion(env, feedback, 0, NEO_CUSTOM_MAX_COMBS, cFeedback);
 	(*env)->SetIntArrayRegion(env, gain, 0, NEO_CUSTOM_MAX_COMBS, cGain);
-	(*env)->SetIntArrayRegion(env, lowpass, 0, 127, &cLowpass);
-    (*env)->SetIntArrayRegion(env, mix, 0, 110, &cMix);
+	(*env)->SetIntArrayRegion(env, lowpass, 0, 1, &cLowpass);
+    (*env)->SetIntArrayRegion(env, mix, 0, 1, &cMix);
 }
 
 JNIEXPORT jint JNICALL Java_com_zefie_NeoBAE_Mixer__1addBankFromFile

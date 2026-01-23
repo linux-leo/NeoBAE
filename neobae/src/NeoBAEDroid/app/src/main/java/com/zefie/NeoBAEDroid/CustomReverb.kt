@@ -55,7 +55,8 @@ data class CustomReverbPreset(
     val delaysMs: IntArray,
     val feedback: IntArray,
     val gain: IntArray,
-    val lowpass: Int
+    val lowpass: Int,
+    val mix: Int
 )
 
 fun sanitizePresetNameForFilename(name: String): String {
@@ -94,6 +95,10 @@ fun presetToNeoReverbXml(preset: CustomReverbPreset): String {
     serializer.text(preset.lowpass.toString())
     serializer.endTag(null, "lowpass")
 
+    serializer.startTag(null, "mix")
+    serializer.text(preset.mix.toString())
+    serializer.endTag(null, "mix")
+
     for (i in 0 until MAX_COMBS) {
         serializer.startTag(null, "comb")
         serializer.attribute(null, "index", i.toString())
@@ -115,6 +120,7 @@ fun parseNeoReverbXml(xml: String): CustomReverbPreset? {
     var name: String? = null
     var combCount = DEFAULT_COMB_COUNT
     var lowpass = DEFAULT_LOWPASS
+    var mix = 110  // Default to 110 (about 43% wet) to match engine default
     val delays = IntArray(MAX_COMBS) { DEFAULT_DELAYS_MS[it] }
     val feedback = IntArray(MAX_COMBS) { DEFAULT_FEEDBACK }
     val gain = IntArray(MAX_COMBS) { DEFAULT_GAIN }
@@ -126,6 +132,7 @@ fun parseNeoReverbXml(xml: String): CustomReverbPreset? {
                 "name" -> name = parser.nextText().trim()
                 "combCount" -> combCount = parser.nextText().trim().toIntOrNull() ?: combCount
                 "lowpass" -> lowpass = parser.nextText().trim().toIntOrNull() ?: lowpass
+                "mix" -> mix = parser.nextText().trim().toIntOrNull() ?: mix
                 "comb" -> {
                     val idx = parser.getAttributeValue(null, "index")?.toIntOrNull() ?: -1
                     if (idx in 0 until MAX_COMBS) {
@@ -150,7 +157,7 @@ fun parseNeoReverbXml(xml: String): CustomReverbPreset? {
         gain[i] = gain[i].coerceIn(0, MAX_GAIN)
     }
 
-    return CustomReverbPreset(finalName, clampedCombCount, delays, feedback, gain, clampedLowpass)
+    return CustomReverbPreset(finalName, clampedCombCount, delays, feedback, gain, clampedLowpass, mix.coerceIn(0, 255))
 }
 
 private fun prefs(ctx: Context): SharedPreferences =
@@ -239,7 +246,8 @@ fun snapshotCustomReverbFromEngine(ctx: Context, name: String): CustomReverbPres
     }
 
     val lowpass = p.getInt(KEY_CURRENT_LOWPASS, DEFAULT_LOWPASS).coerceIn(0, MAX_LOWPASS)
-    return CustomReverbPreset(name.trim(), combCount, delays, feedback, gain, lowpass)
+    val mix = Mixer.getNeoReverbMix().coerceIn(0, 255)
+    return CustomReverbPreset(name.trim(), combCount, delays, feedback, gain, lowpass, mix)
 }
 
 fun loadCustomReverbPreset(ctx: Context, name: String): CustomReverbPreset? {
@@ -253,8 +261,9 @@ fun loadCustomReverbPreset(ctx: Context, name: String): CustomReverbPreset? {
     val feedback = IntArray(MAX_COMBS) { i -> p.getInt("custom_reverb_${idx}_feedback_${i}", DEFAULT_FEEDBACK).coerceIn(0, 127) }
     val gain = IntArray(MAX_COMBS) { i -> p.getInt("custom_reverb_${idx}_gain_${i}", DEFAULT_GAIN).coerceIn(0, MAX_GAIN) }
     val lowpass = p.getInt("custom_reverb_${idx}_lowpass", DEFAULT_LOWPASS).coerceIn(0, MAX_LOWPASS)
+    val mix = p.getInt("custom_reverb_${idx}_mix", 255).coerceIn(0, 255)
 
-    return CustomReverbPreset(presetName, combCount, delays, feedback, gain, lowpass)
+    return CustomReverbPreset(presetName, combCount, delays, feedback, gain, lowpass, mix)
 }
 
 fun applyCustomReverbPresetToEngine(ctx: Context, preset: CustomReverbPreset) {
@@ -265,6 +274,7 @@ fun applyCustomReverbPresetToEngine(ctx: Context, preset: CustomReverbPreset) {
         Mixer.setNeoCustomReverbCombGain(i, preset.gain[i])
     }
     Mixer.setNeoCustomReverbLowpass(preset.lowpass)
+    Mixer.setNeoReverbMix(preset.mix)
     prefs(ctx).edit().putInt(KEY_CURRENT_LOWPASS, preset.lowpass).apply()
 }
 
@@ -276,6 +286,7 @@ fun applyDefaultCustomReverbToEngine(ctx: Context) {
         Mixer.setNeoCustomReverbCombGain(i, DEFAULT_GAIN)
     }
     Mixer.setNeoCustomReverbLowpass(DEFAULT_LOWPASS)
+    Mixer.setNeoReverbMix(255)
     prefs(ctx).edit().putInt(KEY_CURRENT_LOWPASS, DEFAULT_LOWPASS).apply()
 }
 
@@ -293,6 +304,7 @@ fun saveCustomReverbPreset(ctx: Context, preset: CustomReverbPreset) {
         e.putInt("custom_reverb_${idx}_gain_${i}", preset.gain[i])
     }
     e.putInt("custom_reverb_${idx}_lowpass", preset.lowpass)
+    e.putInt("custom_reverb_${idx}_mix", preset.mix)
     e.apply()
 
     setActiveCustomReverbPresetName(ctx, preset.name)
@@ -304,8 +316,9 @@ fun getNeoReverbPreset(ctx: Context, reverbType: Int, presetName: String): Custo
     val feedback = IntArray(MAX_COMBS)
     val gain = IntArray(MAX_COMBS)
     val lowpass = intArrayOf(0)
+    val mix = intArrayOf(0)
 
-    Mixer.getNeoReverbPresetParams(reverbType, combCount, delaysMs, feedback, gain, lowpass)
+    Mixer.getNeoReverbPresetParams(reverbType, combCount, delaysMs, feedback, gain, lowpass, mix)
 
     return CustomReverbPreset(
         name = presetName,
@@ -313,7 +326,8 @@ fun getNeoReverbPreset(ctx: Context, reverbType: Int, presetName: String): Custo
         delaysMs = delaysMs,
         feedback = feedback,
         gain = gain,
-        lowpass = lowpass[0]
+        lowpass = lowpass[0],
+        mix = mix[0]
     )
 }
 
@@ -330,6 +344,7 @@ fun deleteCustomReverbPreset(ctx: Context, name: String): Boolean {
         e.remove("custom_reverb_${idx}_gain_${i}")
     }
     e.remove("custom_reverb_${idx}_lowpass")
+    e.remove("custom_reverb_${idx}_mix")
     e.apply()
 
     val active = getActiveCustomReverbPresetName(ctx)
@@ -351,6 +366,7 @@ fun CustomReverbScreenContent(
     var feedback by remember { mutableStateOf(IntArray(MAX_COMBS) { DEFAULT_FEEDBACK }) }
     var gain by remember { mutableStateOf(IntArray(MAX_COMBS) { DEFAULT_GAIN }) }
     var lowpass by remember { mutableStateOf(prefs(ctx).getInt(KEY_CURRENT_LOWPASS, DEFAULT_LOWPASS).coerceIn(0, MAX_LOWPASS)) }
+    var mix by remember { mutableStateOf(Mixer.getNeoReverbMix().coerceIn(0, 255)) }
 
     fun reloadFromEngine() {
         val rawCombCount = Mixer.getNeoCustomReverbCombCount()
@@ -370,6 +386,7 @@ fun CustomReverbScreenContent(
             gain = IntArray(MAX_COMBS) { i -> rawGain[i].coerceIn(0, MAX_GAIN) }
         }
         lowpass = prefs(ctx).getInt(KEY_CURRENT_LOWPASS, DEFAULT_LOWPASS).coerceIn(0, MAX_LOWPASS)
+        mix = Mixer.getNeoReverbMix().coerceIn(0, 255)
     }
 
     LaunchedEffect(syncSerial) {
@@ -532,6 +549,21 @@ fun CustomReverbScreenContent(
                 }
             },
             valueRange = 0f..MAX_LOWPASS.toFloat()
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        Text("Wet/Dry Mix: $mix")
+        Slider(
+            value = mix.toFloat(),
+            onValueChange = { v ->
+                val newVal = v.toInt().coerceIn(0, 255)
+                if (newVal != mix) {
+                    mix = newVal
+                    Mixer.setNeoReverbMix(newVal)
+                }
+            },
+            valueRange = 0f..255f
         )
 
         Spacer(Modifier.height(8.dp))

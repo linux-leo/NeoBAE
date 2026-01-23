@@ -889,6 +889,7 @@ void        ShutdownNeoReverb(void);
 XBOOL       CheckNeoReverbType(void);
 void        RunNeoReverb(INT32 *sourceP, INT32 *destP, int numFrames);
 void        SetNeoReverbMix(int wetLevel);
+int         GetNeoReverbMix(void);
 void        SetNeoReverbTime(int reverbTime);
 
 // Custom reverb control functions
