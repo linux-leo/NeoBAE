@@ -31,7 +31,7 @@ typedef struct GM_SF2Info
     int                 sf2_soundfont_id; // FluidSynth soundfont ID
     XBOOL               sf2_active;        // TRUE if SF2 is handling this song
     char                sf2_path[256];     // path to loaded SF2 file
-    XFIXED              sf2_master_volume; // master volume scaling
+    float               sf2_master_volume; // master volume scaling
     int16_t             sf2_sample_rate;   // sample rate for SF2 rendering
     int16_t             sf2_max_voices;    // voice limit for SF2
     // Per-channel volume & expression (0..127); initialized to default GM values

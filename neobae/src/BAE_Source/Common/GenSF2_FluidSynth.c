@@ -53,6 +53,7 @@ typedef struct {
 // Global FluidSynth state
 static fluid_settings_t* g_fluidsynth_settings = NULL;
 static fluid_synth_t* g_fluidsynth_synth = NULL;
+static BAE_Mutex g_fluidsynth_mutex = NULL;
 static int g_fluidsynth_soundfont_id = -1;
 static int g_fluidsynth_base_soundfont_id = -1;  // Base GM soundfont (e.g., user-loaded SF2)
 static int g_fluidsynth_xmf_overlay_id = -1;     // XMF embedded bank overlay
@@ -110,6 +111,22 @@ static void PV_SF2_FreeMixBuffer(void);
 static void PV_SF2_InitializeChannelActivity(void);
 static void PV_SF2_UpdateChannelActivity(int16_t channel, int16_t velocity, XBOOL noteOn);
 static void PV_SF2_DecayChannelActivity(void);
+
+static void PV_SF2_LockSynth(void)
+{
+    if (g_fluidsynth_mutex)
+    {
+        BAE_AcquireMutex(g_fluidsynth_mutex);
+    }
+}
+
+static void PV_SF2_UnlockSynth(void)
+{
+    if (g_fluidsynth_mutex)
+    {
+        BAE_ReleaseMutex(g_fluidsynth_mutex);
+    }
+}
 
 // Choose sane default presets per channel after loading a bank to avoid
 // "No preset found on channel X" warnings. Prefer bank 128 on channel 10.
@@ -203,6 +220,13 @@ OPErr GM_InitializeSF2(void)
     {
         return NO_ERR;
     }
+
+    if (!g_fluidsynth_mutex)
+    {
+        // Serialize calls into FluidSynth; resync/load may happen off the audio thread.
+        // If allocation fails, we continue unlocked (worst-case: legacy behavior).
+        BAE_NewMutex(&g_fluidsynth_mutex, "bae", "sf2", __LINE__);
+    }
     
     // Derive mixer sample rate from outputRate enum
     GM_Mixer* pMixer = GM_GetCurrentMixer();
@@ -291,6 +315,12 @@ void GM_CleanupSF2(void)
     {
         delete_fluid_settings(g_fluidsynth_settings);
         g_fluidsynth_settings = NULL;
+    }
+
+    if (g_fluidsynth_mutex)
+    {
+        BAE_DestroyMutex(g_fluidsynth_mutex);
+        g_fluidsynth_mutex = NULL;
     }
     
     g_fluidsynth_initialized = FALSE;
@@ -450,6 +480,7 @@ void GM_SoftResetSF2(void) {
     // NOTE: We do NOT reset CC7 (volume) or CC11 (expression) here because
     // MIDI files set these during preroll and we don't want to overwrite them
     
+    PV_SF2_LockSynth();
     for (int ch = 0; ch < BAE_MAX_MIDI_CHANNELS; ch++) {
         // Reset pitch bend to center (8192 = 0x2000)
         fluid_synth_pitch_bend(g_fluidsynth_synth, ch, 8192);
@@ -476,6 +507,7 @@ void GM_SoftResetSF2(void) {
         fluid_synth_cc(g_fluidsynth_synth, ch, 100, 127); // RPN LSB
         fluid_synth_cc(g_fluidsynth_synth, ch, 101, 127); // RPN MSB
     }
+    PV_SF2_UnlockSynth();
 }
 
 // FluidSynth default controller setup
@@ -483,9 +515,153 @@ void GM_SF2_SetDefaultControllers()
 {
     if (!g_fluidsynth_synth)
         return;
-    
+
+    PV_SF2_LockSynth();
     fluid_synth_system_reset(g_fluidsynth_synth);
+    PV_SF2_UnlockSynth();
     GM_SoftResetSF2();
+}
+
+static void PV_SF2_ResyncSongStateToSynth(GM_Song* pSong)
+{
+    if (!pSong || !g_fluidsynth_synth || g_fluidsynth_soundfont_id < 0)
+    {
+        return;
+    }
+    if (!GM_IsSF2Song(pSong))
+    {
+        return;
+    }
+
+    PV_SF2_LockSynth();
+
+    GM_SF2Info* info = (GM_SF2Info*)pSong->sf2Info;
+    if (info)
+    {
+        info->sf2_active = TRUE;
+        info->sf2_synth = g_fluidsynth_synth;
+        info->sf2_settings = g_fluidsynth_settings;
+        info->sf2_soundfont_id = g_fluidsynth_soundfont_id;
+        info->sf2_master_volume = g_fluidsynth_master_volume;
+        info->sf2_sample_rate = g_fluidsynth_sample_rate;
+        info->sf2_max_voices = BAE_MAX_VOICES;
+        strncpy(info->sf2_path, g_fluidsynth_sf2_path, sizeof(info->sf2_path) - 1);
+        info->sf2_path[sizeof(info->sf2_path) - 1] = '\0';
+    }
+
+    for (int ch = 0; ch < BAE_MAX_MIDI_CHANNELS; ++ch)
+    {
+        // Restore program/bank selection to match the song's current channel state.
+        // IMPORTANT: GM_SF2_ProcessProgramChange expects NeoBAE's combined program encoding:
+        // combinedProgram = (internalBank * 128) + program
+        INT32 internalBank = (INT32)pSong->channelRawBank[ch];
+        INT32 program = (INT32)pSong->channelProgram[ch];
+
+        if (program < 0) { program = 0; }
+        if (program > 127) { program = 127; }
+
+        switch (pSong->channelBankMode[ch])
+        {
+            default:
+            case USE_GM_DEFAULT:
+                if (ch == BAE_PERCUSSION_CHANNEL)
+                {
+                    internalBank = (internalBank * 2) + 1; // odd banks are percussion
+                }
+                else
+                {
+                    internalBank = (internalBank * 2) + 0; // even banks are melodic
+                }
+                break;
+            case USE_NON_GM_PERC_BANK:
+            case USE_GM_PERC_BANK:
+                internalBank = (internalBank * 2) + 1;
+                break;
+            case USE_NORM_BANK:
+                internalBank = (internalBank * 2) + 0;
+                break;
+        }
+
+        INT32 combinedProgram = (internalBank * 128) + program;
+        // Resync must not mutate song state; GM_SF2_ProcessProgramChange may adjust
+        // channel bank mode and raw bank as part of normal event processing.
+        // Preserve those fields across this resync call.
+        uint16_t savedRawBank = pSong->channelRawBank[ch];
+        uint8_t savedBankMode = pSong->channelBankMode[ch];
+        GM_SF2_ProcessProgramChange(pSong, (int16_t)ch, combinedProgram);
+        pSong->channelRawBank[ch] = savedRawBank;
+        pSong->channelBankMode[ch] = savedBankMode;
+
+        // Restore core controllers.
+        // NOTE: CC91/CC93 are tracked in sf2Info and intentionally NOT sent to FluidSynth.
+        if (info)
+        {
+            info->channelVolume[ch] = pSong->channelVolume[ch];
+            // Many MIDI files never send CC11; NeoBAE's internal default/reset state can
+            // leave channelExpression at 0 which would fully mute SF2 output (both via
+            // FluidSynth CC11 and our post-scale). Treat 0 as "unset" and default to GM 127.
+            info->channelExpression[ch] = (pSong->channelExpression[ch] == 0) ? 127 : pSong->channelExpression[ch];
+#if REVERB_USED != REVERB_DISABLED
+            info->channelReverb[ch] = pSong->channelReverb[ch];
+            info->channelChorus[ch] = pSong->channelChorus[ch];
+#endif
+        }
+
+        int vol = (int)pSong->channelVolume[ch];
+        int expr = (int)pSong->channelExpression[ch];
+        int pan = (int)pSong->channelStereoPosition[ch];
+        int mod = (int)pSong->channelModWheel[ch];
+        if (vol < 0) vol = 0; if (vol > 127) vol = 127;
+        if (expr < 0) expr = 0; if (expr > 127) expr = 127;
+        if (pan < 0) pan = 0; if (pan > 127) pan = 127;
+        if (mod < 0) mod = 0; if (mod > 127) mod = 127;
+
+        if (expr == 0)
+        {
+            expr = 127;
+        }
+        BAE_PRINTF("[SF2-Resync] Ch %d: Vol=%d Expr=%d Pan=%d Mod=%d Sustain=%d\n",
+                   ch, vol, expr, pan, mod, pSong->channelSustain[ch] ? 127 : 0);
+        fluid_synth_cc(g_fluidsynth_synth, ch, 7, vol);
+        fluid_synth_cc(g_fluidsynth_synth, ch, 11, expr);
+        fluid_synth_cc(g_fluidsynth_synth, ch, 10, pan);
+        fluid_synth_cc(g_fluidsynth_synth, ch, 1, mod);
+        fluid_synth_cc(g_fluidsynth_synth, ch, 64, pSong->channelSustain[ch] ? 127 : 0);
+
+        // Restore pitch bend range (RPN 0,0) and current pitch bend.
+        // This approximates the effects of "processing events from 0..current position".
+        fluid_synth_cc(g_fluidsynth_synth, ch, 101, 0); // RPN MSB
+        fluid_synth_cc(g_fluidsynth_synth, ch, 100, 0); // RPN LSB
+        int pbr = (int)pSong->channelPitchBendRange[ch];
+        if (pbr < 0) pbr = 0; if (pbr > 127) pbr = 127;
+        fluid_synth_cc(g_fluidsynth_synth, ch, 6, pbr); // Data Entry MSB
+        fluid_synth_cc(g_fluidsynth_synth, ch, 38, 0); // Data Entry LSB
+        fluid_synth_cc(g_fluidsynth_synth, ch, 101, 127); // RPN MSB reset
+        fluid_synth_cc(g_fluidsynth_synth, ch, 100, 127); // RPN LSB reset
+
+        int bend = (int)pSong->channelBend[ch] + 8192;
+        if (bend < 0) bend = 0; if (bend > 16383) bend = 16383;
+        fluid_synth_pitch_bend(g_fluidsynth_synth, ch, bend);
+    }
+
+    PV_SF2_UnlockSynth();
+}
+
+static void PV_SF2_ResyncAllActiveSongsToSynth(void)
+{
+    GM_Mixer* pMixer = GM_GetCurrentMixer();
+    if (!pMixer || !g_fluidsynth_synth || g_fluidsynth_soundfont_id < 0)
+    {
+        return;
+    }
+    for (int i = 0; i < MAX_SONGS; ++i)
+    {
+        GM_Song* pSong = pMixer->pSongsToPlay[i];
+        if (pSong)
+        {
+            PV_SF2_ResyncSongStateToSynth(pSong);
+        }
+    }
 }
 
 // In-memory SF2/DLS loading via FluidSynth defsfloader + custom file callbacks
@@ -746,6 +922,8 @@ OPErr GM_LoadSF2SoundfontFromMemory(const unsigned char *data, size_t size) {
 
     // Choose valid default presets to avoid warnings
     PV_SF2_SetValidDefaultProgramsForAllChannels();
+    GM_SetMixerSF2Mode(TRUE);
+    PV_SF2_ResyncAllActiveSongsToSynth();
     return NO_ERR;
 }
 
@@ -803,6 +981,7 @@ OPErr GM_LoadSF2Soundfont(const char* sf2_path)
     // Set Ch 10 to percussion by default
     PV_SF2_SetValidDefaultProgramsForAllChannels();
     GM_SetMixerSF2Mode(TRUE);
+    PV_SF2_ResyncAllActiveSongsToSynth();
     return NO_ERR;
 }
 
@@ -1035,11 +1214,15 @@ void GM_UnloadXMFOverlaySoundFont(void)
         while (GM_SF2_GetActiveVoiceCount() > 0)
         {
             // Wait for voices to finish
+            PV_SF2_LockSynth();
             fluid_synth_process(g_fluidsynth_synth, SAMPLE_BLOCK_SIZE, 0, 0, 0, NULL);
+            PV_SF2_UnlockSynth();
         }
         
         // Unload the XMF overlay soundfont (TRUE = reset presets to fall back to base soundfont)
+        PV_SF2_LockSynth();
         fluid_synth_sfunload(g_fluidsynth_synth, g_fluidsynth_xmf_overlay_id, TRUE);
+        PV_SF2_UnlockSynth();
         g_fluidsynth_xmf_overlay_id = -1;
         g_fluidsynth_xmf_overlay_bank_offset = 0;
         g_hasBank121Presets = FALSE;
@@ -1071,11 +1254,15 @@ void GM_UnloadSF2Soundfont(void)
         while (GM_SF2_GetActiveVoiceCount() > 0)
         {
             // Wait for voices to finish
+            PV_SF2_LockSynth();
             fluid_synth_process(g_fluidsynth_synth, SAMPLE_BLOCK_SIZE, 0, 0, 0, NULL);
+            PV_SF2_UnlockSynth();
         }
         
         // Now safe to unload
+        PV_SF2_LockSynth();
         fluid_synth_sfunload(g_fluidsynth_synth, g_fluidsynth_soundfont_id, TRUE);
+        PV_SF2_UnlockSynth();
         g_fluidsynth_soundfont_id = -1;
         g_fluidsynth_base_soundfont_id = -1;
         
@@ -1247,6 +1434,7 @@ OPErr GM_EnableSF2ForSong(GM_Song* pSong, XBOOL enable)
     }
     
     // Allocate SF2Info if needed
+    XBOOL newlyAllocated = FALSE;
     if (!pSong->sf2Info && enable)
     {
         pSong->sf2Info = XNewPtr(sizeof(GM_SF2Info));
@@ -1255,11 +1443,13 @@ OPErr GM_EnableSF2ForSong(GM_Song* pSong, XBOOL enable)
             return MEMORY_ERR;
         }
         XBlockMove(pSong->sf2Info, 0, sizeof(GM_SF2Info));
+        newlyAllocated = TRUE;
     }
     
     if (pSong->sf2Info)
     {
         GM_SF2Info* sf2Info = (GM_SF2Info*)pSong->sf2Info;
+        XBOOL wasActive = sf2Info->sf2_active;
         sf2Info->sf2_active = enable;
         sf2Info->sf2_synth = enable ? g_fluidsynth_synth : NULL;
         sf2Info->sf2_settings = enable ? g_fluidsynth_settings : NULL;
@@ -1277,14 +1467,19 @@ OPErr GM_EnableSF2ForSong(GM_Song* pSong, XBOOL enable)
             enable = FALSE;
         }
         
-        // Init per-channel volume/expression defaults (GM defaults: volume 127, expression 127)
-        for (int i = 0; i < BAE_MAX_MIDI_CHANNELS; i++) 
-        { 
-            sf2Info->channelVolume[i] = 127;
-            sf2Info->channelExpression[i] = 127;
-            sf2Info->channelReverb[i] = 40;  // Default reverb level
-            sf2Info->channelChorus[i] = 0;   // Default chorus level (off)
-            sf2Info->channelMuted[i] = FALSE;
+        // Only initialize defaults the first time we enable SF2 for this song.
+        // Repeated calls (e.g., after swapping soundfonts) must not clobber the song's
+        // live controller state; that state will be resynced separately.
+        if (enable && (newlyAllocated || !wasActive))
+        {
+            for (int i = 0; i < BAE_MAX_MIDI_CHANNELS; i++)
+            {
+                sf2Info->channelVolume[i] = 127;
+                sf2Info->channelExpression[i] = 127;
+                sf2Info->channelReverb[i] = 40;  // Default reverb level
+                sf2Info->channelChorus[i] = 0;   // Default chorus level (off)
+                sf2Info->channelMuted[i] = FALSE;
+            }
         }
         
         if (enable)
@@ -1300,6 +1495,15 @@ OPErr GM_EnableSF2ForSong(GM_Song* pSong, XBOOL enable)
         }
     }
     pSong->isSF2Song = enable;
+
+    // If enabling SF2 while the song is not yet playing (or after a seek), the
+    // sequencer may not replay historical setup events (bank/program/CCs) from 0.
+    // Push the song's current channel state into FluidSynth now so the first NoteOn
+    // after a mid-song start uses the correct preset.
+    if (enable)
+    {
+        PV_SF2_ResyncSongStateToSynth(pSong);
+    }
     
     return NO_ERR;
 }
@@ -1326,12 +1530,14 @@ void GM_SF2_ProcessNoteOn(GM_Song* pSong, int16_t channel, int16_t note, int16_t
         scaledVelocity = MAX_NOTE_VOLUME;
     
     // Check what preset is selected on this channel
+    PV_SF2_LockSynth();
     fluid_preset_t* preset = fluid_synth_get_channel_preset(g_fluidsynth_synth, channel);
     if (!preset) {
         BAE_PRINTF("[SF2 NoteOn] Channel %d has NO PRESET selected!\n", channel);
     }
 
     fluid_synth_noteon(g_fluidsynth_synth, channel, note, scaledVelocity);
+    PV_SF2_UnlockSynth();
     
     // Update channel activity tracking with original velocity
     PV_SF2_UpdateChannelActivity(channel, scaledVelocity, TRUE);
@@ -1344,7 +1550,9 @@ void GM_SF2_ProcessNoteOff(GM_Song* pSong, int16_t channel, int16_t note, int16_
         return;
     }
     
+    PV_SF2_LockSynth();
     fluid_synth_noteoff(g_fluidsynth_synth, channel, note);
+    PV_SF2_UnlockSynth();
     
     // Update channel activity tracking
     PV_SF2_UpdateChannelActivity(channel, 0, FALSE);
@@ -1378,6 +1586,8 @@ void GM_SF2_SetChannelBankAndProgram(int16_t channel, int16_t bank, int16_t prog
 {
     if (!g_fluidsynth_synth)
         return;
+
+    PV_SF2_LockSynth();
     
     // Apply bank offset: if overlay has bank 0 presets, they're accessed via offset bank in HSB mode
     int adjustedBank = bank - g_fluidsynth_xmf_overlay_bank_offset;
@@ -1402,6 +1612,8 @@ void GM_SF2_SetChannelBankAndProgram(int16_t channel, int16_t bank, int16_t prog
         fluid_synth_bank_select(g_fluidsynth_synth, channel, adjustedBank);
         fluid_synth_program_change(g_fluidsynth_synth, channel, program);
     }
+
+    PV_SF2_UnlockSynth();
 }
 
 void GM_SF2_ProcessProgramChange(GM_Song* pSong, int16_t channel, int32_t program)
@@ -1490,6 +1702,8 @@ void GM_SF2_ProcessProgramChange(GM_Song* pSong, int16_t channel, int32_t progra
 
     }
 
+    PV_SF2_LockSynth();
+
     // mobileBAE MIDI quirk: bank 121 program 124:125 are used for motor vibration.
     // Best behavior is to give the channel no preset at all.
     if (midiBank == 121 && (midiProgram == 124 || midiProgram == 125))
@@ -1498,6 +1712,7 @@ void GM_SF2_ProcessProgramChange(GM_Song* pSong, int16_t channel, int32_t progra
         fluid_synth_all_sounds_off(g_fluidsynth_synth, channel);
         fluid_synth_all_notes_off(g_fluidsynth_synth, channel);
         fluid_synth_unset_program(g_fluidsynth_synth, channel);
+        PV_SF2_UnlockSynth();
         return;
     }
 
@@ -1524,6 +1739,7 @@ void GM_SF2_ProcessProgramChange(GM_Song* pSong, int16_t channel, int32_t progra
             fluid_synth_program_select(g_fluidsynth_synth, channel, g_fluidsynth_xmf_overlay_id, overlayBank, useProg);
             BAE_PRINTF("[SF2 ProcessProgramChange] Called fluid_synth_program_select(sfid=%d, bank=%d, prog=%d)\n", 
                        g_fluidsynth_xmf_overlay_id, overlayBank, useProg);            
+            PV_SF2_UnlockSynth();
             return;
         } else {
             BAE_PRINTF("[SF2 ProcessProgramChange] XMF overlay check: requested bank %d -> overlay bank %d (offset=%d) prog %d - not found or invalid\n",
@@ -1600,6 +1816,7 @@ void GM_SF2_ProcessProgramChange(GM_Song* pSong, int16_t channel, int32_t progra
                 fluid_synth_all_sounds_off(g_fluidsynth_synth, channel);
                 fluid_synth_all_notes_off(g_fluidsynth_synth, channel);
                 fluid_synth_unset_program(g_fluidsynth_synth, channel);
+                PV_SF2_UnlockSynth();
                 return;
             }
         }
@@ -1610,7 +1827,7 @@ void GM_SF2_ProcessProgramChange(GM_Song* pSong, int16_t channel, int32_t progra
     fluid_synth_program_change(g_fluidsynth_synth, channel, useProg);
     BAE_PRINTF("[SF2 ProcessProgramChange] Final Interpretation: midiBank: %i, midiProgram: %i, channel: %i\n", useBank, useProg, channel);
 
-    
+    PV_SF2_UnlockSynth();
 }
 
 void GM_SF2_ProcessController(GM_Song* pSong, int16_t channel, int16_t controller, int16_t value)
@@ -1669,7 +1886,9 @@ void GM_SF2_ProcessController(GM_Song* pSong, int16_t channel, int16_t controlle
         }
     }
     
+    PV_SF2_LockSynth();
     fluid_synth_cc(g_fluidsynth_synth, channel, controller, value);
+    PV_SF2_UnlockSynth();
 }
 
 void GM_SF2_ProcessPitchBend(GM_Song* pSong, int16_t channel, int16_t bendMSB, int16_t bendLSB)
@@ -1693,7 +1912,9 @@ void GM_SF2_ProcessPitchBend(GM_Song* pSong, int16_t channel, int16_t bendMSB, i
     }
     
     int pitchWheel = (bendMSB << 7) | bendLSB;
+    PV_SF2_LockSynth();
     fluid_synth_pitch_bend(g_fluidsynth_synth, channel, pitchWheel);
+    PV_SF2_UnlockSynth();
 }
 
 void GM_SF2_ProcessSysEx(GM_Song* pSong, const unsigned char* message, int32_t length)
@@ -1720,6 +1941,7 @@ void GM_SF2_ProcessSysEx(GM_Song* pSong, const unsigned char* message, int32_t l
     int response_len = (int)sizeof(response);
     int handled = 0;
 
+    PV_SF2_LockSynth();
     fluid_synth_sysex(g_fluidsynth_synth,
                       (const char*)message,
                       (int)length,
@@ -1727,6 +1949,7 @@ void GM_SF2_ProcessSysEx(GM_Song* pSong, const unsigned char* message, int32_t l
                       &response_len,
                       &handled,
                       0);
+    PV_SF2_UnlockSynth();
 }
 
 // FluidSynth audio rendering - this gets called during mixer slice processing
@@ -1766,9 +1989,11 @@ void GM_SF2_RenderAudioSlice(GM_Song* pSong, int32_t* mixBuffer, int32_t* reverb
     memset(g_fluidsynth_mix_buffer, 0, frameCount * 2 * sizeof(float));
 
     // Render FluidSynth audio (always stereo - we simulate mono in conversion)
+    PV_SF2_LockSynth();
     fluid_synth_write_float(g_fluidsynth_synth, frameCount,
                            g_fluidsynth_mix_buffer, 0, 2,
                            g_fluidsynth_mix_buffer, 1, 2);
+    PV_SF2_UnlockSynth();
     
     // Apply song volume scaling
     float songScale = 1.0f;
@@ -1836,7 +2061,9 @@ void GM_SF2_KillChannelNotes(int16_t channel)
     if (!g_fluidsynth_synth)
         return;        
 
+    PV_SF2_LockSynth();
     fluid_synth_all_sounds_off(g_fluidsynth_synth, channel);
+    PV_SF2_UnlockSynth();
 }
 
 void GM_SF2_AllNotesOff(GM_Song* pSong)
@@ -1851,11 +2078,16 @@ void GM_SF2_AllNotesOff(GM_Song* pSong)
 // FluidSynth configuration
 void GM_SF2_SetGain(float volume)
 {
+    PV_SF2_LockSynth();
     fluid_synth_set_gain(g_fluidsynth_synth, volume);
+    PV_SF2_UnlockSynth();
 }
 
 float GM_SF2_GetGain() {
-    return fluid_synth_get_gain(g_fluidsynth_synth);
+    PV_SF2_LockSynth();
+    float gain = fluid_synth_get_gain(g_fluidsynth_synth);
+    PV_SF2_UnlockSynth();
+    return gain;
 }
 
 XFIXED GM_SF2_GetMasterVolume(void)

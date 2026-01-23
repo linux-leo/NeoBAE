@@ -1577,6 +1577,15 @@ OPErr GM_SetSongTickPosition(GM_Song *pSong, UINT32 songTickPosition)
                 GM_EndSongNotes(pSong);
                 *pSong = *theSong;                // copy over all song information at the new position
                 PV_ClearSongInstruments(theSong); // don't free the instruments
+
+#if USE_SF2_SUPPORT == TRUE
+#if _USING_FLUIDSYNTH == TRUE
+                if (GM_IsSF2Song(pSong) && GM_SF2_IsActive())
+                {
+                    (void)GM_EnableSF2ForSong(pSong, TRUE);
+                }
+#endif
+#endif
             }
 
             if (!songPaused)
@@ -1715,6 +1724,15 @@ OPErr GM_SetSongMicrosecondPosition(GM_Song *pSong, UINT32 songMicrosecondPositi
                 GM_KillSongNotes(pSong);
                 *pSong = *theSong;                // copy over all song information at the new position
                 PV_ClearSongInstruments(theSong); // don't free the instruments
+
+#if USE_SF2_SUPPORT == TRUE
+#if _USING_FLUIDSYNTH == TRUE
+                if (GM_IsSF2Song(pSong) && GM_SF2_IsActive())
+                {
+                    (void)GM_EnableSF2ForSong(pSong, TRUE);
+                }
+#endif
+#endif
             }
 
             // $$kk: 02.10.98: do not resume if song was paused before
