@@ -151,7 +151,7 @@ public class Mixer
 	public static int getNeoCustomReverbCombGain(int combIndex){ if(mMixer==null) return 0; return _getNeoCustomReverbCombGain(mMixer.mReference, combIndex); }
 	public static void setNeoCustomReverbLowpass(int lowpass){ if(mMixer==null) return; _setNeoCustomReverbLowpass(mMixer.mReference, lowpass); }
 	public static void setNeoReverbMix(int wetLevel){ if(mMixer==null) return; _setNeoReverbMix(mMixer.mReference, wetLevel); }
-	public static int getNeoReverbMix(){ if(mMixer==null) return 256; return _getNeoReverbMix(mMixer.mReference); }
+	public static int getNeoReverbMix(){ if(mMixer==null) return 255; return _getNeoReverbMix(mMixer.mReference); }
 	public static void getNeoReverbPresetParams(int reverbType, int[] combCount, int[] delaysMs, int[] feedback, int[] gain, int[] lowpass, int[] mix){ if(mMixer==null) return; _getNeoReverbPresetParams(mMixer.mReference, reverbType, combCount, delaysMs, feedback, gain, lowpass, mix); }
 	public static int addBankFromFile(String path){ if(mMixer==null) return -1; return _addBankFromFile(mMixer.mReference, path); }
 	public static int addBankFromAsset(String assetName){ if(mMixer==null) return -1; return _addBankFromAsset(mMixer.mReference, mMixer.mAssetManager, assetName); }

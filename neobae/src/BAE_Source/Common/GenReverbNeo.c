@@ -292,7 +292,7 @@ void GetNeoReverbPresetParams(int reverbType, int *combCount, int *delaysMs, int
             feedback[0] = 107; feedback[1] = 107; feedback[2] = 107; feedback[3] = 107;
             gain[0] = 127; gain[1] = 127; gain[2] = 127; gain[3] = 127;
             *lowpass = 64;
-            *mix = 110;
+            *mix = 127;
             break;
         case REVERB_TYPE_15: // Dungeon
             *combCount = 4;
@@ -300,7 +300,7 @@ void GetNeoReverbPresetParams(int reverbType, int *combCount, int *delaysMs, int
             feedback[0] = 107; feedback[1] = 107; feedback[2] = 107; feedback[3] = 107;
             gain[0] = 127; gain[1] = 127; gain[2] = 127; gain[3] = 127;
             *lowpass = 64;
-            *mix = 110;
+            *mix = 160;
             break;
         case REVERB_TYPE_16: // Nokia-style
             *combCount = 4;
@@ -1042,12 +1042,12 @@ int GetNeoCustomReverbLowpass()
 //++------------------------------------------------------------------------------
 //  GetNeoReverbMix()
 //
-//  Get the current wet/dry mix level (0-256)
+//  Get the current wet/dry mix level (0-255)
 //++------------------------------------------------------------------------------
 int GetNeoReverbMix(void)
 {
     NeoReverbParams* params = GetNeoReverbParams();
-    // Convert fixed-point gain back to extended level (0-256)
+    // Convert fixed-point gain back to extended level (0-255)
     return (int)((params->mWetGain * 128) / NEO_COEFF_MULTIPLY);
 }
 

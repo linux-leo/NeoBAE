@@ -1548,6 +1548,7 @@ void load_custom_reverb_preset_list(void)
             tmp[i].gain[j] = 127;
         }
         tmp[i].lowpass = 64;
+        tmp[i].mix = 255;  // Default to max wet
     }
 
     // Second pass: parse values

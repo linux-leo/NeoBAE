@@ -547,8 +547,8 @@ void render_custom_reverb_dialog(SDL_Renderer *R, int mx, int my, bool mclick, b
         cached_mix += wheel;
         if (cached_mix < 0)
             cached_mix = 0;
-        if (cached_mix > 256)
-            cached_mix = 256;
+        if (cached_mix > 255)
+            cached_mix = 255;
         wheel_used = true;
     }
     if (cached_mix != old_mix)
