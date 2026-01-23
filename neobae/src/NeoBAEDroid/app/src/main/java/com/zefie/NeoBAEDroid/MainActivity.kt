@@ -622,6 +622,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        
+        // Stop the foreground notification before unbinding
+        stopServiceNotification()
+        
         if (isBound) {
             unbindService(connection)
             isBound = false
