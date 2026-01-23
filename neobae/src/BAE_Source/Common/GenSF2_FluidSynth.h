@@ -92,8 +92,7 @@ void GM_SF2_AllNotesOffChannel(GM_Song* pSong, int16_t channel);
 void GM_SF2_SilenceSong(GM_Song* pSong);
 
 // FluidSynth configuration
-void GM_SF2_SetMasterVolume(XFIXED volume);
-XFIXED GM_SF2_GetMasterVolume(void);
+float GM_SF2_GetMasterVolume(void);
 int16_t GM_SF2_GetMaxVoices(void);
 void GM_SF2_SetStereoMode(XBOOL stereo, XBOOL applyNow);
 void GM_SF2_SetSampleRate(int32_t sampleRate);

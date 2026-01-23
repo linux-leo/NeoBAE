@@ -60,7 +60,7 @@ static int g_fluidsynth_xmf_overlay_id = -1;     // XMF embedded bank overlay
 static int g_fluidsynth_xmf_overlay_bank_offset = 0;  // Bank offset for XMF overlay (0 or 2)
 static XBOOL g_fluidsynth_initialized = FALSE;
 static XBOOL g_fluidsynth_mono_mode = FALSE;
-static XFIXED g_fluidsynth_master_volume = (XFIXED)(XFIXED_1 / 512);
+static float g_fluidsynth_master_volume = 0.30f;
 static uint16_t g_fluidsynth_sample_rate = BAE_DEFAULT_SAMPLE_RATE;
 static char g_fluidsynth_sf2_path[256] = {0};
 // Track a temp file we create for DLS fallback so we can remove it on unload
@@ -254,7 +254,7 @@ OPErr GM_InitializeSF2(void)
     fluid_settings_setnum(g_fluidsynth_settings, "synth.sample-rate", g_fluidsynth_sample_rate);
     fluid_settings_setint(g_fluidsynth_settings, "synth.polyphony", BAE_MAX_VOICES);
     fluid_settings_setint(g_fluidsynth_settings, "synth.midi-channels", BAE_MAX_MIDI_CHANNELS);
-    fluid_settings_setnum(g_fluidsynth_settings, "synth.gain", XFIXED_TO_FLOAT(g_fluidsynth_master_volume));
+    fluid_settings_setnum(g_fluidsynth_settings, "synth.gain", g_fluidsynth_master_volume);
     fluid_settings_setint(g_fluidsynth_settings, "synth.audio-channels", 1);  // Sets the number of stereo channel pairs. So 1 is actually 2 channels (a stereo pair).
     fluid_settings_setint(g_fluidsynth_settings, "synth.reverb.active", 0);
     
@@ -2090,7 +2090,7 @@ float GM_SF2_GetGain() {
     return gain;
 }
 
-XFIXED GM_SF2_GetMasterVolume(void)
+float GM_SF2_GetMasterVolume(void)
 {
     return g_fluidsynth_master_volume;
 }
@@ -2278,7 +2278,9 @@ static void PV_SF2_ConvertFloatToInt32(float* input, int32_t* output, int32_t* r
                                         int32_t frameCount, float songVolumeScale, const float *channelScales,
                                         const uint8_t *reverbLevels, const uint8_t *chorusLevels)
 {
-    const float kScale = 2147483647.0f;
+    //const float kScale = 2147483647.0f;
+    const double kScale = 32767.0 * (1L << OUTPUT_SCALAR);
+
     
     // Note: Channel volume/expression are handled by FluidSynth via CC7/CC11.
     // We only apply song-level volume here. `channelScales` are used only for weighting reverb/chorus

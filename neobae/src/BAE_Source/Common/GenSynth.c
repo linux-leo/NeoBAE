@@ -2916,7 +2916,7 @@ void PV_ProcessSampleFrame(void *threadContext, void *destinationSamples)
             LOOPCOUNT samples = pMixer->One_Loop * (pMixer->generateStereoOutput ? 2 : 1);
             for (LOOPCOUNT i = 0; i < samples; i++)
             {
-                buffer[i] = (buffer[i] * pMixer->globalVolume) / MAX_MASTER_VOLUME;
+                buffer[i] = (INT32)(((int64_t)buffer[i] * pMixer->globalVolume) / MAX_MASTER_VOLUME);
             }
         }
 
