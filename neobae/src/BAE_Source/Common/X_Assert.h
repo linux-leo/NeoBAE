@@ -100,8 +100,27 @@
 #else
     #include <unistd.h>
     #include <libgen.h>
+    #ifdef __APPLE__
+        /* Forward-declare instead of #include <mach-o/dyld.h>: that header pulls in
+           TargetConditionals.h which redefines TRUE/FALSE, conflicting with BAE's
+           own definitions and corrupting #if TRUE guards throughout the engine. */
+        extern int _NSGetExecutablePath(char *buf, unsigned int *bufsize);
+    #endif
     static void get_executable_directory(char *buffer, size_t size) {
         if (buffer && size > 0) {
+#ifdef __APPLE__
+            uint32_t buf_size = (uint32_t)size;
+            if (_NSGetExecutablePath(buffer, &buf_size) == 0) {
+                char *last_slash = strrchr(buffer, '/');
+                if (last_slash) {
+                    *last_slash = '\0';
+                } else {
+                    buffer[0] = '\0';
+                }
+            } else {
+                buffer[0] = '\0';
+            }
+#else
             ssize_t length = readlink("/proc/self/exe", buffer, size - 1);
             if (length > 0) {
                 buffer[length] = '\0';
@@ -111,6 +130,7 @@
             } else {
                 buffer[0] = '\0'; // Fallback to empty string on error
             }
+#endif
         }
     }
 #endif

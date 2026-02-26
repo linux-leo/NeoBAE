@@ -242,6 +242,51 @@ static const char AUDIO_EXT_FILTER[] =
         return ret;
     }
     return NULL;
+#elif defined(__APPLE__)
+    static const char AUDIO_TYPE_LIST[] =
+        "\"mid\", \"midi\", \"kar\", \"rmi\", \"rmf\""
+#if USE_FLAC_DECODER == TRUE
+        ", \"flac\""
+#endif
+#if USE_MPEG_DECODER == TRUE
+        ", \"mp2\", \"mp3\""
+#endif
+#if USE_VORBIS_DECODER == TRUE && SUPPORT_OGG_FORMAT == TRUE
+        ", \"ogg\""
+#endif
+#if USE_OPUS_DECODER == TRUE && SUPPORT_OGG_FORMAT == TRUE
+        ", \"opus\""
+#endif
+#if USE_XMF_SUPPORT == TRUE && _USING_FLUIDSYNTH == TRUE
+        ", \"xmf\", \"mxmf\""
+#endif
+        ", \"wav\", \"aif\", \"aiff\", \"au\"";
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd),
+        "osascript -e 'POSIX path of (choose file with prompt \"Open Media File\" of type {%s})' 2>/dev/null",
+        AUDIO_TYPE_LIST);
+    FILE *fp = popen(cmd, "r");
+    if (fp)
+    {
+        char buf[1024];
+        if (fgets(buf, sizeof(buf), fp))
+        {
+            pclose(fp);
+            size_t l = strlen(buf);
+            while (l > 0 && (buf[l - 1] == '\n' || buf[l - 1] == '\r'))
+                buf[--l] = '\0';
+            if (l > 0)
+            {
+                char *ret = (char *)malloc(l + 1);
+                if (ret)
+                    memcpy(ret, buf, l + 1);
+                return ret;
+            }
+        }
+        else
+            pclose(fp);
+    }
+    return NULL;
 #else
 /* Compile-time built extension list, Linux Style */
 static const char AUDIO_EXT_FILTER[] =
@@ -339,6 +384,29 @@ char *open_playlist_dialog(void)
         return ret;
     }
     return NULL;
+#elif defined(__APPLE__)
+    FILE *fp = popen("osascript -e 'POSIX path of (choose file with prompt \"Open Playlist File\" of type {\"m3u\", \"m3u8\"})' 2>/dev/null", "r");
+    if (fp)
+    {
+        char buf[1024];
+        if (fgets(buf, sizeof(buf), fp))
+        {
+            pclose(fp);
+            size_t l = strlen(buf);
+            while (l > 0 && (buf[l - 1] == '\n' || buf[l - 1] == '\r'))
+                buf[--l] = '\0';
+            if (l > 0)
+            {
+                char *ret = (char *)malloc(l + 1);
+                if (ret)
+                    memcpy(ret, buf, l + 1);
+                return ret;
+            }
+        }
+        else
+            pclose(fp);
+    }
+    return NULL;
 #else
     const char *cmds[] = {
         "zenity --file-selection --title='Open Playlist File' --file-filter='M3U Playlist Files | *.m3u *.m3u8' --file-filter='All Files | *' 2>/dev/null",
@@ -401,6 +469,35 @@ char *save_playlist_dialog(void)
         return ret;
     }
     return NULL;
+#elif defined(__APPLE__)
+    FILE *fp = popen("osascript -e 'POSIX path of (choose file name with prompt \"Save Playlist As\" default name \"playlist.m3u\")' 2>/dev/null", "r");
+    if (fp)
+    {
+        char buf[1024];
+        if (fgets(buf, sizeof(buf), fp))
+        {
+            pclose(fp);
+            size_t l = strlen(buf);
+            while (l > 0 && (buf[l - 1] == '\n' || buf[l - 1] == '\r'))
+                buf[--l] = '\0';
+            if (l > 0)
+            {
+                char *ret = (char *)malloc(l + 1);
+                if (ret)
+                    memcpy(ret, buf, l + 1);
+                return ret;
+            }
+        }
+        else
+            pclose(fp);
+    }
+    // Fallback to default filename
+    {
+        char *ret = (char *)malloc(strlen("playlist.m3u") + 1);
+        if (ret)
+            strcpy(ret, "playlist.m3u");
+        return ret;
+    }
 #else
     const char *cmds[] = {
         "zenity --file-selection --save --confirm-overwrite --title='Save Playlist As' --filename='playlist.m3u' --file-filter='M3U Playlist Files | *.m3u *.m3u8' --file-filter='All Files | *' 2>/dev/null",
@@ -471,6 +568,29 @@ char *open_neoreverb_dialog(void)
         return ret;
     }
     return NULL;
+#elif defined(__APPLE__)
+    FILE *fp = popen("osascript -e 'POSIX path of (choose file with prompt \"Import Neo Reverb Preset\" of type {\"neoreverb\"})' 2>/dev/null", "r");
+    if (fp)
+    {
+        char buf[1024];
+        if (fgets(buf, sizeof(buf), fp))
+        {
+            pclose(fp);
+            size_t l = strlen(buf);
+            while (l > 0 && (buf[l - 1] == '\n' || buf[l - 1] == '\r'))
+                buf[--l] = '\0';
+            if (l > 0)
+            {
+                char *ret = (char *)malloc(l + 1);
+                if (ret)
+                    memcpy(ret, buf, l + 1);
+                return ret;
+            }
+        }
+        else
+            pclose(fp);
+    }
+    return NULL;
 #else
     const char *cmds[] = {
         "zenity --file-selection --title='Import Neo Reverb Preset' --file-filter='Neo Reverb Preset | *.neoreverb *.neoreverb.xml' --file-filter='All Files | *' 2>/dev/null",
@@ -538,6 +658,44 @@ char *save_neoreverb_dialog(const char *default_name)
             memcpy(ret, fileBuf, len + 1);
         }
         return ret;
+    }
+    return NULL;
+#elif defined(__APPLE__)
+    char fname[256];
+    if (default_name && default_name[0])
+        safe_strncpy(fname, default_name, sizeof(fname));
+    else
+        strcpy(fname, "preset.neoreverb");
+    // Sanitize characters that would break the AppleScript string quoting
+    for (size_t i = 0; fname[i]; i++)
+    {
+        if (fname[i] == '\'' || fname[i] == '"' || fname[i] == '\\')
+            fname[i] = '_';
+    }
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+        "osascript -e 'POSIX path of (choose file name with prompt \"Export Neo Reverb Preset\" default name \"%s\")' 2>/dev/null",
+        fname);
+    FILE *fp = popen(cmd, "r");
+    if (fp)
+    {
+        char buf[1024];
+        if (fgets(buf, sizeof(buf), fp))
+        {
+            pclose(fp);
+            size_t l = strlen(buf);
+            while (l > 0 && (buf[l - 1] == '\n' || buf[l - 1] == '\r'))
+                buf[--l] = '\0';
+            if (l > 0)
+            {
+                char *ret = (char *)malloc(l + 1);
+                if (ret)
+                    memcpy(ret, buf, l + 1);
+                return ret;
+            }
+        }
+        else
+            pclose(fp);
     }
     return NULL;
 #else
@@ -626,6 +784,29 @@ char *open_folder_dialog(void)
             return ret;
         }
         CoTaskMemFree(pidl);
+    }
+    return NULL;
+#elif defined(__APPLE__)
+    FILE *fp = popen("osascript -e 'POSIX path of (choose folder with prompt \"Select Folder to Add All Media Files\")' 2>/dev/null", "r");
+    if (fp)
+    {
+        char buf[1024];
+        if (fgets(buf, sizeof(buf), fp))
+        {
+            pclose(fp);
+            size_t l = strlen(buf);
+            while (l > 0 && (buf[l - 1] == '\n' || buf[l - 1] == '\r'))
+                buf[--l] = '\0';
+            if (l > 0)
+            {
+                char *ret = (char *)malloc(l + 1);
+                if (ret)
+                    memcpy(ret, buf, l + 1);
+                return ret;
+            }
+        }
+        else
+            pclose(fp);
     }
     return NULL;
 #else

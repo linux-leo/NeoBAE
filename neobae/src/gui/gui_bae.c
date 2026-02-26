@@ -506,6 +506,15 @@ void bae_shutdown(void)
         g_bae.mixer = NULL;
     }
 
+    // Clean up FluidSynth after the mixer is closed (audio callback stopped).
+    // GM_CleanupSF2 shuts down FluidSynth's internal threads; without this call
+    // those threads continue running past process teardown and cause a crash on exit.
+#if USE_SF2_SUPPORT
+#if _USING_FLUIDSYNTH
+    GM_CleanupSF2();
+#endif
+#endif
+
     memset(&g_bae, 0, sizeof(g_bae));
     audio_current_position = 0;
     audio_total_frames = 0;

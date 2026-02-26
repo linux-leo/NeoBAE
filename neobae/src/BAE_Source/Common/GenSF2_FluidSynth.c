@@ -17,7 +17,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <psapi.h>
-#else
+#elif defined(__linux__)
 #include <link.h>
 #endif
 
@@ -741,8 +741,7 @@ static int fs_mem_close(void *handle) {
     return FLUID_OK;
 }
 
-
-#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__) && !defined(__APPLE__)
 int is_libinstpatch_loaded_callback(struct dl_phdr_info *info, size_t size, void *data) {
     if (info->dlpi_name && strstr(info->dlpi_name, "libinstpatch")) {
         return true; // stop iteration
@@ -750,6 +749,7 @@ int is_libinstpatch_loaded_callback(struct dl_phdr_info *info, size_t size, void
     return false;
 }
 #endif
+
 
 bool is_libinstpatch_loaded(void) {
 #ifdef _WIN32
@@ -768,8 +768,8 @@ bool is_libinstpatch_loaded(void) {
     }
     return false;
 #else
-#ifdef __EMSCRIPTEN__
-    return false; // dl_iterate_phdr not supported in Emscripten
+#if defined(__EMSCRIPTEN__) || defined(__APPLE__)
+    return false; // dl_iterate_phdr not supported in Emscripten or macOS
 #else
     struct ctx { int found; } context = {0};
 

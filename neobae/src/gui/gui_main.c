@@ -133,7 +133,7 @@ void safe_strncpy(char *dst, const char *src, size_t size) {
 
     size_t len = strlen(src);
     if (len >= size)
-        len = size + 1;
+        len = size;
 
     memcpy(dst, src, len);
     dst[len] = '\0';
@@ -5844,6 +5844,40 @@ int main(int argc, char *argv[])
                 ofn.lpstrDefExt = "hsb";
                 if (GetOpenFileNameA(&ofn))
                     load_bank(fileBuf, playing, transpose, tempo, volume, loopPlay, reverbType, ch_enable, true);
+#elif defined(__APPLE__)
+                {
+                    static const char BANK_TYPE_LIST[] =
+                        "\"hsb\""
+#if USE_SF2_SUPPORT == TRUE
+                        ", \"sf2\""
+#if USE_VORBIS_DECODER == TRUE
+                        ", \"sf3\", \"sfo\""
+#endif
+#if _USING_FLUIDSYNTH == TRUE
+                        ", \"dls\""
+#endif
+#endif
+                        ;
+                    char cmd[1024];
+                    snprintf(cmd, sizeof(cmd),
+                        "osascript -e 'POSIX path of (choose file with prompt \"Load Patch Bank\" of type {%s})' 2>/dev/null",
+                        BANK_TYPE_LIST);
+                    FILE *fp = popen(cmd, "r");
+                    if (fp)
+                    {
+                        if (fgets(fileBuf, sizeof(fileBuf), fp))
+                        {
+                            pclose(fp);
+                            size_t l = strlen(fileBuf);
+                            while (l > 0 && (fileBuf[l - 1] == '\n' || fileBuf[l - 1] == '\r'))
+                                fileBuf[--l] = '\0';
+                            if (l > 0)
+                                load_bank(fileBuf, playing, transpose, tempo, volume, loopPlay, reverbType, ch_enable, true);
+                        }
+                        else
+                            pclose(fp);
+                    }
+                }
 #else
         const char *cmds[] = {
 #if USE_SF2_SUPPORT == TRUE
@@ -6601,10 +6635,27 @@ int main(int argc, char *argv[])
     }
 #endif
 
+    // Stop any active exports before audio shutdown
+    export_cleanup();
+
+    // Clean up karaoke subsystem (destroys g_lyric_mutex)
+#ifdef SUPPORT_KARAOKE
+    karaoke_cleanup();
+#endif
+
+    // Clean up UI state subsystems
+    settings_cleanup();
+    dialogs_cleanup();
+
+    // Shut down audio engine BEFORE destroying SDL resources.
+    // On macOS/SDL3 (Cocoa), destroying the window first can disturb the
+    // main run loop before the audio callback is stopped, causing a crash.
+    bae_shutdown();
+
     SDL_DestroyRenderer(R);
     SDL_DestroyWindow(win);
     g_main_window = NULL; // Clear global reference
-    bae_shutdown();
+
 #if SUPPORT_PLAYLIST == TRUE
     playlist_cleanup();
 #endif

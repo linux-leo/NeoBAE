@@ -1019,6 +1019,39 @@ char *save_export_dialog(int export_type) // 0=WAV, 1=FLAC, 2=MP3, 3=OGG
         return ret;
     }
     return NULL;
+#elif defined(__APPLE__)
+    const char *ext;
+    const char *title;
+    if (export_type == 1)      { ext = "flac"; title = "Save FLAC Export"; }
+    else if (export_type == 2) { ext = "mp3";  title = "Save MP3 Export"; }
+    else if (export_type == 3) { ext = "ogg";  title = "Save OGG Export"; }
+    else                       { ext = "wav";  title = "Save WAV Export"; }
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+        "osascript -e 'POSIX path of (choose file name with prompt \"%s\" default name \"output.%s\")' 2>/dev/null",
+        title, ext);
+    FILE *fp = popen(cmd, "r");
+    if (fp)
+    {
+        char buf[1024];
+        if (fgets(buf, sizeof(buf), fp))
+        {
+            pclose(fp);
+            size_t l = strlen(buf);
+            while (l > 0 && (buf[l - 1] == '\n' || buf[l - 1] == '\r'))
+                buf[--l] = '\0';
+            if (l > 0)
+            {
+                char *ret = (char *)malloc(l + 1);
+                if (ret)
+                    memcpy(ret, buf, l + 1);
+                return ret;
+            }
+        }
+        else
+            pclose(fp);
+    }
+    return NULL;
 #else
     const char *cmds_wav[] = {
         "zenity --file-selection --save --title='Save WAV Export' --file-filter='WAV Files | *.wav' 2>/dev/null",
