@@ -59,7 +59,7 @@ endif()
 add_library(FluidSynth::libfluidsynth-OBJ INTERFACE IMPORTED)
 
 set_target_properties(FluidSynth::libfluidsynth-OBJ PROPERTIES
-  INTERFACE_LINK_LIBRARIES "Threads::Threads;log;SndFile::sndfile"
+  INTERFACE_LINK_LIBRARIES "m;Threads::Threads;log;SndFile::sndfile"
 )
 
 # Create imported target FluidSynth::fluidsynth
