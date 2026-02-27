@@ -604,6 +604,8 @@ class BeatnikPlayer {
         if (this._wasmModule) {
             this.stop();
             this._wasmModule._BAE_WASM_UnloadSong();
+            this._songData = null;
+            this._songLoaded = false;
         }
     }
 
@@ -613,15 +615,13 @@ class BeatnikPlayer {
         }
         if (this._wasmModule) {
             this._unloading = true;
-            this.stop();
+            this.unload();
             this._wasmModule._BAE_WASM_UnloadSoundbank();
-            this._songLoaded = false;
-            this._songData = null;
-            this._soundbankLoaded = false;
             if (this._soundbankPtr) {
                 this._wasmModule._free(this._soundbankPtr);
                 this._soundbankPtr = null;
             }
+            this._soundbankLoaded = false;
             this._unloading = false;
         }
     }

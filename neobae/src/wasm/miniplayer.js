@@ -1018,6 +1018,15 @@
                 }
             }
 
+            // Check if bank has changed - force full unload if it has
+            const newBankKey = typeof bankSource === 'string' ? bankSource : 'buffer';
+            const bankChanged = (currentSoundbank !== null && currentSoundbank !== newBankKey) || currentSoundbank !== 'buffer';
+            
+            if (bankChanged) {                
+                statusEl.textContent = 'Unloading previous bank...';
+                player.unloadSoundbank();
+            }
+
             // Load song (bank will be loaded automatically if no embedded bank)
             statusEl.textContent = 'Loading song...';
             await player.load(songSource, bankSource);
@@ -1033,8 +1042,7 @@
                 console.log('File has embedded soundbank, skipping external bank load');
             } else {
                 // External bank was loaded
-                const bankKey = typeof bankSource === 'string' ? bankSource : 'buffer';
-                currentSoundbank = bankKey;
+                currentSoundbank = newBankKey;
             }
 
             // Setup UI (only if new modal or first time)
