@@ -77,7 +77,7 @@ BOOL IsAssociated(const TCHAR* ext) {
 
     // Check UserChoice (Windows 10/11 method)
     // HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.ext\UserChoice
-    _stprintf_s(keyPath, 512, _T("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\%s\\UserChoice"), ext);
+    _sntprintf(keyPath, 512, _T("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\%s\\UserChoice"), ext);
 
     if (RegOpenKeyEx(HKEY_CURRENT_USER, keyPath, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
         if (RegQueryValueEx(hKey, _T("ProgId"), NULL, NULL, (LPBYTE)progId, &dataSize) == ERROR_SUCCESS) {
@@ -91,7 +91,7 @@ BOOL IsAssociated(const TCHAR* ext) {
 
     // If not found in UserChoice, check the default association (legacy method)
     if (!result) {
-        _stprintf_s(keyPath, 512, _T("Software\\Classes\\%s"), ext);
+        _sntprintf(keyPath, 512, _T("Software\\Classes\\%s"), ext);
         if (RegOpenKeyEx(HKEY_CURRENT_USER, keyPath, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
             dataSize = sizeof(progId);
             if (RegQueryValueEx(hKey, NULL, NULL, NULL, (LPBYTE)progId, &dataSize) == ERROR_SUCCESS) {
@@ -115,10 +115,10 @@ BOOL RegisterFileType(const FileType* ft, const TCHAR* exePath) {
     TCHAR val[512];
 
     // 1. Create ProgID: NeoBAE.Assoc.EXT
-    _stprintf_s(progId, 256, _T("%s%s"), PROGID_PREFIX, ft->ext); // e.g. NeoBAE.Assoc.mid
+    _sntprintf(progId, 256, _T("%s%s"), PROGID_PREFIX, ft->ext); // e.g. NeoBAE.Assoc.mid
 
     // Write to HKCU\Software\Classes (No Admin req for HKCU, usually)
-    _stprintf_s(regPath, 512, _T("Software\\Classes\\%s"), progId);
+    _sntprintf(regPath, 512, _T("Software\\Classes\\%s"), progId);
     
     // Create ProgID Key
     if (RegCreateKeyEx(HKEY_CURRENT_USER, regPath, 0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
@@ -129,7 +129,7 @@ BOOL RegisterFileType(const FileType* ft, const TCHAR* exePath) {
         HKEY hIconKey;
         if (RegCreateKeyEx(hKey, _T("DefaultIcon"), 0, NULL, 0, KEY_WRITE, NULL, &hIconKey, NULL) == ERROR_SUCCESS) {
             // Format: "path\zefidi.exe",-102
-            _stprintf_s(val, 512, _T("\"%s\",-%d"), exePath, ft->iconResId);
+            _sntprintf(val, 512, _T("\"%s\",-%d"), exePath, ft->iconResId);
             RegSetValueEx(hIconKey, NULL, 0, REG_SZ, (const BYTE*)val, (_tcslen(val) + 1) * sizeof(TCHAR));
             RegCloseKey(hIconKey);
         }
@@ -139,7 +139,7 @@ BOOL RegisterFileType(const FileType* ft, const TCHAR* exePath) {
         // shell\open\command
         if (RegCreateKeyEx(hKey, _T("shell\\open\\command"), 0, NULL, 0, KEY_WRITE, NULL, &hShellKey, NULL) == ERROR_SUCCESS) {
             // Format: "path\zefidi.exe" "%1"
-            _stprintf_s(val, 512, _T("\"%s\" \"%%1\""), exePath);
+            _sntprintf(val, 512, _T("\"%s\" \"%%1\""), exePath);
             RegSetValueEx(hShellKey, NULL, 0, REG_SZ, (const BYTE*)val, (_tcslen(val) + 1) * sizeof(TCHAR));
             RegCloseKey(hShellKey);
         }
@@ -150,7 +150,7 @@ BOOL RegisterFileType(const FileType* ft, const TCHAR* exePath) {
 
     // 2. Map Extension to ProgID (OpenWithProgids)
     // We modify HKCU\Software\Classes\.ext\OpenWithProgids
-    _stprintf_s(regPath, 512, _T("Software\\Classes\\%s\\OpenWithProgids"), ft->ext);
+    _sntprintf(regPath, 512, _T("Software\\Classes\\%s\\OpenWithProgids"), ft->ext);
     if (RegCreateKeyEx(HKEY_CURRENT_USER, regPath, 0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
         // Add value: Name = ProgID, Value = empty
         RegSetValueEx(hKey, progId, 0, REG_NONE, NULL, 0);
@@ -158,7 +158,7 @@ BOOL RegisterFileType(const FileType* ft, const TCHAR* exePath) {
     }
     
     // Also set the default key for the extension (Legacy fallback)
-    _stprintf_s(regPath, 512, _T("Software\\Classes\\%s"), ft->ext);
+    _sntprintf(regPath, 512, _T("Software\\Classes\\%s"), ft->ext);
     if (RegCreateKeyEx(HKEY_CURRENT_USER, regPath, 0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
         RegSetValueEx(hKey, NULL, 0, REG_SZ, (const BYTE*)progId, (_tcslen(progId) + 1) * sizeof(TCHAR));
         RegCloseKey(hKey);
@@ -173,17 +173,17 @@ BOOL UnregisterFileType(const FileType* ft) {
     TCHAR progId[256];
     TCHAR regPath[512];
 
-    _stprintf_s(progId, 256, _T("%s%s"), PROGID_PREFIX, ft->ext);
+    _sntprintf(progId, 256, _T("%s%s"), PROGID_PREFIX, ft->ext);
 
     // Remove from OpenWithProgids
-    _stprintf_s(regPath, 512, _T("Software\\Classes\\%s\\OpenWithProgids"), ft->ext);
+    _sntprintf(regPath, 512, _T("Software\\Classes\\%s\\OpenWithProgids"), ft->ext);
     if (RegOpenKeyEx(HKEY_CURRENT_USER, regPath, 0, KEY_WRITE, &hKey) == ERROR_SUCCESS) {
         RegDeleteValue(hKey, progId);
         RegCloseKey(hKey);
     }
 
     // Remove default association if it's ours
-    _stprintf_s(regPath, 512, _T("Software\\Classes\\%s"), ft->ext);
+    _sntprintf(regPath, 512, _T("Software\\Classes\\%s"), ft->ext);
     if (RegOpenKeyEx(HKEY_CURRENT_USER, regPath, 0, KEY_READ | KEY_WRITE, &hKey) == ERROR_SUCCESS) {
         TCHAR currentProgId[256];
         DWORD dataSize = sizeof(currentProgId);
@@ -197,7 +197,7 @@ BOOL UnregisterFileType(const FileType* ft) {
     }
 
     // Remove UserChoice if it's ours
-    _stprintf_s(regPath, 512, _T("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\%s\\UserChoice"), ft->ext);
+    _sntprintf(regPath, 512, _T("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\%s\\UserChoice"), ft->ext);
     if (RegOpenKeyEx(HKEY_CURRENT_USER, regPath, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
         TCHAR currentProgId[256];
         DWORD dataSize = sizeof(currentProgId);
@@ -215,9 +215,9 @@ BOOL UnregisterFileType(const FileType* ft) {
     }
 
     // Remove UserChoiceLatest if it's ours
-    _stprintf_s(regPath, 512, _T("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\%s\\UserChoiceLatest"), ft->ext);
+    _sntprintf(regPath, 512, _T("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\%s\\UserChoiceLatest"), ft->ext);
     TCHAR regPathFull[512];
-    _stprintf_s(regPathFull, 512, _T("%s\\ProgID"), regPath);
+    _sntprintf(regPathFull, 512, _T("%s\\ProgID"), regPath);
     if (RegOpenKeyEx(HKEY_CURRENT_USER, regPathFull, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
         TCHAR currentProgId[256];
         DWORD dataSize = sizeof(currentProgId);

@@ -7,8 +7,12 @@
 #include "gui_text.h"
 #include "gui_theme.h"
 #include "gui_widgets.h"
+#if defined(USE_SDL2)
+#include <SDL2/SDL.h>
+#else
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_mutex.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -357,6 +361,9 @@ void debug_console_show(void)
     if (!g_debug_window) {
         g_debug_window = SDL_CreateWindow(
             "zefidi Debug Console",
+#if defined(USE_SDL2)
+            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+#endif
             DEBUG_WINDOW_W,
             DEBUG_WINDOW_H,
             SDL_WINDOW_RESIZABLE
@@ -364,7 +371,11 @@ void debug_console_show(void)
         
         if (!g_debug_window) return;
         
+#if defined(USE_SDL2)
+        g_debug_renderer = SDL_CreateRenderer(g_debug_window, -1, 0);
+#else
         g_debug_renderer = SDL_CreateRenderer(g_debug_window, NULL);
+#endif
         if (!g_debug_renderer) {
             SDL_DestroyWindow(g_debug_window);
             g_debug_window = NULL;
@@ -429,6 +440,9 @@ bool debug_console_handle_event(SDL_Event *event)
     bool is_our_event = false;
     
     switch (event->type) {
+#if defined(USE_SDL2)
+        case SDL_WINDOWEVENT:
+#else
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
         case SDL_EVENT_WINDOW_SHOWN:
         case SDL_EVENT_WINDOW_HIDDEN:
@@ -442,23 +456,46 @@ bool debug_console_handle_event(SDL_Event *event)
         case SDL_EVENT_WINDOW_MOUSE_LEAVE:
         case SDL_EVENT_WINDOW_FOCUS_GAINED:
         case SDL_EVENT_WINDOW_FOCUS_LOST:
+#endif
             is_our_event = (event->window.windowID == debug_window_id);
             break;
+#if defined(USE_SDL2)
+        case SDL_KEYDOWN:
+        case SDL_KEYUP:
+#else
         case SDL_EVENT_KEY_DOWN:
         case SDL_EVENT_KEY_UP:
+#endif
             is_our_event = (event->key.windowID == debug_window_id);
             break;
+#if defined(USE_SDL2)
+        case SDL_MOUSEMOTION:
+#else
         case SDL_EVENT_MOUSE_MOTION:
+#endif
             is_our_event = (event->motion.windowID == debug_window_id);
             break;
+#if defined(USE_SDL2)
+        case SDL_MOUSEBUTTONDOWN:
+        case SDL_MOUSEBUTTONUP:
+#else
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP:
+#endif
             is_our_event = (event->button.windowID == debug_window_id);
             break;
+#if defined(USE_SDL2)
+        case SDL_MOUSEWHEEL:
+#else
         case SDL_EVENT_MOUSE_WHEEL:
+#endif
             is_our_event = (event->wheel.windowID == debug_window_id);
             break;
+#if defined(USE_SDL2)
+        case SDL_TEXTINPUT:
+#else
         case SDL_EVENT_TEXT_INPUT:
+#endif
             is_our_event = (event->text.windowID == debug_window_id);
             break;
     }
@@ -468,7 +505,11 @@ bool debug_console_handle_event(SDL_Event *event)
     }
     
     // Handle window close request
+#if defined(USE_SDL2)
+    if (event->type == SDL_WINDOWEVENT && event->window.event == SDL_WINDOWEVENT_CLOSE) {
+#else
     if (event->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+#endif
         if (event->window.windowID == debug_window_id) {
             // Close debug window
             debug_console_hide();
@@ -481,7 +522,11 @@ bool debug_console_handle_event(SDL_Event *event)
     }
     
     // Handle text input for filter
+#if defined(USE_SDL2)
+    if (event->type == SDL_TEXTINPUT && g_filter_focused) {
+#else
     if (event->type == SDL_EVENT_TEXT_INPUT && g_filter_focused) {
+#endif
         size_t len = strlen(g_filter_text);
         size_t input_len = strlen(event->text.text);
         if (len + input_len < sizeof(g_filter_text) - 1) {
@@ -491,24 +536,36 @@ bool debug_console_handle_event(SDL_Event *event)
     }
     
     // Handle keyboard events
+#if defined(USE_SDL2)
+    if (event->type == SDL_KEYDOWN) {
+        SDL_Keycode ev_key = event->key.keysym.sym;
+        SDL_Keymod ev_mod = event->key.keysym.mod;
+#else
     if (event->type == SDL_EVENT_KEY_DOWN) {
+        SDL_Keycode ev_key = event->key.key;
+        SDL_Keymod ev_mod = event->key.mod;
+#endif
         // Handle filter input if focused
         if (g_filter_focused) {
-            if (event->key.key == SDLK_RETURN || event->key.key == SDLK_KP_ENTER) {
+            if (ev_key == SDLK_RETURN || ev_key == SDLK_KP_ENTER) {
                 // Apply filter
                 update_filter();
                 g_scroll_offset = 0;
                 g_auto_scroll = true;
                 g_filter_focused = false;
+#if defined(USE_SDL2)
+                SDL_StopTextInput();
+#else
                 SDL_StopTextInput(g_debug_window);
+#endif
                 return true;
-            } else if (event->key.key == SDLK_ESCAPE) {
+            } else if (ev_key == SDLK_ESCAPE) {
                 // Clear filter
                 clear_filter();
                 g_scroll_offset = 0;
                 g_auto_scroll = true;
                 return true;
-            } else if (event->key.key == SDLK_BACKSPACE) {
+            } else if (ev_key == SDLK_BACKSPACE) {
                 // Remove last character
                 size_t len = strlen(g_filter_text);
                 if (len > 0) {
@@ -520,7 +577,11 @@ bool debug_console_handle_event(SDL_Event *event)
         }
         
         // Ctrl+C to copy selection
-        if (event->key.key == SDLK_C && (event->key.mod & SDL_KMOD_CTRL)) {
+#if defined(USE_SDL2)
+        if (ev_key == SDLK_C && (ev_mod & KMOD_CTRL)) {
+#else
+        if (ev_key == SDLK_C && (ev_mod & SDL_KMOD_CTRL)) {
+#endif
             if (g_selection_start_line >= 0 && g_selection_end_line >= 0) {
                 // Build selected text
                 char *selected_text = malloc(65536); // 64KB buffer for selected text
@@ -554,7 +615,11 @@ bool debug_console_handle_event(SDL_Event *event)
             return true;
         }
         // Ctrl+A to select all
-        else if (event->key.key == SDLK_A && (event->key.mod & SDL_KMOD_CTRL)) {
+#if defined(USE_SDL2)
+        else if (ev_key == SDLK_A && (ev_mod & KMOD_CTRL)) {
+#else
+        else if (ev_key == SDLK_A && (ev_mod & SDL_KMOD_CTRL)) {
+#endif
             int total_display_lines = g_filter_active ? g_filtered_count : g_line_count;
             g_selection_start_line = 0;
             g_selection_start_col = 0;
@@ -562,7 +627,7 @@ bool debug_console_handle_event(SDL_Event *event)
             g_selection_end_col = 999;
             return true;
         }
-        else if (event->key.key == SDLK_ESCAPE) {
+        else if (ev_key == SDLK_ESCAPE) {
             // Clear selection on Escape if there is one
             if (g_selection_start_line >= 0) {
                 g_selection_start_line = -1;
@@ -570,14 +635,14 @@ bool debug_console_handle_event(SDL_Event *event)
                 return true;
             }
             debug_console_hide();
-        } else if (event->key.key == SDLK_HOME) {
+        } else if (ev_key == SDLK_HOME) {
             int total_display_lines = g_filter_active ? g_filtered_count : g_line_count;
             g_scroll_offset = total_display_lines;
             g_auto_scroll = false;
-        } else if (event->key.key == SDLK_END) {
+        } else if (ev_key == SDLK_END) {
             g_scroll_offset = 0;
             g_auto_scroll = true;
-        } else if (event->key.key == SDLK_PAGEUP) {
+        } else if (ev_key == SDLK_PAGEUP) {
             int win_h;
             SDL_GetWindowSize(g_debug_window, NULL, &win_h);
             int visible_lines = (win_h - 2 * DEBUG_PADDING - 40) / DEBUG_LINE_HEIGHT;
@@ -585,7 +650,7 @@ bool debug_console_handle_event(SDL_Event *event)
             int total_display_lines = g_filter_active ? g_filtered_count : g_line_count;
             if (g_scroll_offset > total_display_lines) g_scroll_offset = total_display_lines;
             g_auto_scroll = false;
-        } else if (event->key.key == SDLK_PAGEDOWN) {
+        } else if (ev_key == SDLK_PAGEDOWN) {
             int win_h;
             SDL_GetWindowSize(g_debug_window, NULL, &win_h);
             int visible_lines = (win_h - 2 * DEBUG_PADDING - 40) / DEBUG_LINE_HEIGHT;
@@ -599,7 +664,11 @@ bool debug_console_handle_event(SDL_Event *event)
     }
     
     // Handle mouse wheel
+#if defined(USE_SDL2)
+    if (event->type == SDL_MOUSEWHEEL) {
+#else
     if (event->type == SDL_EVENT_MOUSE_WHEEL) {
+#endif
         if (event->wheel.y > 0) {
             g_scroll_offset += 3;
             if (g_scroll_offset > g_line_count) g_scroll_offset = g_line_count;
@@ -615,7 +684,11 @@ bool debug_console_handle_event(SDL_Event *event)
     }
     
     // Handle mouse button down
+#if defined(USE_SDL2)
+    if (event->type == SDL_MOUSEBUTTONDOWN && event->button.button == SDL_BUTTON_LEFT) {
+#else
     if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN && event->button.button == SDL_BUTTON_LEFT) {
+#endif
         g_mouse_down = true;
         g_drag_start_scroll = g_scroll_offset;
         g_drag_start_y = event->button.y;
@@ -629,7 +702,11 @@ bool debug_console_handle_event(SDL_Event *event)
         if (event->button.x >= filter_x && event->button.x <= filter_x + filter_w &&
             event->button.y >= filter_y && event->button.y <= filter_y + filter_h) {
             g_filter_focused = true;
+#if defined(USE_SDL2)
+            SDL_StartTextInput();
+#else
             SDL_StartTextInput(g_debug_window);
+#endif
             g_scrollbar_dragging = false;
             g_selecting = false;
             return true;
@@ -637,7 +714,11 @@ bool debug_console_handle_event(SDL_Event *event)
             // Click outside filter - unfocus it
             if (g_filter_focused) {
                 g_filter_focused = false;
+#if defined(USE_SDL2)
+                SDL_StopTextInput();
+#else
                 SDL_StopTextInput(g_debug_window);
+#endif
             }
         }
         
@@ -685,7 +766,11 @@ bool debug_console_handle_event(SDL_Event *event)
     }
     
     // Handle mouse button up
+#if defined(USE_SDL2)
+    if (event->type == SDL_MOUSEBUTTONUP && event->button.button == SDL_BUTTON_LEFT) {
+#else
     if (event->type == SDL_EVENT_MOUSE_BUTTON_UP && event->button.button == SDL_BUTTON_LEFT) {
+#endif
         g_mouse_down = false;
         g_scrollbar_dragging = false;
         g_selecting = false;
@@ -693,7 +778,11 @@ bool debug_console_handle_event(SDL_Event *event)
     }
     
     // Handle mouse motion (dragging)
+#if defined(USE_SDL2)
+    if (event->type == SDL_MOUSEMOTION && g_mouse_down) {
+#else
     if (event->type == SDL_EVENT_MOUSE_MOTION && g_mouse_down) {
+#endif
         if (g_selecting) {
             // Update selection end position
             int win_h;
@@ -807,7 +896,11 @@ void debug_console_render(void)
     btn_x -= btn_w + 10;
     
     // Get mouse state
+#if defined(USE_SDL2)
+    int mx_f, my_f;
+#else
     float mx_f, my_f;
+#endif
     SDL_GetMouseState(&mx_f, &my_f);
     int mx = (int)mx_f;
     int my = (int)my_f;

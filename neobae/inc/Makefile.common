@@ -129,7 +129,11 @@ endif
 
 ifneq ($(filter 1,$(FLAC_ENC) $(FLAC_DEC)),) 
 	INC_PATH	+= -Isrc/thirdparty/flac/include -Isrc/thirdparty/flac/src/libFLAC/include
-	BAE_LIBS := -lFLAC -lpthread $(BAE_LIBS)
+	ifeq ($(XPHACK),1)
+		BAE_LIBS := -lFLAC.dll -lpthread $(BAE_LIBS)
+	else
+		BAE_LIBS := -lFLAC -lpthread $(BAE_LIBS)
+	endif
 	BAE_FLAGS += -DHAVE_STDINT_H=1 -DHAVE_INTTYPES_H=1 -DSIZE_T_MAX=SIZE_MAX
 	ifeq ($(OGG_SUPPORT),1)
 		BAE_FLAGS += -DFLAC__HAS_OGG=1
@@ -140,7 +144,11 @@ endif
 
 ifeq ($(OPUS_DEC),1) 
 	INC_PATH	+= -Isrc/thirdparty/opus/include -Isrc/thirdparty/opusfile/include
-	BAE_LIBS 	:= -lopusfile -lopus $(BAE_LIBS)
+	ifeq ($(XPHACK),1)
+		BAE_LIBS 	:= -lopusfile.dll -lopus.dll $(BAE_LIBS)
+	else
+		BAE_LIBS 	:= -lopusfile -lopus $(BAE_LIBS)
+	endif
 	BAE_FLAGS += -DUSE_OPUS_DECODER=1
 	SRC += src/BAE_Source/Common/XOpusFiles.c
 endif
@@ -148,9 +156,17 @@ endif
 ifneq ($(filter 1,$(VORBIS_DEC) $(VORBIS_ENC)),) 
 	INC_PATH	+= -Isrc/thirdparty/libvorbis/include -Isrc/thirdparty/libvorbis/lib
 	ifneq ($(filter 1,$(VORBIS_ENC)),)
-		BAE_LIBS := -lvorbisenc $(BAE_LIBS)
+		ifeq ($(XPHACK),1)
+			BAE_LIBS := -lvorbisenc.dll $(BAE_LIBS)
+		else
+			BAE_LIBS := -lvorbisenc $(BAE_LIBS)
+		endif
 	endif
-	BAE_LIBS := -lvorbisfile -lvorbis $(BAE_LIBS)
+	ifeq ($(XPHACK),1)
+		BAE_LIBS := -lvorbisfile.dll -lvorbis.dll $(BAE_LIBS)
+	else
+		BAE_LIBS := -lvorbisfile -lvorbis $(BAE_LIBS)
+	endif
 endif
 
 # default to ANSI
@@ -177,7 +193,7 @@ ifeq ($(BAE_API),WinOS)
 			src/BAE_Source/Platform/BAE_API_$(BAE_API)_Thread.c
 endif
 ifeq ($(BAE_API),SDL2)
-	BAE_FLAGS += 	-DX_PLATFORM=X_SDL2
+	BAE_FLAGS += 	-DX_PLATFORM=X_SDL2 -DUSE_SDL2=1
 	SRC       :=	src/BAE_Source/Platform/BAE_API_$(BAE_API).c
 endif
 ifeq ($(BAE_API),SDL3)
@@ -274,23 +290,25 @@ ifeq ($(SF2_SUPPORT),1)
 				BAE_LIBS += ../deps/win/FluidSynth/x86_64-w64-mingw32/lib/libfluidsynth-3.dll.a -Wl,-rpath,'$$ORIGIN'
 			endif			
 		else
-			ifneq ($(WASM),1)
-				UNAME_S:=$(shell uname -s 2>/dev/null)
-				# System FluidSynth for Linux (dynamic) if pkg-config available
-				FLUIDSYNTH_CFLAGS := $(shell pkg-config --cflags fluidsynth 2>/dev/null)
-				FLUIDSYNTH_LIBS   := $(shell pkg-config --libs fluidsynth 2>/dev/null)
-				ifneq ($(FLUIDSYNTH_LIBS),)
-					BAE_FLAGS += $(FLUIDSYNTH_CFLAGS)
-					# Prepend pkg-config libs; they already have -lfluidsynth and any needed deps
-					BAE_LIBS := $(FLUIDSYNTH_LIBS) $(filter-out -lfluidsynth,$(BAE_LIBS))
-					ifneq (,$(findstring -static,$(ARCH)))
-						ARCH := $(filter-out -static,$(ARCH))
-						LDFLAGS := $(filter-out -static,$(LDFLAGS))
+			ifneq ($(XPHACK),1)
+				ifneq ($(WASM),1)
+					UNAME_S:=$(shell uname -s 2>/dev/null)
+					# System FluidSynth for Linux (dynamic) if pkg-config available
+					FLUIDSYNTH_CFLAGS := $(shell pkg-config --cflags fluidsynth 2>/dev/null)
+					FLUIDSYNTH_LIBS   := $(shell pkg-config --libs fluidsynth 2>/dev/null)
+					ifneq ($(FLUIDSYNTH_LIBS),)
+						BAE_FLAGS += $(FLUIDSYNTH_CFLAGS)
+						# Prepend pkg-config libs; they already have -lfluidsynth and any needed deps
+						BAE_LIBS := $(FLUIDSYNTH_LIBS) $(filter-out -lfluidsynth,$(BAE_LIBS))
+						ifneq (,$(findstring -static,$(ARCH)))
+							ARCH := $(filter-out -static,$(ARCH))
+							LDFLAGS := $(filter-out -static,$(LDFLAGS))
+						endif
+					else
+						# Fallback minimal guess
+						BAE_FLAGS += -I/usr/include/fluidsynth
+						BAE_LIBS += -lfluidsynth $(BAE_LIBS)
 					endif
-				else
-					# Fallback minimal guess
-					BAE_FLAGS += -I/usr/include/fluidsynth
-					BAE_LIBS += -lfluidsynth $(BAE_LIBS)
 				endif
 			endif
 		endif

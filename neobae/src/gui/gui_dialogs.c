@@ -1065,7 +1065,11 @@ void render_about_dialog(SDL_Renderer *R, int mx, int my, bool mclick)
         if (overVerLink)
         {
             SDL_SetRenderDrawColor(R, verLinkCol.r, verLinkCol.g, verLinkCol.b, verLinkCol.a);
+#if defined(USE_SDL2)
+            SDL_RenderDrawLine(R, verLinkRect.x, verLinkRect.y + verLinkRect.h - 2, verLinkRect.x + verLinkRect.w, verLinkRect.y + verLinkRect.h - 2);
+#else
             SDL_RenderLine(R, verLinkRect.x, verLinkRect.y + verLinkRect.h - 2, verLinkRect.x + verLinkRect.w, verLinkRect.y + verLinkRect.h - 2);
+#endif
         }
         if (mclick && overVerLink)
         {
@@ -1139,7 +1143,12 @@ void render_about_dialog(SDL_Renderer *R, int mx, int my, bool mclick)
         }
         draw_text(R, dlg.x + pad, y, "", g_text_color); /* spacer */
         y += dlg.h - (y - dlg.y) - 78;          // move down to near bottom for links
+#if defined(USE_SDL2)
+        SDL_RendererInfo sdl2_renderer_info;
+        const char *renderer_name = (SDL_GetRendererInfo(R, &sdl2_renderer_info) == 0) ? sdl2_renderer_info.name : NULL;
+#else
         const char *renderer_name = SDL_GetRendererName(R);
+#endif
         if (renderer_name && renderer_name[0]) {
             char renderer[128];
             snprintf(renderer, sizeof(renderer), "SDL Graphics Layer: %s", renderer_name);
@@ -1161,7 +1170,11 @@ void render_about_dialog(SDL_Renderer *R, int mx, int my, bool mclick)
             if (over)
             {
                 SDL_SetRenderDrawColor(R, col.r, col.g, col.b, col.a);
+#if defined(USE_SDL2)
+                SDL_RenderDrawLine(R, r.x, r.y + r.h - 2, r.x + r.w, r.y + r.h - 2);
+#else
                 SDL_RenderLine(R, r.x, r.y + r.h - 2, r.x + r.w, r.y + r.h - 2);
+#endif
             }
             if (mclick && over)
             {
@@ -1193,14 +1206,14 @@ void render_about_dialog(SDL_Renderer *R, int mx, int my, bool mclick)
             "Original miniBAE source code available at:",
             "https://github.com/heyigor/miniBAE/",
             // SDL is also required for this GUI so no #ifdef is necessary
-#if X_PLATFORM == X_SDL2            
+#if defined(USE_SDL2)            
             "",
             "SDL2 & SDL2_ttf",
 #elif X_PLATFORM == X_SDL3
             "",
             "SDL3 & SDL3_ttf",
 #endif
-#if X_PLATFORM == X_SDL2 || X_PLATFORM == X_SDL3
+#if defined(USE_SDL2) || X_PLATFORM == X_SDL3
             "Copyright (C) 1997-2025 Sam Lantinga <slouken@libsdl.org>",
             "https://www.libsdl.org/",
 #endif      
@@ -1232,7 +1245,11 @@ void render_about_dialog(SDL_Renderer *R, int mx, int my, bool mclick)
                 if (over)
                 {
                     SDL_SetRenderDrawColor(R, col.r, col.g, col.b, col.a);
+#if defined(USE_SDL2)
+                    SDL_RenderDrawLine(R, r.x, r.y + r.h - 2, r.x + r.w, r.y + r.h - 2);
+#else
                     SDL_RenderLine(R, r.x, r.y + r.h - 2, r.x + r.w, r.y + r.h - 2);
+#endif
                 }
                 if (mclick && over)
                 {
@@ -1344,7 +1361,11 @@ void render_about_dialog(SDL_Renderer *R, int mx, int my, bool mclick)
                     if (over)
                     {
                         SDL_SetRenderDrawColor(R, col.r, col.g, col.b, col.a);
+#if defined(USE_SDL2)
+                        SDL_RenderDrawLine(R, r.x, r.y + r.h - 2, r.x + r.w, r.y + r.h - 2);
+#else
                         SDL_RenderLine(R, r.x, r.y + r.h - 2, r.x + r.w, r.y + r.h - 2);
+#endif
                     }
                     if (mclick && over)
                     {

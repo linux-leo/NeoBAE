@@ -1,7 +1,11 @@
 #ifndef GUI_THEME_H
 #define GUI_THEME_H
 
+#if defined(USE_SDL2)
+#include <SDL2/SDL.h>
+#else
 #include <SDL3/SDL.h>
+#endif
 #include <stdbool.h>
 
 #ifdef _WIN32

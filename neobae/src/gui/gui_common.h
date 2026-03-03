@@ -1,7 +1,12 @@
 #ifndef GUI_COMMON_H
 #define GUI_COMMON_H
 
+#if defined(USE_SDL2)
+#include <SDL2/SDL.h>
+#else
 #include <SDL3/SDL.h>
+#endif
+#include "SDL2_Compat.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include "X_Assert.h"

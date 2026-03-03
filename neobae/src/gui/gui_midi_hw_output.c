@@ -8,7 +8,12 @@
 
 #include "rtmidi_c.h"
 
+#if defined(USE_SDL2)
+#include <SDL2/SDL.h>
+#else
 #include <SDL3/SDL.h>
+#endif
+#include "SDL2_Compat.h"
 
 static RtMidiOutPtr g_rtmidi_out = NULL;
 // Mutex to protect access to g_rtmidi_out when GUI toggles devices while engine thread

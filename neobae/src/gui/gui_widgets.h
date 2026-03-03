@@ -2,7 +2,11 @@
 #define GUI_WIDGETS_H
 
 #include "gui_common.h"
+#if X_PLATFORM == X_SDL2
+#include <SDL2/SDL.h>
+#else
 #include <SDL3/SDL.h>
+#endif
 
 // Basic drawing primitives
 void draw_rect(SDL_Renderer *R, Rect r, SDL_Color c);
