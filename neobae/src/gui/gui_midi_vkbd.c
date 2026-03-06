@@ -33,7 +33,9 @@ void gui_panic_all_notes(BAESong s)
     {
         gui_panic_channel_notes(s, ch);
     }
+#if USE_SF2_SUPPORT == TRUE    
     GM_SF2_SetDefaultControllers();
+#endif
 }
 
 void gui_panic_channel_notes(BAESong s, int ch)

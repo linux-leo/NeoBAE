@@ -122,11 +122,9 @@ $(TARGET_LIB).a: $(OBJ)
 	$(AR) rcs $(TARGET_OUT)$(TARGET_LIB).a $(OBJ)
 
 $(TARGET_LIB).so: ${OBJ}
-	@mkdir -p $(TARGET_OUT)
+	@mkdir -p $(TARGET_OUT)Banks
+	$(SHELL) src/banks/copy.sh $(TARGET_OUT)Banks
 	${LD} -shared $(LDFLAGS) ${OBJ} $(LIBS) -o $(TARGET_OUT)${TARGET_LIB}.so
-ifeq ($(USING_BASSMIDI),1)
-	@$(shell cp src/thirdparty/bassmidi/libs/$(if $(filter x86_64 aarch64,$(UNAME_M)),x86_64,x86)/libbass*.so* $(TARGET_OUT) 2>/dev/null || true)
-endif	
 
 $(TARGET_BIN): ${OBJ_BIN}
 	@mkdir -p $(TARGET_OUT)
