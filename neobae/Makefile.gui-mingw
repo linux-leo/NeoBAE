@@ -140,8 +140,8 @@ endif
 
 
 $(TARGET_BIN): ${OBJ_BIN}
-	@mkdir -p $(TARGET_OUT)/Banks
-	$(${SOURCE_DIR}/src/banks/copy.sh $(TARGET_OUT)/Banks)
+	@mkdir -p $(TARGET_OUT)Banks
+	$(SHELL) src/banks/copy.sh $(TARGET_OUT)Banks
 	${WINDRES} src/gui/zefidi.rc $(OBJ_DIR)zefidi.o; \
 	${LD} -o $(TARGET_OUT)${TARGET_BIN} ${LDFLAGS} ${OBJ_BIN} $(OBJ_DIR)zefidi.o -Wl,--subsystem,windows ${LIBS}; \
 

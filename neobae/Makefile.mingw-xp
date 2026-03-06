@@ -101,7 +101,8 @@ $(TARGET_LIB).dll: ${OBJ}
 	@$(DLLTOOL) -e $(OBJ_DIR)exports.o -d $(OBJ_DIR)$(TARGET_LIB).def -l $(TARGET_OUT)$(TARGET_LIB).lib $(OBJ)
 		
 $(TARGET_BIN): ${OBJ_BIN}
-	@mkdir -p $(TARGET_OUT)
+	@mkdir -p $(TARGET_OUT)Banks
+	$(SHELL) src/banks/copy.sh $(TARGET_OUT)Banks
 	${LD} -o $(TARGET_OUT)${TARGET_BIN} ${LDFLAGS} ${OBJ_BIN} ${LIBS}
 	@cp /mingw32-xp/bin/libgcc_s_dw2-1.dll $(TARGET_OUT) 2>/dev/null || true;
 	@cp /mingw32-xp/bin/libwinpthread-1.dll $(TARGET_OUT) 2>/dev/null || true;

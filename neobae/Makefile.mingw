@@ -126,7 +126,8 @@ endif
 endif
 
 $(TARGET_BIN): ${OBJ_BIN}
-	@mkdir -p $(TARGET_OUT)
+	@mkdir -p $(TARGET_OUT)Banks
+    $(SHELL) src/banks/copy.sh $(TARGET_OUT)Banks
 	${LD} -o $(TARGET_OUT)${TARGET_BIN} ${LDFLAGS} ${OBJ_BIN} ${LIBS}
 
 # Rules for compiling source files to object files
