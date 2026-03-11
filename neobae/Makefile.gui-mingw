@@ -105,45 +105,29 @@ $(TARGET_LIB).dll: ${OBJ}
 	@$(DLLTOOL) -e $(OBJ_DIR)exports.o -d $(OBJ_DIR)$(TARGET_LIB).def -l $(TARGET_OUT)$(TARGET_LIB).lib $(OBJ)
 	$(CC) -shared $(LDFLAGS) ${OBJ} $(OBJ_DIR)exports.o -Wl,--subsystem,windows -o $(TARGET_OUT)${TARGET_LIB}.dll -Wl,--out-implib,$(TARGET_OUT)$(TARGET_LIB).dll.a -Wl,--export-all-symbols -Wl,--enable-auto-image-base -lstdc++ ${LIBS}
 
-ifeq ($(BITS),32)
-	@$(shell cp ../deps/win/SDL3_ttf/i686-w64-mingw32/bin/SDL3_ttf.dll ../deps/win/SDL3/i686-w64-mingw32/bin/SDL3.dll $(TARGET_OUT) 2>/dev/null || true)
-else
-	@$(shell cp ../deps/win/SDL3_ttf/x86_64-w64-mingw32/bin/SDL3_ttf.dll ../deps/win/SDL3/x86_64-w64-mingw32/bin/SDL3.dll $(TARGET_OUT) 2>/dev/null || true)
-endif
+	@if [ "$(USE_FLUIDSYNTH)" = "1" ]; then \
+		if [ "$(BITS)" = "32" ]; then \
+			cp ../deps/win/FluidSynth/i686-w64-mingw32/bin/libfluidsynth-3.dll $(TARGET_OUT) 2>/dev/null || true; \
+			cp ../deps/win/FluidSynth/i686-w64-mingw32/bin/sndfile.dll $(TARGET_OUT) 2>/dev/null || true; \
+		else \
+			cp ../deps/win/FluidSynth/x86_64-w64-mingw32/bin/libfluidsynth-3.dll $(TARGET_OUT) 2>/dev/null || true; \
+			cp ../deps/win/FluidSynth/x86_64-w64-mingw32/bin/sndfile.dll $(TARGET_OUT) 2>/dev/null || true; \
+		fi; \
+	fi
 
-ifeq ($(USE_BASSMIDI),1)
-ifeq ($(BITS),32)
-	@$(shell cp src/thirdparty/bassmidi/libs/x86/bass*.dll* $(TARGET_OUT) 2>/dev/null || true)
-else
-	@$(shell cp src/thirdparty/bassmidi/libs/x86_64/bass*.dll* $(TARGET_OUT) 2>/dev/null || true)
-endif
-endif
+	@if [ "$(BITS)" = "32" ]; then \
+		cp ../deps/win/SDL3/i686-w64-mingw32/bin/SDL3.dll $(TARGET_OUT) 2>/dev/null || true; \
+		cp ../deps/win/SDL3_ttf/i686-w64-mingw32/bin/SDL3_ttf.dll $(TARGET_OUT) 2>/dev/null || true; \
+	else \
+		cp ../deps/win/SDL3/x86_64-w64-mingw32/bin/SDL3.dll $(TARGET_OUT) 2>/dev/null || true; \
+		cp ../deps/win/SDL3_ttf/x86_64-w64-mingw32/bin/SDL3_ttf.dll $(TARGET_OUT) 2>/dev/null || true; \
+	fi
 
-ifeq ($(USE_FLUIDSYNTH),1)
-ifeq ($(BITS),32)
-	@$(shell cp ../deps/win/FluidSynth/i686-w64-mingw32/bin/libfluidsynth-3.dll $(TARGET_OUT) 2>/dev/null || true)
-	@$(shell cp ../deps/win/FluidSynth/i686-w64-mingw32/bin/sndfile.dll $(TARGET_OUT) 2>/dev/null || true)
-else
-	@$(shell cp ../deps/win/FluidSynth/x86_64-w64-mingw32/bin/libfluidsynth-3.dll $(TARGET_OUT) 2>/dev/null || true)
-	@$(shell cp ../deps/win/FluidSynth/x86_64-w64-mingw32/bin/sndfile.dll $(TARGET_OUT) 2>/dev/null || true)
-endif
-endif
-
-ifeq ($(BITS),32)
-	@$(shell cp ../deps/win/SDL3/i686-w64-mingw32/bin/SDL3.dll $(TARGET_OUT) 2>/dev/null || true)
-	@$(shell cp ../deps/win/SDL3_ttf/i686-w64-mingw32/bin/SDL3_ttf.dll $(TARGET_OUT) 2>/dev/null || true)
-else
-	@$(shell cp ../deps/win/SDL3_ttf/x86_64-w64-mingw32/bin/SDL3.dll $(TARGET_OUT) 2>/dev/null || true)
-	@$(shell cp ../deps/win/SDL3_ttf/x86_64-w64-mingw32/bin/SDL3_ttf.dll $(TARGET_OUT) 2>/dev/null || true)
-endif
-
-
-
-$(TARGET_BIN): ${OBJ_BIN}
+$(TARGET_BIN): ${OBJ_BIN} $(TARGET_LIB).dll
 	@mkdir -p $(TARGET_OUT)Banks
 	$(SHELL) src/banks/copy.sh $(TARGET_OUT)Banks
 	${WINDRES} src/gui/zefidi.rc $(OBJ_DIR)zefidi.o; \
-	${LD} -o $(TARGET_OUT)${TARGET_BIN} ${LDFLAGS} ${OBJ_BIN} $(OBJ_DIR)zefidi.o -Wl,--subsystem,windows ${LIBS}; \
+	${LD} -o $(TARGET_OUT)${TARGET_BIN} ${LDFLAGS} ${OBJ_BIN} $(OBJ_DIR)zefidi.o -Wl,--subsystem,windows -L./bin -lNeoBAE ${LIBS}; \
 
 # Rules for compiling source files to object files
 $(OBJ_DIR)%.o : %.cpp

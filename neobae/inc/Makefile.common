@@ -378,12 +378,16 @@ endif
 ifeq ($(OGG_SUPPORT),1)
 	INC_PATH	+= -Isrc/thirdparty/libogg/include
 	BAE_FLAGS	+= -DSUPPORT_OGG_FORMAT=1
-	BAE_LIBS 	+= -logg
+	ifeq ($(XPHACK),1)
+		BAE_LIBS 	+= -logg.dll
+	else
+		BAE_LIBS 	+= -logg
+	endif
 endif
 
 ifeq ($(BUILD_GUI),1)
 	BAE_FLAGS += -D_ZEFI_GUI=1
-	SRC_BIN	:= $(SRC) src/gui/gui_theme.c \
+	SRC_BIN	:= src/gui/gui_theme.c \
 		src/gui/gui_widgets.c \
 		src/gui/gui_text.c \
 		src/gui/gui_midi_vkbd.c \

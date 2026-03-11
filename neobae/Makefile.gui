@@ -147,10 +147,10 @@ ifeq ($(USING_BASSMIDI),1)
 	@$(shell cp src/thirdparty/bassmidi/libs/$(if $(filter x86_64 aarch64,$(UNAME_M)),x86_64,x86)/libbass*.so* $(TARGET_OUT) 2>/dev/null || true)
 endif
 
-$(TARGET_BIN): ${OBJ_BIN}
+$(TARGET_BIN): ${OBJ_BIN} $(TARGET_LIB).so
 	@mkdir -p $(TARGET_OUT)Banks
 	$(SHELL) src/banks/copy.sh $(TARGET_OUT)Banks
-	${LD} -o $(TARGET_OUT)${TARGET_BIN} ${LDFLAGS} ${OBJ_BIN} ${LIBS}
+	${LD} -o $(TARGET_OUT)${TARGET_BIN} ${LDFLAGS} ${OBJ_BIN}  -L./bin -lNeoBAE ${LIBS}
 
 
 pack: ${TARGET_BIN}
