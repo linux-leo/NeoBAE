@@ -833,6 +833,18 @@ static BAEResult PlayMidi(BAEMixer theMixer, char *fileName, BAE_UNSIGNED_FIXED 
          if (err == BAE_NO_ERROR)
          {
             BAESong_SetVolume(theSong, calculateVolume(volume, TRUE));
+#ifdef SUPPORT_BAESCRIPT
+            uint32_t midiScriptSongLength = 0;
+            if (gScript)
+            {
+               BAEScript_SetSong(gScript, theSong);
+               BAEScript_SetExporting(gScript, gWriteToFile);
+               BAESong_GetMicrosecondLength(theSong, &midiScriptSongLength);
+               midiScriptSongLength /= 1000;
+               // Tick before priming so script can seek before any audio renders
+               BAEScript_Tick(gScript, 0, midiScriptSongLength);
+            }
+#endif
 #ifdef USE_MPEG_ENCODER
             // When exporting (especially MP3) the song may appear "done" before
             // the first mixer slices have been serviced. Prime the encoder by
@@ -935,6 +947,13 @@ static BAEResult PlayMidi(BAEMixer theMixer, char *fileName, BAE_UNSIGNED_FIXED 
                // Use cumulative time + current position for display and time limit check
                uint32_t totalPlayedTime = cumulativeTime + currentPosition;
                displayCurrentPosition(currentPosition, totalPlayedTime);
+
+#ifdef SUPPORT_BAESCRIPT
+               if (gScript)
+               {
+                  BAEScript_Tick(gScript, totalPlayedTime, midiScriptSongLength);
+               }
+#endif
 
                if (timeLimit > 0)
                {
@@ -1072,6 +1091,18 @@ static BAEResult PlayRMF(BAEMixer theMixer, char *fileName, BAE_UNSIGNED_FIXED v
             {
                BAESong_DisplayInfo(theSong);
             }
+#ifdef SUPPORT_BAESCRIPT
+            uint32_t rmfScriptSongLength = 0;
+            if (gScript)
+            {
+               BAEScript_SetSong(gScript, theSong);
+               BAEScript_SetExporting(gScript, gWriteToFile);
+               BAESong_GetMicrosecondLength(theSong, &rmfScriptSongLength);
+               rmfScriptSongLength /= 1000;
+               // Tick before priming so script can seek before any audio renders
+               BAEScript_Tick(gScript, 0, rmfScriptSongLength);
+            }
+#endif
 #ifdef USE_MPEG_ENCODER
             if (gWriteToFile)
             {
@@ -1129,6 +1160,7 @@ static BAEResult PlayRMF(BAEMixer theMixer, char *fileName, BAE_UNSIGNED_FIXED v
             {
                playbae_printf("Max Play Duration: %d seconds\n", timeLimit);
             }
+
             playbae_dprintf("BAE memory used for everything %ld bytes\n\n", BAE_GetSizeOfMemoryUsed());
             done = FALSE;
             while (done == FALSE)
@@ -1159,6 +1191,13 @@ static BAEResult PlayRMF(BAEMixer theMixer, char *fileName, BAE_UNSIGNED_FIXED v
                // Use cumulative time + current position for display and time limit check
                uint32_t totalPlayedTime = cumulativeTime + currentPosition;
                displayCurrentPosition(currentPosition, totalPlayedTime);
+
+#ifdef SUPPORT_BAESCRIPT
+               if (gScript)
+               {
+                  BAEScript_Tick(gScript, totalPlayedTime, rmfScriptSongLength);
+               }
+#endif
 
                if (timeLimit > 0)
                {
@@ -1263,8 +1302,11 @@ static BAEResult PlayXMF(BAEMixer theMixer, char *fileName, BAE_UNSIGNED_FIXED v
    if (gScript)
    {
       BAEScript_SetSong(gScript, theSong);
+      BAEScript_SetExporting(gScript, gWriteToFile);
       BAESong_GetMicrosecondLength(theSong, &xmfScriptSongLength);
       xmfScriptSongLength /= 1000;
+      // Tick before main loop so script can seek before any audio renders
+      BAEScript_Tick(gScript, 0, xmfScriptSongLength);
    }
 #endif
 
@@ -1371,6 +1413,19 @@ static BAEResult PlayLoadedSong(BAEMixer theMixer, BAESong theSong, char *fileNa
 
    BAESong_SetVolume(theSong, calculateVolume(volume, TRUE));
 
+#ifdef SUPPORT_BAESCRIPT
+   uint32_t scriptSongLength = 0;
+   if (gScript)
+   {
+      BAEScript_SetSong(gScript, theSong);
+      BAEScript_SetExporting(gScript, gWriteToFile);
+      BAESong_GetMicrosecondLength(theSong, &scriptSongLength);
+      scriptSongLength /= 1000;
+      // Tick before priming so script can seek before any audio renders
+      BAEScript_Tick(gScript, 0, scriptSongLength);
+   }
+#endif
+
 #ifdef USE_MPEG_ENCODER
    // When exporting (especially MP3) the song may appear "done" before
    // the first mixer slices have been serviced. Prime the encoder by
@@ -1446,16 +1501,6 @@ static BAEResult PlayLoadedSong(BAEMixer theMixer, BAESong theSong, char *fileNa
 
    playbae_dprintf("BAE memory used for everything %ld bytes\n\n", BAE_GetSizeOfMemoryUsed());
 
-#ifdef SUPPORT_BAESCRIPT
-   uint32_t scriptSongLength = 0;
-   if (gScript)
-   {
-      BAEScript_SetSong(gScript, theSong);
-      BAESong_GetMicrosecondLength(theSong, &scriptSongLength);
-      scriptSongLength /= 1000; /* convert to ms */
-   }
-#endif
-   
    done = FALSE;
    while (done == FALSE)
    {

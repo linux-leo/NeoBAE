@@ -26,6 +26,17 @@ static void ctx_output(BAEScript_Context *ctx, const char *text)
         fprintf(stderr, "%s", text);
 }
 
+/* ── stop callback ──────────────────────────────────────────────────── */
+
+void BAEScript_SetStopCallback(BAEScript_Context *ctx,
+                               BAEScript_StopFn fn,
+                               void *userdata)
+{
+    if (!ctx) return;
+    ctx->stop_fn = fn;
+    ctx->stop_ud = userdata;
+}
+
 /* ── help text ──────────────────────────────────────────────────────── */
 
 static const char *HELP_TEXT =
@@ -61,8 +72,11 @@ static const char *HELP_TEXT =
     "    noteOff(ch, note, vel);  Send Note Off\n"
     "\n"
     "  Global Objects:\n"
-    "    midi.timestamp         Current position (ms)\n"
-    "    midi.length            Song length (ms)\n"
+    "    midi.timestamp         Current position in ms (read/write)\n"
+    "    midi.position          Alias for midi.timestamp\n"
+    "    midi.length            Song length in ms (read-only)\n"
+    "    midi.exporting         1 if exporting to file, 0 otherwise\n"
+    "    midi.stop()            Stop playback and export\n"
     "\n"
     "  Output:\n"
     "    print(expr, ...);      Print values to console\n"
@@ -263,6 +277,8 @@ int32_t BAEScript_Eval(BAEScript_Context *ctx, BAEScript_Node *node)
                 return (int32_t)ctx->timestamp_ms;
             if (node->data.midi_prop == MIDIPROP_LENGTH)
                 return (int32_t)ctx->length_ms;
+            if (node->data.midi_prop == MIDIPROP_EXPORTING)
+                return ctx->exporting ? 1 : 0;
             return 0;
 
         case NODE_NOTE_ON: {
@@ -367,6 +383,13 @@ void BAEScript_Exec(BAEScript_Context *ctx, BAEScript_Node *node)
             break;
         }
 
+        case NODE_MIDI_STOP:
+            if (ctx->stop_fn)
+                ctx->stop_fn(ctx->stop_ud);
+            else if (ctx->song)
+                BAESong_Stop(ctx->song, FALSE);
+            break;
+
         case NODE_HELP: {
             if (!ctx->help_shown) {
                 ctx_output(ctx, HELP_TEXT);
@@ -379,6 +402,19 @@ void BAEScript_Exec(BAEScript_Context *ctx, BAEScript_Node *node)
             int ch    = (int)BAEScript_Eval(ctx, node->data.ch_prop_set.channel);
             int32_t v = BAEScript_Eval(ctx, node->data.ch_prop_set.value);
             ch_prop_write(ctx, ch, node->data.ch_prop_set.prop, v);
+            break;
+        }
+
+        case NODE_MIDI_PROP_SET: {
+            int32_t v = BAEScript_Eval(ctx, node->data.midi_prop_set.value);
+            if (node->data.midi_prop_set.prop == MIDIPROP_TIMESTAMP) {
+                if (ctx->song) {
+                    uint32_t us = (uint32_t)v * 1000u;
+                    BAESong_SetMicrosecondPosition(ctx->song, us);
+                }
+                ctx->timestamp_ms = (uint32_t)v;
+            }
+            /* MIDIPROP_LENGTH, MIDIPROP_EXPORTING are read-only — silently ignore writes */
             break;
         }
 

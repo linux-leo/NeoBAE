@@ -64,6 +64,21 @@ static const uint32_t EXPORT_MPEG_STABLE_THRESHOLD = 8; // matches playbae heuri
 bool g_export_realtime_mode = false;
 bool g_export_using_live_song = false;
 
+// Export tick callback for script engine synchronization
+static ExportTickFn g_export_tick_fn = NULL;
+static void *g_export_tick_ud = NULL;
+
+void bae_signal_export_stop(void)
+{
+    g_export_thread_should_stop = true;
+}
+
+void bae_set_export_tick_callback(ExportTickFn fn, void *userdata)
+{
+    g_export_tick_fn = fn;
+    g_export_tick_ud = userdata;
+}
+
 // Export dropdown state: controls encoding choice when exporting
 bool g_exportDropdownOpen = false;
 
@@ -321,6 +336,11 @@ bool bae_start_export(const char *output_file, int export_type, int compression)
         g_bae.is_playing = true;
     }
 
+    // Tick the script engine before any audio is rendered so a script
+    // seek (e.g. midi.position = X) takes effect before priming.
+    if (g_export_tick_fn)
+        g_export_tick_fn(g_export_tick_ud);
+
     // Give the song a moment to settle and process initial MIDI events
     // This helps prevent note dropping at the beginning of the export
     for (int settle = 0; settle < 10; settle++)
@@ -517,6 +537,11 @@ bool bae_start_mpeg_export(const char *output_file, int codec_index)
     bae_set_reverb(g_bae.current_reverb_type); // ensure reverb is set for export
 
     g_bae.is_playing = true;
+
+    // Tick the script engine before any audio is rendered so a script
+    // seek (e.g. midi.position = X) takes effect before priming.
+    if (g_export_tick_fn)
+        g_export_tick_fn(g_export_tick_ud);
 
     // Prime the encoder/mixer (like playbae does) to ensure events are processed
     for (int prime = 0; prime < 8; ++prime)
@@ -862,7 +887,12 @@ static void *export_thread_proc(void *param)
         ch_enable[i] = g_thread_ch_enabled[i] ? true : false;
     }
     bae_update_channel_mutes(ch_enable);
-      
+
+    // Tick the script engine once before rendering any audio so it can
+    // seek/configure before the first buffer is written.
+    if (g_export_tick_fn)
+        g_export_tick_fn(g_export_tick_ud);
+
     while (!g_export_thread_should_stop && g_exporting)
     {
         // First service call (matching main loop service in playbae)
@@ -878,6 +908,11 @@ static void *export_thread_proc(void *param)
         uint32_t current_pos = 0;
         BAESong_GetMicrosecondPosition(g_bae.song, &current_pos);
         BAESong_IsDone(g_bae.song, &is_done);
+
+        // Tick the script engine so it can react to position changes
+        // during non-realtime export (otherwise it only ticks per GUI frame)
+        if (g_export_tick_fn)
+            g_export_tick_fn(g_export_tick_ud);
 
         if (!is_done)
         {

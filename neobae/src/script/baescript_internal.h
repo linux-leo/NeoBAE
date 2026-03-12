@@ -114,9 +114,11 @@ typedef enum {
     NODE_UNARYOP,           /* !expr  or -expr                  */
     NODE_CH_PROP,           /* ch[expr].property  (read)        */
     NODE_CH_PROP_SET,       /* ch[expr].property = expr (write) */
-    NODE_MIDI_PROP,         /* midi.property                    */
+    NODE_MIDI_PROP,         /* midi.property  (read)            */
+    NODE_MIDI_PROP_SET,     /* midi.property = expr (write)     */
     NODE_NOTE_ON,           /* noteOn(ch, note, vel)            */
     NODE_NOTE_OFF,          /* noteOff(ch, note, vel)           */
+    NODE_MIDI_STOP,         /* midi.stop()                      */
     NODE_HELP,              /* help()                           */
 } BAEScript_NodeType;
 
@@ -134,6 +136,7 @@ typedef enum {
 typedef enum {
     MIDIPROP_TIMESTAMP,
     MIDIPROP_LENGTH,
+    MIDIPROP_EXPORTING,
 } BAEScript_MidiProp;
 
 typedef struct BAEScript_Node BAEScript_Node;
@@ -185,6 +188,9 @@ struct BAEScript_Node {
         /* NODE_MIDI_PROP */
         BAEScript_MidiProp midi_prop;
 
+        /* NODE_MIDI_PROP_SET (write) */
+        struct { BAEScript_MidiProp prop; BAEScript_Node *value; } midi_prop_set;
+
         /* NODE_NOTE_ON / NODE_NOTE_OFF */
         struct { BAEScript_Node *channel; BAEScript_Node *note; BAEScript_Node *velocity; } note_cmd;
 
@@ -219,6 +225,9 @@ struct BAEScript_Context {
     int             var_count;
     BAEScript_OutputFn output_fn;   /* optional print callback      */
     void              *output_ud;   /* userdata for output callback */
+    BAEScript_StopFn   stop_fn;     /* optional stop callback       */
+    void              *stop_ud;     /* userdata for stop callback   */
+    int               exporting;    /* non-zero when exporting      */
     int               help_shown;   /* help() only fires once       */
 };
 

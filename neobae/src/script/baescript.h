@@ -19,8 +19,11 @@
  *   ch[1].expression                  // expression      (CC 11, 0-127)
  *   ch[1].pitchbend                   // pitch bend      (0-16383, 8192=center)
  *   ch[1].mute                        // 0 or 1
- *   midi.timestamp                    // current position in ms
- *   midi.length                       // total song length in ms
+ *   midi.timestamp                    // current position in ms (read/write)
+ *   midi.position                     // alias for midi.timestamp
+ *   midi.length                       // total song length in ms (read-only)
+ *   midi.exporting                    // 1 if exporting to file, 0 otherwise
+ *   midi.stop();                      // stop playback and export
  *   print("hello");                   // debug output
  *   print(expression);                // print numeric or string values
  *
@@ -50,11 +53,24 @@ typedef struct BAEScript_Context BAEScript_Context;
 typedef void (*BAEScript_OutputFn)(const char *text, void *userdata);
 
 /**
+ * Callback for midi.stop(). If set, midi.stop() calls this;
+ * otherwise it falls back to BAESong_Stop on the bound song.
+ */
+typedef void (*BAEScript_StopFn)(void *userdata);
+
+/**
  * Set a callback to receive print() output.
  */
 void BAEScript_SetOutputCallback(BAEScript_Context *ctx,
                                  BAEScript_OutputFn fn,
                                  void *userdata);
+
+/**
+ * Set a callback for midi.stop().
+ */
+void BAEScript_SetStopCallback(BAEScript_Context *ctx,
+                               BAEScript_StopFn fn,
+                               void *userdata);
 
 /**
  * Load a script from a file path.
@@ -73,6 +89,11 @@ BAEScript_Context *BAEScript_LoadString(const char *source);
  * operations go through the engine.  Must be called before Tick().
  */
 void BAEScript_SetSong(BAEScript_Context *ctx, BAESong song);
+
+/**
+ * Set the exporting flag so scripts can query midi.exporting.
+ */
+void BAEScript_SetExporting(BAEScript_Context *ctx, int exporting);
 
 /**
  * Execute one tick of the script.  Call this once per playback

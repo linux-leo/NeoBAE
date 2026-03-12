@@ -13,6 +13,7 @@
 #include "gui_theme.h"
 #include "gui_widgets.h"
 #include "gui_bae.h"
+#include "gui_export.h"
 #include "baescript.h"
 #include "baescript_internal.h"
 #if defined(USE_SDL2)
@@ -147,6 +148,42 @@ static void script_console_output_cb(const char *text, void *userdata)
 {
     (void)userdata;
     console_append(text);
+}
+
+static void export_tick_adapter(void *userdata);
+
+static void script_stop_cb(void *userdata)
+{
+    (void)userdata;
+    extern BAESong g_live_song;
+    extern void gui_panic_all_notes(BAESong song);
+    if (g_exporting) {
+        // During export this callback runs FROM the export thread.
+        // We must NOT call bae_stop_wav_export() (it joins the thread = deadlock).
+        // Just signal the thread to exit; cleanup happens in bae_service_wav_export.
+        if (g_bae.is_audio_file && g_bae.sound)
+            BAESound_Stop(g_bae.sound, FALSE);
+        else if (g_bae.song)
+            BAESong_Stop(g_bae.song, FALSE);
+        g_bae.is_playing = false;
+        bae_signal_export_stop();
+        return;
+    }
+    // Normal playback — replicate the full bae_stop behavior
+    if (g_bae.is_audio_file && g_bae.sound) {
+        BAESound_Stop(g_bae.sound, FALSE);
+    } else if (g_bae.song) {
+        BAESong_Stop(g_bae.song, FALSE);
+        gui_panic_all_notes(g_bae.song);
+        if (g_live_song)
+            gui_panic_all_notes(g_live_song);
+        if (g_bae.mixer)
+            for (int i = 0; i < 3; i++)
+                BAEMixer_Idle(g_bae.mixer);
+        BAESong_SetMicrosecondPosition(g_bae.song, 0);
+    }
+    g_bae.is_playing = false;
+    g_bae.song_finished = false;
 }
 
 extern SDL_Window *g_main_window;
@@ -576,7 +613,8 @@ static SyntaxKind classify_word(const char *word, int len)
         (len == 5 && strncmp(word, "print", 5) == 0) ||
         (len == 4 && strncmp(word, "help", 4) == 0) ||
         (len == 6 && strncmp(word, "noteOn", 6) == 0) ||
-        (len == 7 && strncmp(word, "noteOff", 7) == 0))
+        (len == 7 && strncmp(word, "noteOff", 7) == 0) ||
+        (len == 4 && strncmp(word, "stop", 4) == 0))
         return SYN_BUILTIN;
 
     /* Properties (instrument, volume, pan, expression, pitchbend, mute, timestamp, length) */
@@ -587,7 +625,9 @@ static SyntaxKind classify_word(const char *word, int len)
         (len == 9 && strncmp(word, "pitchbend", 9) == 0) ||
         (len == 4 && strncmp(word, "mute", 4) == 0) ||
         (len == 9 && strncmp(word, "timestamp", 9) == 0) ||
-        (len == 6 && strncmp(word, "length", 6) == 0))
+        (len == 8 && strncmp(word, "position", 8) == 0) ||
+        (len == 6 && strncmp(word, "length", 6) == 0) ||
+        (len == 9 && strncmp(word, "exporting", 9) == 0))
         return SYN_PROPERTY;
 
     return SYN_NORMAL;
@@ -643,6 +683,7 @@ static void lint_update(void)
         g_lint_error_line = -1;
         /* Set output callback so print() goes to the console */
         BAEScript_SetOutputCallback(g_script_ctx, script_console_output_cb, NULL);
+        BAEScript_SetStopCallback(g_script_ctx, script_stop_cb, NULL);
     }
 }
 
@@ -835,6 +876,9 @@ void script_editor_init(void)
     memcpy(g_text, starter, slen);
     g_text_len = slen;
     g_text[g_text_len] = '\0';
+
+    /* Register export tick so the script engine ticks during export */
+    bae_set_export_tick_callback(export_tick_adapter, NULL);
 }
 
 void script_editor_shutdown(void)
@@ -1179,6 +1223,12 @@ static void do_save_dialog(void)
 }
 #endif
 
+static void export_tick_adapter(void *userdata)
+{
+    (void)userdata;
+    script_editor_tick();
+}
+
 void script_editor_tick(void)
 {
     if (!g_script_enabled || !g_script_ctx) return;
@@ -1188,6 +1238,7 @@ void script_editor_tick(void)
     uint32_t len_ms = g_bae.song_length_us / 1000;
 
     BAEScript_SetSong(g_script_ctx, g_bae.song);
+    BAEScript_SetExporting(g_script_ctx, g_exporting ? 1 : 0);
     BAEScript_Tick(g_script_ctx, pos_ms, len_ms);
 }
 

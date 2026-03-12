@@ -51,6 +51,11 @@ extern const BAECompressionType g_exportCompressionMap[];
 extern const int g_exportCompressionCount;
 #endif
 
+// Export tick callback - called from the export thread between service calls
+// so scripts can track position during non-realtime export
+typedef void (*ExportTickFn)(void *userdata);
+void bae_set_export_tick_callback(ExportTickFn fn, void *userdata);
+
 // Function declarations
 void export_init(void);
 void export_cleanup(void);
@@ -59,6 +64,7 @@ bool bae_start_export(const char *output_file, int export_type, int compression)
 bool bae_start_mpeg_export(const char *output_file, int codec_index);
 #endif
 void bae_stop_wav_export(void);
+void bae_signal_export_stop(void);
 void bae_service_wav_export(void);
 char *save_export_dialog(int export_type); // 0=WAV, 1=FLAC, 2=MP3, 3=OGG
 char *save_midi_dialog(void);

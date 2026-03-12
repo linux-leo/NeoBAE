@@ -24,7 +24,8 @@
  *               | midiProp | IDENT | "(" expr ")"
  *               | noteOn | noteOff
  *   chProp      = "ch" "[" expr "]" "." PROP
- *   midiProp    = "midi" "." ("timestamp" | "length")
+ *   midiProp    = "midi" "." ("timestamp" | "position" | "length")
+ *   midiStop    = "midi" "." "stop" "(" ")" ";"
  *   noteOn      = "noteOn" "(" expr "," expr "," expr ")"
  *   noteOff     = "noteOff" "(" expr "," expr "," expr ")"
  ****************************************************************************/
@@ -150,8 +151,10 @@ static BAEScript_Node *parse_midi_access(Parser *p)
     BAEScript_MidiProp mp = MIDIPROP_TIMESTAMP;
     if (tok.type == TOK_IDENT) {
         if (strcmp(tok.value.str, "timestamp") == 0) mp = MIDIPROP_TIMESTAMP;
+        else if (strcmp(tok.value.str, "position") == 0) mp = MIDIPROP_TIMESTAMP;
         else if (strcmp(tok.value.str, "length") == 0) mp = MIDIPROP_LENGTH;
-        else parser_error(p, "Expected midi property: timestamp or length");
+        else if (strcmp(tok.value.str, "exporting") == 0) mp = MIDIPROP_EXPORTING;
+        else parser_error(p, "Expected midi property: timestamp, position, length, or exporting");
     } else {
         parser_error(p, "Expected midi property name");
     }
@@ -497,6 +500,47 @@ static BAEScript_Node *parse_statement(Parser *p)
         return new_node(NODE_HELP, line);
     }
 
+    /* midi.stop() or midi.prop = expr; */
+    if (parser_check(p, TOK_MIDI)) {
+        int line = p->current.line;
+        parser_advance(p); /* consume 'midi' */
+        /* Check for midi.stop() */
+        {
+            BAEScript_Lexer saved_lex = p->lex;
+            BAEScript_Token saved_cur = p->current;
+            if (parser_match(p, TOK_DOT)) {
+                BAEScript_Token tok = p->current;
+                if (tok.type == TOK_IDENT && strcmp(tok.value.str, "stop") == 0) {
+                    parser_advance(p); /* consume 'stop' */
+                    parser_expect(p, TOK_LPAREN,    "Expected '(' after 'midi.stop'");
+                    parser_expect(p, TOK_RPAREN,    "Expected ')' after 'midi.stop('");
+                    parser_expect(p, TOK_SEMICOLON, "Expected ';' after 'midi.stop()'");
+                    return new_node(NODE_MIDI_STOP, line);
+                }
+            }
+            /* Not stop — rewind and fall through to property parsing */
+            p->lex     = saved_lex;
+            p->current = saved_cur;
+        }
+        BAEScript_Node *rd = parse_midi_access(p);
+        BAEScript_MidiProp mp = rd->data.midi_prop;
+        if (parser_match(p, TOK_ASSIGN)) {
+            BAEScript_Node *val = parse_expr(p);
+            parser_expect(p, TOK_SEMICOLON, "Expected ';'");
+            BAEScript_Node *n = new_node(NODE_MIDI_PROP_SET, line);
+            n->data.midi_prop_set.prop  = mp;
+            n->data.midi_prop_set.value = val;
+            free(rd);
+            return n;
+        } else {
+            /* expression statement (read) */
+            parser_expect(p, TOK_SEMICOLON, "Expected ';'");
+            BAEScript_Node *n = new_node(NODE_EXPR_STMT, line);
+            n->data.expr = rd;
+            return n;
+        }
+    }
+
     /* ch[expr].prop = expr; */
     if (parser_check(p, TOK_CH)) {
         /* Could be either read (expression statement) or write (assignment).
@@ -644,6 +688,10 @@ void BAEScript_FreeNode(BAEScript_Node *node)
             BAEScript_FreeNode(node->data.note_cmd.velocity);
             break;
 
+        case NODE_MIDI_PROP_SET:
+            BAEScript_FreeNode(node->data.midi_prop_set.value);
+            break;
+
         case NODE_EXPR_STMT:
             BAEScript_FreeNode(node->data.expr);
             break;
@@ -653,6 +701,7 @@ void BAEScript_FreeNode(BAEScript_Node *node)
         case NODE_BOOL:
         case NODE_IDENT:
         case NODE_MIDI_PROP:
+        case NODE_MIDI_STOP:
             /* leaf nodes — nothing to free */
             break;
     }

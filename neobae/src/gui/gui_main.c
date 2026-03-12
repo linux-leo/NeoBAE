@@ -2183,6 +2183,8 @@ int main(int argc, char *argv[])
         // This ensures progress bar resumes when playback auto-restarts (e.g., after WAV export)
         if (playing != g_bae.is_playing)
         {
+            if (!g_bae.is_playing)
+                progress = bae_get_pos_ms(); // sync progress so bar reflects stop/seek
             playing = g_bae.is_playing;
         }
 
@@ -6754,8 +6756,8 @@ int main(int argc, char *argv[])
 
 #if SUPPORT_BAESCRIPT == TRUE
         script_editor_render();
-        // Tick script engine during playback
-        if (playing && !g_bae.paused) {
+        // Tick script engine during playback (export thread handles its own ticks)
+        if (playing && !g_bae.paused && !g_exporting) {
             script_editor_tick();
         }
 #endif

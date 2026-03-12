@@ -60,6 +60,11 @@ void BAEScript_SetSong(BAEScript_Context *ctx, BAESong song)
     if (ctx) ctx->song = song;
 }
 
+void BAEScript_SetExporting(BAEScript_Context *ctx, int exporting)
+{
+    if (ctx) ctx->exporting = exporting;
+}
+
 /* ── Execute one tick ──────────────────────────────────────────────── */
 
 void BAEScript_Tick(BAEScript_Context *ctx,
