@@ -1,0 +1,4 @@
+var theinst = 98;
+if (ch[0].instrument != theinst) {
+        ch[0].instrument = theinst;
+}

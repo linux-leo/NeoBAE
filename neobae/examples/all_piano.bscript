@@ -1,0 +1,9 @@
+// Example BAEScript: Set all 16 channels to maximum volume
+// and force all channels to the same instrument (piano).
+
+var i = 0;
+while (i < 16) {
+    ch[i].volume = 127;
+    ch[i].instrument = 0;
+    i = i + 1;
+}

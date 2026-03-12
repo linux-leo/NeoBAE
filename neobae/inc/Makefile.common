@@ -28,6 +28,7 @@ ifneq ($(WASM),1)
 		VORBIS_ENC := 1
 		OPUS_DEC := 1
 		KARAOKE := 1
+		BAESCRIPT := 1
 		PLAYLIST := 1
 		SF2_SUPPORT := 1
 		USE_FLUIDSYNTH := 1
@@ -463,6 +464,15 @@ endif
 
 ifeq ($(KARAOKE),1)
 	BAE_FLAGS += -DSUPPORT_KARAOKE=1
+endif
+
+ifeq ($(BAESCRIPT),1)
+	BAE_FLAGS += -DSUPPORT_BAESCRIPT=1
+	INC_PATH += -Isrc/script
+	SRC_BIN += src/script/baescript.c \
+		src/script/baescript_lexer.c \
+		src/script/baescript_parser.c \
+		src/script/baescript_vm.c
 endif
 
 

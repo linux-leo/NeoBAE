@@ -1,0 +1,231 @@
+/****************************************************************************
+ * baescript_internal.h — Shared internal types for BAEScript
+ ****************************************************************************/
+
+#ifndef BAESCRIPT_INTERNAL_H
+#define BAESCRIPT_INTERNAL_H
+
+#include "baescript.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/*====================================================================
+ *  LEXER — Tokens
+ *====================================================================*/
+
+typedef enum {
+    /* literals / identifiers */
+    TOK_NUMBER,         /* integer literal                  */
+    TOK_STRING,         /* "..." string literal             */
+    TOK_IDENT,          /* identifier                       */
+
+    /* keywords */
+    TOK_VAR,            /* var                              */
+    TOK_IF,             /* if                               */
+    TOK_ELSE,           /* else                             */
+    TOK_WHILE,          /* while                            */
+    TOK_TRUE,           /* true                             */
+    TOK_FALSE,          /* false                            */
+
+    /* built-in objects */
+    TOK_CH,             /* ch                               */
+    TOK_MIDI,           /* midi                             */
+
+    /* operators */
+    TOK_PLUS,           /* +  */
+    TOK_MINUS,          /* -  */
+    TOK_STAR,           /* *  */
+    TOK_SLASH,          /* /  */
+    TOK_PERCENT,        /* %  */
+    TOK_EQ,             /* == */
+    TOK_NEQ,            /* != */
+    TOK_LT,             /* <  */
+    TOK_GT,             /* >  */
+    TOK_LTE,            /* <= */
+    TOK_GTE,            /* >= */
+    TOK_AND,            /* && */
+    TOK_OR,             /* || */
+    TOK_NOT,            /* !  */
+    TOK_ASSIGN,         /* =  */
+
+    /* delimiters */
+    TOK_LPAREN,         /* (  */
+    TOK_RPAREN,         /* )  */
+    TOK_LBRACE,         /* {  */
+    TOK_RBRACE,         /* }  */
+    TOK_LBRACKET,       /* [  */
+    TOK_RBRACKET,       /* ]  */
+    TOK_DOT,            /* .  */
+    TOK_COMMA,          /* ,  */
+    TOK_SEMICOLON,      /* ;  */
+
+    TOK_EOF,            /* end of input                     */
+    TOK_ERROR           /* lexer error                      */
+} BAEScript_TokenType;
+
+typedef struct {
+    BAEScript_TokenType type;
+    int                 line;       /* 1-based source line          */
+    int                 col;        /* 1-based column               */
+    union {
+        int32_t         num;        /* TOK_NUMBER value             */
+        char            str[256];   /* TOK_STRING / TOK_IDENT text  */
+    } value;
+} BAEScript_Token;
+
+/* Lexer state */
+typedef struct {
+    const char *src;        /* full source text                 */
+    int         pos;        /* current byte offset              */
+    int         len;        /* total source length              */
+    int         line;       /* current line (1-based)           */
+    int         col;        /* current col  (1-based)           */
+} BAEScript_Lexer;
+
+void              BAEScript_Lexer_Init(BAEScript_Lexer *lex, const char *source);
+BAEScript_Token   BAEScript_Lexer_Next(BAEScript_Lexer *lex);
+BAEScript_Token   BAEScript_Lexer_Peek(BAEScript_Lexer *lex);
+
+/*====================================================================
+ *  PARSER — AST nodes
+ *====================================================================*/
+
+typedef enum {
+    NODE_BLOCK,             /* { stmt; stmt; ... }              */
+    NODE_VAR_DECL,          /* var x = expr;                    */
+    NODE_ASSIGN,            /* x = expr;                        */
+    NODE_IF,                /* if (c) { } else { }              */
+    NODE_WHILE,             /* while (c) { }                    */
+    NODE_PRINT,             /* print(expr, ...);                */
+    NODE_EXPR_STMT,         /* expression as statement          */
+
+    /* expressions */
+    NODE_NUMBER,            /* integer literal                  */
+    NODE_STRING,            /* string literal                   */
+    NODE_BOOL,              /* true / false                     */
+    NODE_IDENT,             /* variable reference               */
+    NODE_BINOP,             /* left OP right                    */
+    NODE_UNARYOP,           /* !expr  or -expr                  */
+    NODE_CH_PROP,           /* ch[expr].property  (read)        */
+    NODE_CH_PROP_SET,       /* ch[expr].property = expr (write) */
+    NODE_MIDI_PROP,         /* midi.property                    */
+    NODE_NOTE_ON,           /* noteOn(ch, note, vel)            */
+    NODE_NOTE_OFF,          /* noteOff(ch, note, vel)           */
+} BAEScript_NodeType;
+
+/* Channel properties the user can access */
+typedef enum {
+    CHPROP_INSTRUMENT,
+    CHPROP_VOLUME,
+    CHPROP_PAN,
+    CHPROP_EXPRESSION,
+    CHPROP_PITCHBEND,
+    CHPROP_MUTE,
+} BAEScript_ChProp;
+
+/* MIDI global properties */
+typedef enum {
+    MIDIPROP_TIMESTAMP,
+    MIDIPROP_LENGTH,
+} BAEScript_MidiProp;
+
+typedef struct BAEScript_Node BAEScript_Node;
+
+struct BAEScript_Node {
+    BAEScript_NodeType type;
+    int                line;    /* source line for error messages    */
+
+    union {
+        /* NODE_NUMBER */
+        int32_t num;
+
+        /* NODE_STRING, NODE_IDENT */
+        char str[256];
+
+        /* NODE_BOOL */
+        int boolval;
+
+        /* NODE_BLOCK */
+        struct { BAEScript_Node **stmts; int count; int cap; } block;
+
+        /* NODE_VAR_DECL: name + initialiser */
+        struct { char name[128]; BAEScript_Node *init; } var_decl;
+
+        /* NODE_ASSIGN: name = value */
+        struct { char name[128]; BAEScript_Node *value; } assign;
+
+        /* NODE_IF: condition, then-block, else-block (nullable) */
+        struct { BAEScript_Node *cond; BAEScript_Node *then_b; BAEScript_Node *else_b; } if_stmt;
+
+        /* NODE_WHILE: condition, body */
+        struct { BAEScript_Node *cond; BAEScript_Node *body; } while_stmt;
+
+        /* NODE_PRINT */
+        struct { BAEScript_Node **args; int count; int cap; } print_call;
+
+        /* NODE_BINOP */
+        struct { BAEScript_TokenType op; BAEScript_Node *left; BAEScript_Node *right; } binop;
+
+        /* NODE_UNARYOP */
+        struct { BAEScript_TokenType op; BAEScript_Node *operand; } unaryop;
+
+        /* NODE_CH_PROP (read) */
+        struct { BAEScript_Node *channel; BAEScript_ChProp prop; } ch_prop;
+
+        /* NODE_CH_PROP_SET (write) */
+        struct { BAEScript_Node *channel; BAEScript_ChProp prop; BAEScript_Node *value; } ch_prop_set;
+
+        /* NODE_MIDI_PROP */
+        BAEScript_MidiProp midi_prop;
+
+        /* NODE_NOTE_ON / NODE_NOTE_OFF */
+        struct { BAEScript_Node *channel; BAEScript_Node *note; BAEScript_Node *velocity; } note_cmd;
+
+        /* NODE_EXPR_STMT */
+        BAEScript_Node *expr;
+    } data;
+};
+
+/* Parser entry point: returns a NODE_BLOCK representing the whole program */
+BAEScript_Node *BAEScript_Parse(const char *source);
+
+/* Free an AST tree recursively */
+void BAEScript_FreeNode(BAEScript_Node *node);
+
+/*====================================================================
+ *  VM — Interpreter state (the opaque context)
+ *====================================================================*/
+
+#define BAESCRIPT_MAX_VARS 256
+
+typedef struct {
+    char    name[128];
+    int32_t value;
+} BAEScript_Var;
+
+struct BAEScript_Context {
+    BAEScript_Node *program;        /* root AST (NODE_BLOCK)        */
+    BAESong         song;           /* bound BAESong                */
+    uint32_t        timestamp_ms;   /* current playback time        */
+    uint32_t        length_ms;      /* total song length            */
+    BAEScript_Var   vars[BAESCRIPT_MAX_VARS];
+    int             var_count;
+};
+
+/* Evaluate a node tree; returns the result as int32_t */
+int32_t BAEScript_Eval(BAEScript_Context *ctx, BAEScript_Node *node);
+
+/* Execute a statement node */
+void BAEScript_Exec(BAEScript_Context *ctx, BAEScript_Node *node);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* BAESCRIPT_INTERNAL_H */

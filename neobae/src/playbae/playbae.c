@@ -45,6 +45,10 @@
 #include <stdint.h>
 #include "bankinfo.h" // reuse embedded bank metadata for friendly names
 
+#ifdef SUPPORT_BAESCRIPT
+#include "baescript.h"
+#endif
+
 #if USE_SF2_SUPPORT == TRUE
    #if _USING_FLUIDSYNTH == TRUE
       #include "GenSF2_FluidSynth.h"
@@ -63,6 +67,10 @@ static int gWriteToFile = FALSE;
 static BAEFileType gWriteToFileType = BAE_WAVE_TYPE;
 // Default MP3 export bitrate (total kbps). Adjusted via -b CLI option.
 static int gMP3BitrateKbps = 128;
+
+#ifdef SUPPORT_BAESCRIPT
+static BAEScript_Context *gScript = NULL;
+#endif
 
 #ifdef SUPPORT_KARAOKE
 // -----------------------------------------------------------------------------
@@ -437,6 +445,9 @@ char const usageStringFmt[] =
     "                 -q  {quiet mode}\n"
     "                 -b  {CBR bitrate kbps for MP3 export (default 128)}\n"
     "                 -h  {displays this message then exits}\n"
+#ifdef SUPPORT_BAESCRIPT
+    "                 --script {path to BAEScript file for MIDI manipulation}\n"
+#endif
     "                 -x  {displays additional lesser-used options}\n";
 
 char const usageStringExtra[] =
@@ -1247,6 +1258,16 @@ static BAEResult PlayXMF(BAEMixer theMixer, char *fileName, BAE_UNSIGNED_FIXED v
       playbae_printf("Max Play Duration: %d seconds\n", timeLimit);
    }
 
+#ifdef SUPPORT_BAESCRIPT
+   uint32_t xmfScriptSongLength = 0;
+   if (gScript)
+   {
+      BAEScript_SetSong(gScript, theSong);
+      BAESong_GetMicrosecondLength(theSong, &xmfScriptSongLength);
+      xmfScriptSongLength /= 1000;
+   }
+#endif
+
    done = FALSE;
    while (done == FALSE)
    {
@@ -1271,6 +1292,13 @@ static BAEResult PlayXMF(BAEMixer theMixer, char *fileName, BAE_UNSIGNED_FIXED v
       lastPosition = currentPosition;
       uint32_t totalPlayedTime = cumulativeTime + currentPosition;
       displayCurrentPosition(currentPosition, totalPlayedTime);
+
+#ifdef SUPPORT_BAESCRIPT
+      if (gScript)
+      {
+         BAEScript_Tick(gScript, totalPlayedTime, xmfScriptSongLength);
+      }
+#endif
 
       if (timeLimit > 0)
       {
@@ -1417,6 +1445,16 @@ static BAEResult PlayLoadedSong(BAEMixer theMixer, BAESong theSong, char *fileNa
    }
 
    playbae_dprintf("BAE memory used for everything %ld bytes\n\n", BAE_GetSizeOfMemoryUsed());
+
+#ifdef SUPPORT_BAESCRIPT
+   uint32_t scriptSongLength = 0;
+   if (gScript)
+   {
+      BAEScript_SetSong(gScript, theSong);
+      BAESong_GetMicrosecondLength(theSong, &scriptSongLength);
+      scriptSongLength /= 1000; /* convert to ms */
+   }
+#endif
    
    done = FALSE;
    while (done == FALSE)
@@ -1443,6 +1481,13 @@ static BAEResult PlayLoadedSong(BAEMixer theMixer, BAESong theSong, char *fileNa
       // Use cumulative time + current position for display and time limit check
       uint32_t totalPlayedTime = cumulativeTime + currentPosition;
       displayCurrentPosition(currentPosition, totalPlayedTime);
+
+#ifdef SUPPORT_BAESCRIPT
+      if (gScript)
+      {
+         BAEScript_Tick(gScript, totalPlayedTime, scriptSongLength);
+      }
+#endif
 
       if (timeLimit > 0)
       {
@@ -1725,6 +1770,24 @@ int main(int argc, char *argv[])
    if (PV_ParseCommands(argc, argv, "-k", FALSE, NULL))
    {
       gEnableKaraoke = 1;
+   }
+#endif
+
+#ifdef SUPPORT_BAESCRIPT
+   /* Parse --script (long-form option, handled manually) */
+   for (int i = 1; i < argc; i++)
+   {
+      if (strcmp(argv[i], "--script") == 0 && i + 1 < argc)
+      {
+         gScript = BAEScript_LoadFile(argv[i + 1]);
+         if (!gScript)
+         {
+            playbae_printf("Failed to load script '%s'\n", argv[i + 1]);
+            return 1;
+         }
+         playbae_printf("Loaded BAEScript: %s\n", argv[i + 1]);
+         break;
+      }
    }
 #endif
 
@@ -2209,6 +2272,15 @@ int main(int argc, char *argv[])
 
    BAE_WaitMicroseconds(160000);
    BAEMixer_Delete(theMixer);
+
+#ifdef SUPPORT_BAESCRIPT
+   if (gScript)
+   {
+      BAEScript_Free(gScript);
+      gScript = NULL;
+   }
+#endif
+
    return (0);
 }
 
