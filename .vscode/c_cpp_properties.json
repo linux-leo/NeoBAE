@@ -4,6 +4,7 @@
       "name": "WSL2-MinGW-GUI-SDL3",
       "includePath": [
         "/usr/x86_64-w64-mingw32/include/**",
+        "${workspaceFolder}/neobae/src/script/**",
         "${workspaceFolder}/neobae/src/BAE_Source/Common/**",
         "${workspaceFolder}/neobae/src/BAE_Source/Platform/**",
         "${workspaceFolder}/neobae/src/BAE_MPEG_Source_II/**",
