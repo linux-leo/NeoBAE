@@ -716,7 +716,22 @@ bool bae_load_song(const char *path, bool use_embedded_banks)
         {
             double stored = g_last_requested_master_volume; /* 0..1 engine space */
             double baseline = (NEW_BASELINE_PCT / 100.0);
-            int volPct = (int)(stored / baseline * 100.0 + 0.5);
+            /* Reverse the quadratic curve: engineGain = (pct/100)^2 * baseline
+               so pct = sqrt(engineGain / baseline) * 100 */
+            double ratio = stored / baseline;
+            if (ratio < 0.0) ratio = 0.0;
+            if (ratio > 1.0) ratio = 1.0;
+            /* Approximate sqrt via Newton's method to avoid math.h dependency:
+               two iterations is accurate to ~6 decimal places for 0..1 */
+            double sqrtRatio;
+            if (ratio <= 0.0) {
+                sqrtRatio = 0.0;
+            } else {
+                sqrtRatio = (ratio + 1.0) * 0.5; /* initial guess */
+                sqrtRatio = (sqrtRatio + ratio / sqrtRatio) * 0.5;
+                sqrtRatio = (sqrtRatio + ratio / sqrtRatio) * 0.5;
+            }
+            int volPct = (int)(sqrtRatio * 100.0 + 0.5);
             if (volPct < 0)
                 volPct = 0;
             if (volPct > NEW_MAX_VOLUME_PCT)
@@ -943,10 +958,12 @@ void bae_set_volume(int volPct)
     if (volPct > NEW_MAX_VOLUME_PCT)
         volPct = NEW_MAX_VOLUME_PCT;
 
-    // Map UI percent to engine linear gain. Users see "100%" at volPct == 100,
-    // but we treat that as NEW_BASELINE_PCT of engine unity. Therefore:
-    // engineGain = (volPct / 100.0) * (NEW_BASELINE_PCT / 100.0)
-    double engineGain = (double)volPct / 100.0 * (NEW_BASELINE_PCT / 100.0);
+    // Map UI percent to engine gain with a perceptual (quadratic) curve.
+    // Human hearing is logarithmic, so a linear amplitude mapping makes
+    // the upper slider range feel compressed.  Squaring the normalized
+    // slider position spreads out the perceived loudness more evenly.
+    double normalized = (double)volPct / 100.0;
+    double engineGain = (normalized * normalized) * (NEW_BASELINE_PCT / 100.0);
 
     // Keep a remembered requested master volume in the old 0..1 space
     // so other modules (and sound load) can reconstruct user intent.

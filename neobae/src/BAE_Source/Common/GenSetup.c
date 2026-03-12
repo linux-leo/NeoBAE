@@ -614,6 +614,7 @@ OPErr GM_InitGeneralSound(void *threadContext, Rate theRate, TerpMode theTerp, A
         
             pMixer->MasterVolume = MAX_MASTER_VOLUME;
             pMixer->globalVolume = MAX_MASTER_VOLUME;
+            pMixer->limiterGain = 65536;     // unity gain (16.16 fixed-point)
             pMixer->effectsVolume = MAX_MASTER_VOLUME * 2 * 4;
 
             // set control loops
