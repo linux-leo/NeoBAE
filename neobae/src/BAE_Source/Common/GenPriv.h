@@ -683,7 +683,6 @@ struct GM_Mixer
 
     XSWORD              effectsVolume;                  // volume multiplier of all effects
     XSDWORD             scaleBackAmount;
-    XSDWORD             limiterGain;                    // output limiter gain in 16.16 fixed-point (65536 = unity)
     XSWORD              routeBus;
 
     XSWORD              MaxNotes;

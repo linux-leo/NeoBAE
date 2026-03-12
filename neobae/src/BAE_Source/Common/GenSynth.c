@@ -838,16 +838,12 @@ void PV_CalcScaleBack(void)
 }
 
 // Per-frame peak limiter to prevent clipping from overgain.
-// Uses instant attack (gain drops immediately when clipping would occur)
-// and smooth release (gain recovers toward unity over ~300ms).
+// Stateless design: scales down each frame independently if any sample
+// would clip, so there are no pumping or AGC artifacts from volume changes.
 static void PV_ApplyOutputLimiter(GM_Mixer *pMixer)
 {
     // Threshold: maximum 32-bit value that fits in 16-bit after OUTPUT_SCALAR shift
     #define LIMITER_THRESHOLD       ((INT32)32767 << OUTPUT_SCALAR)
-    // Release: multiply gain by (65536 + LIMITER_RELEASE) per frame for recovery.
-    // At ~86 frames/sec (22kHz/256), 1400 gives ~300ms release to full recovery.
-    #define LIMITER_RELEASE         1400
-    #define LIMITER_UNITY           65536
 
     INT32   *buffer = pMixer->songBufferDry;
     LOOPCOUNT samples = pMixer->One_Loop * (pMixer->generateStereoOutput ? 2 : 1);
@@ -865,30 +861,13 @@ static void PV_ApplyOutputLimiter(GM_Mixer *pMixer)
             peak = absVal;
     }
 
+    // If any sample would clip, scale the entire frame down
     if (peak > LIMITER_THRESHOLD)
     {
-        // Instant attack: compute required gain to keep peak at threshold
-        // gain = threshold / peak, in 16.16 fixed-point
-        XSDWORD requiredGain = (XSDWORD)(((int64_t)LIMITER_THRESHOLD * LIMITER_UNITY) / peak);
-
-        // Use the lower of required gain and current gain (instant attack)
-        if (requiredGain < pMixer->limiterGain)
-            pMixer->limiterGain = requiredGain;
-    }
-    else if (pMixer->limiterGain < LIMITER_UNITY)
-    {
-        // Smooth release: recover gain toward unity
-        pMixer->limiterGain += LIMITER_RELEASE;
-        if (pMixer->limiterGain > LIMITER_UNITY)
-            pMixer->limiterGain = LIMITER_UNITY;
-    }
-
-    // Apply limiter gain if not at unity
-    if (pMixer->limiterGain < LIMITER_UNITY)
-    {
+        XSDWORD gain = (XSDWORD)(((int64_t)LIMITER_THRESHOLD * 65536) / peak);
         for (i = 0; i < samples; i++)
         {
-            buffer[i] = (INT32)(((int64_t)buffer[i] * pMixer->limiterGain) >> 16);
+            buffer[i] = (INT32)(((int64_t)buffer[i] * gain) >> 16);
         }
     }
 }
@@ -2965,6 +2944,10 @@ void PV_ProcessSampleFrame(void *threadContext, void *destinationSamples)
             PV_ClearMixBuffers(pMixer->generateStereoOutput);
         }
 
+        // Limit the raw mix bus before global volume so the limiter
+        // never interacts with the volume slider.
+        PV_ApplyOutputLimiter(pMixer);
+
         // Apply global volume to the final mix buffer
         if (pMixer->globalVolume != MAX_MASTER_VOLUME)
         {
@@ -2975,9 +2958,6 @@ void PV_ProcessSampleFrame(void *threadContext, void *destinationSamples)
                 buffer[i] = (INT32)(((int64_t)buffer[i] * pMixer->globalVolume) / MAX_MASTER_VOLUME);
             }
         }
-
-        // Apply output limiter to prevent clipping from overgain
-        PV_ApplyOutputLimiter(pMixer);
 
         // mix down to final output stage for output to speaker
         if (pMixer->generate16output)

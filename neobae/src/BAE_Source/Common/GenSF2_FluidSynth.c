@@ -1995,6 +1995,28 @@ void GM_SF2_RenderAudioSlice(GM_Song* pSong, int32_t* mixBuffer, int32_t* reverb
                            g_fluidsynth_mix_buffer, 1, 2);
     PV_SF2_UnlockSynth();
     
+    // Normalize FluidSynth output to ±1.0 to prevent clipping from hot SoundFonts.
+    // This tames the signal at the source so the downstream volume controls
+    // and output stage all work cleanly.
+    {
+        int32_t totalSamples = frameCount * 2;
+        float peak = 0.0f;
+        for (int32_t s = 0; s < totalSamples; s++)
+        {
+            float v = g_fluidsynth_mix_buffer[s];
+            if (v < 0.0f) v = -v;
+            if (v > peak) peak = v;
+        }
+        if (peak > 1.0f)
+        {
+            float scale = 1.0f / peak;
+            for (int32_t s = 0; s < totalSamples; s++)
+            {
+                g_fluidsynth_mix_buffer[s] *= scale;
+            }
+        }
+    }
+
     // Apply song volume scaling
     float songScale = 1.0f;
     GM_Mixer* pMixer = GM_GetCurrentMixer();
@@ -2328,11 +2350,8 @@ static void PV_SF2_ConvertFloatToInt32(float* input, int32_t* output, int32_t* r
             // Mix stereo to mono (average L+R)
             float mono = (leftSample + rightSample) * 0.5f;
             
-            // Clamp to prevent overflow
-            if (mono > 1.0f) mono = 1.0f;
-            else if (mono < -1.0f) mono = -1.0f;
-            
-            // Convert to 32-bit fixed point
+            // Convert to 32-bit fixed point (no clamp needed — int32 provides
+            // ~128x headroom above 1.0 and the output limiter handles peaks)
             int32_t intSample = (int32_t)(mono * kScale);
             
             // Write single-channel PCM (one sample per frame, true mono layout)
@@ -2361,13 +2380,9 @@ static void PV_SF2_ConvertFloatToInt32(float* input, int32_t* output, int32_t* r
             float leftSample = input[frame * 2] * globalScale;
             float rightSample = input[frame * 2 + 1] * globalScale;
             
-            // Clamp to prevent overflow
-            if (leftSample > 1.0f) leftSample = 1.0f;
-            else if (leftSample < -1.0f) leftSample = -1.0f;
-            if (rightSample > 1.0f) rightSample = 1.0f;
-            else if (rightSample < -1.0f) rightSample = -1.0f;
-            
             // Convert to 32-bit fixed point and add to existing buffer
+            // (no clamp needed — int32 provides ~128x headroom above 1.0
+            // and the output limiter handles peaks)
             int32_t leftInt = (int32_t)(leftSample * kScale);
             int32_t rightInt = (int32_t)(rightSample * kScale);
             output[frame * 2] += leftInt;     // Left
