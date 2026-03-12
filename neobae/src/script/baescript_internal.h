@@ -117,6 +117,7 @@ typedef enum {
     NODE_MIDI_PROP,         /* midi.property                    */
     NODE_NOTE_ON,           /* noteOn(ch, note, vel)            */
     NODE_NOTE_OFF,          /* noteOff(ch, note, vel)           */
+    NODE_HELP,              /* help()                           */
 } BAEScript_NodeType;
 
 /* Channel properties the user can access */
@@ -216,6 +217,9 @@ struct BAEScript_Context {
     uint32_t        length_ms;      /* total song length            */
     BAEScript_Var   vars[BAESCRIPT_MAX_VARS];
     int             var_count;
+    BAEScript_OutputFn output_fn;   /* optional print callback      */
+    void              *output_ud;   /* userdata for output callback */
+    int               help_shown;   /* help() only fires once       */
 };
 
 /* Evaluate a node tree; returns the result as int32_t */

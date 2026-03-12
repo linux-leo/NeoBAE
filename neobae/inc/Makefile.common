@@ -473,6 +473,9 @@ ifeq ($(BAESCRIPT),1)
 		src/script/baescript_lexer.c \
 		src/script/baescript_parser.c \
 		src/script/baescript_vm.c
+	ifneq ($(BUILD_GUI),)
+		SRC_BIN += src/gui/gui_script_editor.c
+	endif
 endif
 
 

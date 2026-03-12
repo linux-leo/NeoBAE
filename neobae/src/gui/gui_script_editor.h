@@ -1,0 +1,48 @@
+#ifndef GUI_SCRIPT_EDITOR_H
+#define GUI_SCRIPT_EDITOR_H
+
+#ifdef SUPPORT_BAESCRIPT
+
+#include <stdbool.h>
+#if defined(USE_SDL2)
+#include <SDL2/SDL_events.h>
+#else
+#include <SDL3/SDL_events.h>
+#endif
+
+// Initialize script editor system
+void script_editor_init(void);
+
+// Cleanup script editor system
+void script_editor_shutdown(void);
+
+// Toggle script editor window visibility
+void script_editor_toggle(void);
+
+// Show/hide script editor window
+void script_editor_show(void);
+void script_editor_hide(void);
+
+// Check if script editor is visible
+bool script_editor_is_visible(void);
+
+// Handle an SDL event (returns true if consumed)
+bool script_editor_handle_event(SDL_Event *event);
+
+// Update and render script editor (call from main loop)
+void script_editor_render(void);
+
+// Tick the script engine (call from playback loop when enabled)
+void script_editor_tick(void);
+
+// Check if script processing is enabled
+bool script_editor_is_enabled(void);
+
+// Get/set state for settings persistence
+const char *script_editor_get_path(void);
+const char *script_editor_get_text(void);
+bool script_editor_get_enabled(void);
+void script_editor_restore_state(const char *path, const char *text, bool enabled);
+
+#endif // SUPPORT_BAESCRIPT
+#endif // GUI_SCRIPT_EDITOR_H

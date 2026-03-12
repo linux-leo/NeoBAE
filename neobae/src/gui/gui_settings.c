@@ -147,8 +147,44 @@ Settings load_settings(void)
             settings.custom_reverb_preset_name[sizeof(settings.custom_reverb_preset_name) - 1] = '\0';
             settings.has_custom_reverb_preset = true;
         }
+        else if (strncmp(line, "script_enabled=", 15) == 0)
+        {
+            settings.script_enabled = (atoi(line + 15) != 0);
+            settings.has_script_enabled = true;
+        }
+        else if (strncmp(line, "script_path=", 12) == 0)
+        {
+            safe_strncpy(settings.script_path, line + 12, sizeof(settings.script_path) - 1);
+            settings.script_path[sizeof(settings.script_path) - 1] = '\0';
+            settings.has_script_path = true;
+        }
     }
     fclose(f);
+
+    /* Load script_text from separate file (may contain newlines) */
+    {
+        char script_text_path[768];
+#ifdef _WIN32
+        snprintf(script_text_path, sizeof(script_text_path), "%s\\zefidi_script.txt", exe_dir);
+#else
+        snprintf(script_text_path, sizeof(script_text_path), "%s/zefidi_script.txt", exe_dir);
+#endif
+        FILE *sf = fopen(script_text_path, "rb");
+        if (sf) {
+            fseek(sf, 0, SEEK_END);
+            long sz = ftell(sf);
+            if (sz > 0) {
+                if (sz > (long)sizeof(settings.script_text) - 1)
+                    sz = (long)sizeof(settings.script_text) - 1;
+                fseek(sf, 0, SEEK_SET);
+                int n = (int)fread(settings.script_text, 1, (size_t)sz, sf);
+                settings.script_text[n] = '\0';
+                settings.has_script_text = true;
+            }
+            fclose(sf);
+        }
+    }
+
     return settings;
 }
 
@@ -351,6 +387,14 @@ void save_full_settings(const Settings *settings)
         {
             fprintf(f, "custom_reverb_preset=%s\n", settings->custom_reverb_preset_name);
         }
+        if (settings->has_script_enabled)
+        {
+            fprintf(f, "script_enabled=%d\n", settings->script_enabled ? 1 : 0);
+        }
+        if (settings->has_script_path && settings->script_path[0])
+        {
+            fprintf(f, "script_path=%s\n", settings->script_path);
+        }
         
 #if USE_NEO_EFFECTS
         // Preserve existing custom reverb preset data
@@ -388,6 +432,28 @@ void save_full_settings(const Settings *settings)
         
         if (content) free(content);
         fclose(f);
+    }
+
+    /* Save script text to a separate file (it may contain newlines) */
+    {
+        char script_text_path[768];
+#ifdef _WIN32
+        snprintf(script_text_path, sizeof(script_text_path), "%s\\zefidi_script.txt", exe_dir);
+#else
+        snprintf(script_text_path, sizeof(script_text_path), "%s/zefidi_script.txt", exe_dir);
+#endif
+        if (settings->has_script_text && settings->script_text[0])
+        {
+            FILE *sf = fopen(script_text_path, "wb");
+            if (sf) {
+                fwrite(settings->script_text, 1, strlen(settings->script_text), sf);
+                fclose(sf);
+            }
+        }
+        else
+        {
+            remove(script_text_path);
+        }
     }
 }
 

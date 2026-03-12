@@ -64,6 +64,10 @@
 #include "gui_debug_console.h" // for debug console window
 #endif
 
+#if SUPPORT_BAESCRIPT == TRUE
+#include "gui_script_editor.h"
+#endif
+
 #if USE_SF2_SUPPORT == TRUE
     #if _USING_FLUIDSYNTH == TRUE
         #include "GenSF2_FluidSynth.h"
@@ -827,6 +831,10 @@ int main(int argc, char *argv[])
     debug_console_init();
     BAE_PRINTF("Debug console initialized (press F12 to toggle)\n");
 #endif
+
+#if SUPPORT_BAESCRIPT == TRUE
+    script_editor_init();
+#endif
     
 #if defined(USE_SDL2)
     if (TTF_Init() != 0)
@@ -930,6 +938,18 @@ int main(int argc, char *argv[])
 
     // Load bank database AFTER mixer so load_bank can succeed
     load_bankinfo();
+
+#if SUPPORT_BAESCRIPT == TRUE
+    // Restore script editor state from settings
+    if (settings.has_script_path || settings.has_script_text || settings.has_script_enabled)
+    {
+        script_editor_restore_state(
+            settings.has_script_path ? settings.script_path : NULL,
+            settings.has_script_text ? settings.script_text : NULL,
+            settings.has_script_enabled ? settings.script_enabled : false
+        );
+    }
+#endif
 
 #if SUPPORT_PLAYLIST == TRUE // Initialize playlist system
     playlist_init();
@@ -1227,6 +1247,11 @@ int main(int argc, char *argv[])
             // Let debug console handle its events first
             if (debug_console_handle_event(&e)) {
                 continue; // Event consumed by debug console, skip main window processing
+            }
+#endif
+#if SUPPORT_BAESCRIPT == TRUE
+            if (script_editor_handle_event(&e)) {
+                continue;
             }
 #endif
             switch (e.type)
@@ -5995,6 +6020,25 @@ int main(int argc, char *argv[])
                 }
             }
 
+#if SUPPORT_BAESCRIPT == TRUE
+            // Script button (left of About)
+            Rect scriptBtn = {aboutBtn.x - gap - btnW, baseY, btnW, btnH};
+            {
+                bool overScript = point_in(ui_mx, ui_my, scriptBtn);
+                SDL_Color scbg = overScript ? g_button_hover : g_button_base;
+                if (script_editor_is_visible()) scbg = g_button_press;
+                draw_rect(R, scriptBtn, scbg);
+                draw_frame(R, scriptBtn, g_button_border);
+                int sctw = 0, scth = 0;
+                measure_text("Script", &sctw, &scth);
+                draw_text(R, scriptBtn.x + (scriptBtn.w - sctw) / 2, scriptBtn.y + (scriptBtn.h - scth) / 2, "Script", g_button_text);
+                if (overScript && ui_mclick && !modal_block)
+                {
+                    script_editor_toggle();
+                }
+            }
+#endif
+
             // Load Bank button (left of Settings). Label trimmed to "Load Bank" per request.
             if (ui_button(R, loadBankBtn, "Load Bank", ui_mx, ui_my, ui_mdown) && ui_mclick && !modal_block)
             {
@@ -6707,6 +6751,14 @@ int main(int argc, char *argv[])
         // Render debug console if visible
         debug_console_render();
 #endif
+
+#if SUPPORT_BAESCRIPT == TRUE
+        script_editor_render();
+        // Tick script engine during playback
+        if (playing && !g_bae.paused) {
+            script_editor_tick();
+        }
+#endif
         
         Uint64 freq = SDL_GetPerformanceFrequency();
         Uint64 frame_end = SDL_GetPerformanceCounter();
@@ -6802,6 +6854,35 @@ int main(int argc, char *argv[])
         current_settings.has_window_pos = true;
         current_settings.window_x = x;
         current_settings.window_y = y;
+
+#if SUPPORT_BAESCRIPT == TRUE
+        /* Save script editor state */
+        current_settings.has_script_enabled = true;
+        current_settings.script_enabled = script_editor_get_enabled();
+        const char *se_path = script_editor_get_path();
+        if (se_path && se_path[0]) {
+            safe_strncpy(current_settings.script_path, se_path, sizeof(current_settings.script_path) - 1);
+            current_settings.script_path[sizeof(current_settings.script_path) - 1] = '\0';
+            current_settings.has_script_path = true;
+        } else {
+            current_settings.script_path[0] = '\0';
+            current_settings.has_script_path = false;
+        }
+        /* Always save the current text buffer (fallback if file is moved/deleted) */
+        const char *se_text = script_editor_get_text();
+        if (se_text && se_text[0]) {
+            size_t tlen = strlen(se_text);
+            if (tlen > sizeof(current_settings.script_text) - 1)
+                tlen = sizeof(current_settings.script_text) - 1;
+            memcpy(current_settings.script_text, se_text, tlen);
+            current_settings.script_text[tlen] = '\0';
+            current_settings.has_script_text = true;
+        } else {
+            current_settings.script_text[0] = '\0';
+            current_settings.has_script_text = false;
+        }
+#endif
+
         save_full_settings(&current_settings);
     }
 
@@ -6856,6 +6937,9 @@ int main(int argc, char *argv[])
 #endif
 #ifdef _DEBUG
     debug_console_shutdown();
+#endif
+#if SUPPORT_BAESCRIPT == TRUE
+    script_editor_shutdown();
 #endif
     if (g_font)
         TTF_CloseFont(g_font);

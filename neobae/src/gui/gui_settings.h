@@ -36,6 +36,12 @@ typedef struct
     int window_y;
     bool has_custom_reverb_preset;
     char custom_reverb_preset_name[64];
+    bool has_script_enabled;
+    bool script_enabled;
+    bool has_script_path;
+    char script_path[1024];
+    bool has_script_text;
+    char script_text[65536];
 } Settings;
 
 // Custom reverb preset structure

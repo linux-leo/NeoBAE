@@ -487,6 +487,16 @@ static BAEScript_Node *parse_statement(Parser *p)
     if (parser_check(p, TOK_IDENT) && strcmp(p->current.value.str, "print") == 0)
         return parse_print(p);
 
+    /* help() */
+    if (parser_check(p, TOK_IDENT) && strcmp(p->current.value.str, "help") == 0) {
+        int line = p->current.line;
+        parser_advance(p); /* consume 'help' */
+        parser_expect(p, TOK_LPAREN,    "Expected '(' after 'help'");
+        parser_expect(p, TOK_RPAREN,    "Expected ')' after 'help('");
+        parser_expect(p, TOK_SEMICOLON, "Expected ';' after 'help()'");
+        return new_node(NODE_HELP, line);
+    }
+
     /* ch[expr].prop = expr; */
     if (parser_check(p, TOK_CH)) {
         /* Could be either read (expression statement) or write (assignment).

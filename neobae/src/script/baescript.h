@@ -44,6 +44,19 @@ extern "C" {
 typedef struct BAEScript_Context BAEScript_Context;
 
 /**
+ * Callback for print() output. If set, print() sends text here
+ * instead of stderr.
+ */
+typedef void (*BAEScript_OutputFn)(const char *text, void *userdata);
+
+/**
+ * Set a callback to receive print() output.
+ */
+void BAEScript_SetOutputCallback(BAEScript_Context *ctx,
+                                 BAEScript_OutputFn fn,
+                                 void *userdata);
+
+/**
  * Load a script from a file path.
  * Returns NULL on error (parse failure printed to stderr).
  */

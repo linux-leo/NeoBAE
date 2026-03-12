@@ -7,6 +7,79 @@
 
 #include "baescript_internal.h"
 
+/* ── output callback ────────────────────────────────────────────────── */
+
+void BAEScript_SetOutputCallback(BAEScript_Context *ctx,
+                                 BAEScript_OutputFn fn,
+                                 void *userdata)
+{
+    if (!ctx) return;
+    ctx->output_fn = fn;
+    ctx->output_ud = userdata;
+}
+
+static void ctx_output(BAEScript_Context *ctx, const char *text)
+{
+    if (ctx->output_fn)
+        ctx->output_fn(text, ctx->output_ud);
+    else
+        fprintf(stderr, "%s", text);
+}
+
+/* ── help text ──────────────────────────────────────────────────────── */
+
+static const char *HELP_TEXT =
+    "BAEScript Language Reference\n"
+    "============================\n"
+    "\n"
+    "  Variables:\n"
+    "    var x = 42;            Declare a variable\n"
+    "    x = x + 1;             Assignment\n"
+    "\n"
+    "  Control Flow:\n"
+    "    if (cond) { }          Conditional\n"
+    "    if (cond) { } else { } Conditional with else\n"
+    "    while (cond) { }       Loop (max 10000 iterations/tick)\n"
+    "\n"
+    "  Operators:\n"
+    "    +  -  *  /  %          Arithmetic\n"
+    "    ==  !=  <  >  <=  >=   Comparison\n"
+    "    &&  ||  !              Logical\n"
+    "\n"
+    "  Channel Properties (ch[1..16]):\n"
+    "    ch[N].instrument       Program number (0-127)\n"
+    "    ch[N].volume           CC 7 (0-127)\n"
+    "    ch[N].pan              CC 10 (0-127)\n"
+    "    ch[N].expression       CC 11 (0-127)\n"
+    "    ch[N].pitchbend        Pitch bend (0-16383, 8192=center)\n"
+    "    ch[N].mute             Mute flag (0 or 1)\n"
+    "    Read:  var v = ch[1].volume;\n"
+    "    Write: ch[1].volume = 100;\n"
+    "\n"
+    "  MIDI Functions:\n"
+    "    noteOn(ch, note, vel);   Send Note On\n"
+    "    noteOff(ch, note, vel);  Send Note Off\n"
+    "\n"
+    "  Global Objects:\n"
+    "    midi.timestamp         Current position (ms)\n"
+    "    midi.length            Song length (ms)\n"
+    "\n"
+    "  Output:\n"
+    "    print(expr, ...);      Print values to console\n"
+    "    help();                Show this reference\n"
+    "\n"
+    "  Data Types:\n"
+    "    Numbers: 42, 0xFF     Integer (decimal or hex)\n"
+    "    Strings: \"hello\"       Double or single quoted\n"
+    "    Booleans: true, false\n"
+    "\n"
+    "  Comments:\n"
+    "    // line comment\n"
+    "    /* block comment */\n"
+    "\n"
+    "  Note: Scripts execute once per tick (~15ms).\n"
+    "  Use variables to track state across ticks.\n";
+
 /* ── variable helpers ───────────────────────────────────────────────── */
 
 static int32_t *var_lookup(BAEScript_Context *ctx, const char *name)
@@ -275,17 +348,30 @@ void BAEScript_Exec(BAEScript_Context *ctx, BAEScript_Node *node)
         }
 
         case NODE_PRINT: {
+            char line_buf[2048];
+            int pos = 0;
             for (int i = 0; i < node->data.print_call.count; i++) {
                 BAEScript_Node *arg = node->data.print_call.args[i];
                 if (arg && arg->type == NODE_STRING) {
-                    fprintf(stderr, "%s", arg->data.str);
+                    pos += snprintf(line_buf + pos, sizeof(line_buf) - pos, "%s", arg->data.str);
                 } else {
-                    fprintf(stderr, "%d", (int)BAEScript_Eval(ctx, arg));
+                    pos += snprintf(line_buf + pos, sizeof(line_buf) - pos, "%d", (int)BAEScript_Eval(ctx, arg));
                 }
-                if (i + 1 < node->data.print_call.count)
-                    fprintf(stderr, " ");
+                if (i + 1 < node->data.print_call.count && pos < (int)sizeof(line_buf) - 1)
+                    line_buf[pos++] = ' ';
             }
-            fprintf(stderr, "\n");
+            if (pos < (int)sizeof(line_buf) - 1)
+                line_buf[pos++] = '\n';
+            line_buf[pos] = '\0';
+            ctx_output(ctx, line_buf);
+            break;
+        }
+
+        case NODE_HELP: {
+            if (!ctx->help_shown) {
+                ctx_output(ctx, HELP_TEXT);
+                ctx->help_shown = 1;
+            }
             break;
         }
 
