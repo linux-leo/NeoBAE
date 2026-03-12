@@ -791,6 +791,10 @@ static int16_t PV_L2(int16_t maxVoice)
 {
     return L2Levels[maxVoice - 1];
 }
+
+// Native HSB engine output cap. 128/256 == 50% maximum level.
+#define HSB_MAX_OUTPUT_SCALE_NUM 128
+#define HSB_MAX_OUTPUT_SCALE_DEN 256
 #else
 #define L2_ZERO_LEVEL 1250.0
 #include <math.h>
@@ -811,6 +815,7 @@ void PV_CalcScaleBack(void)
 
 #if 1
     pMixer->scaleBackAmount = PV_L2(pMixer->mixLevel);
+    pMixer->scaleBackAmount = (int16_t)(((INT32)pMixer->scaleBackAmount * HSB_MAX_OUTPUT_SCALE_NUM) / HSB_MAX_OUTPUT_SCALE_DEN);
 #else
     int noteScale;
     int32_t scaleSize;
