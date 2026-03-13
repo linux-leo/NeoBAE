@@ -3,7 +3,7 @@
 
 // Mute drums after 5 seconds
 if (midi.timestamp >= 5000 && ch[10].mute == 0) {
-    ch[10].mute = 1;
+    ch[9].mute = 1;
     print("Muted drums at", midi.timestamp, "ms");
 }
 
@@ -11,5 +11,5 @@ if (midi.timestamp >= 5000 && ch[10].mute == 0) {
 // over the first 10 seconds of playback
 if (midi.timestamp < 10000) {
     var panValue = 64 - (midi.timestamp * 64 / 10000);
-    ch[1].pan = panValue;
+    ch[0].pan = panValue;
 }

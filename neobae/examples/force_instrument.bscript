@@ -1,12 +1,12 @@
 // Example BAEScript: Force channel 1 to instrument 100,
 // and switch to instrument 98 after 10 seconds.
 
-if (ch[1].instrument != 100 && midi.timestamp < 10000) {
-    ch[1].instrument = 100;
+if (ch[0].instrument != 100 && midi.timestamp < 10000) {
+    ch[10].instrument = 100;
     print("Forced ch1 to instrument 100");
 }
 
-if (midi.timestamp >= 10000 && ch[1].instrument != 98) {
-    ch[1].instrument = 98;
+if (midi.timestamp >= 10000 && ch[0].instrument != 98) {
+    ch[0].instrument = 98;
     print("Switched ch1 to instrument 98 at", midi.timestamp, "ms");
 }
