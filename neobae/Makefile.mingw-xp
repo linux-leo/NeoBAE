@@ -12,19 +12,21 @@ endif
 include inc/Makefile.common
 TARGET_BIN		:= $(TARGET_NAME).exe
 
-ARCH		:=
-CC			:= /mingw32-xp/bin/i686-w64-mingw32-gcc.exe
-CXX			:= /mingw32-xp/bin/i686-w64-mingw32-g++.exe
+CROSS 		:= i686-w64-mingw32
+ARCH		:= -static
+CC			:= $(CROSS)-gcc
+CXX			:= $(CROSS)-g++
+
 # Use C++ linker if we have any C++ sources
 ifneq ($(filter %.cpp,$(SRC) $(SRC_BIN)),)
 LD			:= $(CXX)
 else
 LD			:= $(CC)
 endif
-AR      	:= /mingw32-xp/bin/i686-w64-mingw32-gcc-ar.exe
-STRIP      	:= /mingw32-xp/bin/strip.exe
-DLLTOOL		:= /mingw32-xp/bin/dlltool.exe
-WINDRES		:= /mingw32-xp/bin/windres.exe
+AR      	:= $(CROSS)-gcc-ar
+STRIP      	:= $(CROSS)-strip
+DLLTOOL		:= $(CROSS)-dlltool
+WINDRES		:= $(CROSS)-windres
 
 INC_PATH += -I/mingw32-xp/local/include -I/mingw32-xp/include
 BAE_LD_FLAGS += -L/mingw32-xp/local/lib -L/mingw32-xp/lib

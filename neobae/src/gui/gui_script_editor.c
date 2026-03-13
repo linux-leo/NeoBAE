@@ -1248,7 +1248,12 @@ bool script_editor_handle_event(SDL_Event *event)
 {
     if (!g_se_visible || !g_se_window || !event) return false;
 
+    /* SDL2 returns Uint32; SDL3 exposes SDL_WindowID. */
+#if defined(USE_SDL2)
+    Uint32 se_win_id = SDL_GetWindowID(g_se_window);
+#else
     SDL_WindowID se_win_id = SDL_GetWindowID(g_se_window);
+#endif
     bool is_ours = false;
 
     switch (event->type) {
@@ -1667,7 +1672,12 @@ void script_editor_render(void)
     mouse_y = (int)fmy;
 #endif
     /* Only use mouse pos if this window is focused */
+    /* SDL2 returns Uint32; SDL3 exposes SDL_WindowID. */
+#if defined(USE_SDL2)
+    Uint32 focus_id = SDL_GetWindowID(g_se_window);
+#else
     SDL_WindowID focus_id = SDL_GetWindowID(g_se_window);
+#endif
     SDL_Window *focused_win = SDL_GetKeyboardFocus();
     bool has_focus = focused_win && SDL_GetWindowID(focused_win) == focus_id;
     if (!has_focus) { mouse_x = -1000; mouse_y = -1000; }
