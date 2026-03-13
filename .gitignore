@@ -26,3 +26,5 @@ neobae/src/NeoBAEDroid/app/release/
 neobae/src/NeoBAEDroid/app/NeoBAEDroid.app.iml
 neobae/src/NeoBAEDroid/app/NeoBAEDroid.app.main.iml
 neobae/src/NeoBAEDroid/.kotlin/
+neobae/src/NeoBAEDroid/app/NeoBAEDroid.app.androidTest.iml
+neobae/src/NeoBAEDroid/app/NeoBAEDroid.app.unitTest.iml
