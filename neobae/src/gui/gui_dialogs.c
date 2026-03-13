@@ -1201,7 +1201,7 @@ void render_about_dialog(SDL_Renderer *R, int mx, int my, bool mclick)
             // NeoBAE is obviously required
             "",
             "NeoBAE",
-            "Copyright (c) 2025 Zefie Networks",
+            "Copyright (c) 2026 Zefie Networks",
             "Based on miniBAE, Copyright (c) 2009 Beatnik, Inc.",
             "Original miniBAE source code available at:",
             "https://github.com/heyigor/miniBAE/",
@@ -1214,7 +1214,7 @@ void render_about_dialog(SDL_Renderer *R, int mx, int my, bool mclick)
             "SDL3 & SDL3_ttf",
 #endif
 #if defined(USE_SDL2) || X_PLATFORM == X_SDL3
-            "Copyright (C) 1997-2025 Sam Lantinga <slouken@libsdl.org>",
+            "Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>",
             "https://www.libsdl.org/",
 #endif      
 #if USE_MPEG_DECODER == TRUE
@@ -1309,7 +1309,7 @@ void render_about_dialog(SDL_Renderer *R, int mx, int my, bool mclick)
 #if _USING_FLUIDSYNTH == TRUE
             "",
             "FluidSynth",
-            "Copyright (C) 2004-205 FluidSynth Team",
+            "Copyright (C) 2004-2026 FluidSynth Team",
             "https://www.fluidsynth.org/",
 #endif
             "",
