@@ -421,7 +421,10 @@ else
 		SRC_BIN	:= $(SRC) src/mid2rmi/mid2rmi.c
 	else
 		ifeq ($(NBSTUDIO),1)
-			SRC_BIN := $(SRC) src/rmfeditor_wx/editor_main.cpp
+			SRC_BIN := $(SRC) \
+				src/rmfeditor_wx/editor_main.cpp \
+				src/rmfeditor_wx/editor_instrument_dialog.cpp \
+				src/rmfeditor_wx/editor_pianoroll_panel.cpp
 		else
 			# playbae = libNeoBAE srcs + playbae.c
 			SRC_BIN	:= $(SRC) src/playbae/playbae.c

@@ -26,26 +26,13 @@ extern "C" {
 #include "NeoBAE.h"
 }
 
+#include "editor_instrument_dialog.h"
+#include "editor_pianoroll_panel.h"
+
 namespace {
 
-constexpr int kPianoRollLeftGutter = 64;
-constexpr int kPianoRollTopGutter = 30;
-constexpr int kNoteHeight = 12;
-constexpr int kBasePixelsPerQuarter = 96;
-constexpr int kResizeHandlePixels = 6;
-constexpr int kAutomationLaneHeight = 44;
-constexpr int kAutomationLaneGap = 6;
 constexpr int kAutomationLaneCount = 4;
-constexpr uint32_t kDefaultNoteDuration = 480;
-constexpr uint32_t kSnapTicks = 120;
 constexpr char const *kVersionString = "0.02 alpha";
-
-enum class DragMode {
-    None,
-    Move,
-    ResizeLeft,
-    ResizeRight,
-};
 
 enum {
     ID_TrackAdd = wxID_HIGHEST + 200,
@@ -56,21 +43,6 @@ enum {
     ID_SampleDelete,
     ID_LoadBank,
     ID_UnloadBanks,
-    ID_PianoRollEdit,
-    ID_PianoRollDelete,
-};
-
-enum class PianoRollSelectionKind {
-    None,
-    Note,
-    Automation,
-};
-
-struct AutomationLaneDescriptor {
-    char const *label;
-    unsigned char controller;
-    wxColour color;
-    int maxValue;
 };
 
 struct UndoTempoEventState {
@@ -100,28 +72,13 @@ struct UndoEntry {
     UndoDocumentState after;
 };
 
-struct AutomationHitInfo {
-    int laneIndex;
-    uint32_t eventIndex;
-    uint32_t tick;
-    uint32_t endTick;
-    int laneTop;
-    int laneBottom;
-    int leftX;
-    int rightX;
-    int value;
-    bool hasFollowingEvent;
-};
-
-static AutomationLaneDescriptor const kAutomationLanes[kAutomationLaneCount] = {
-    { "Tempo", 0,  wxColour(202, 128, 52), 240 },
-    { "Volume", 7, wxColour(74, 136, 208), 127 },
-    { "Pan", 10, wxColour(166, 96, 196), 127 },
-    { "Expr", 11, wxColour(76, 170, 92), 127 },
-};
-
 static unsigned char GetUndoCCController(int ccSlot) {
-    return kAutomationLanes[ccSlot + 1].controller;
+    static unsigned char const kControllers[kAutomationLaneCount - 1] = { 7, 10, 11 };
+
+    if (ccSlot < 0 || ccSlot >= kAutomationLaneCount - 1) {
+        return 0;
+    }
+    return kControllers[ccSlot];
 }
 
 static bool NoteInfoEquals(BAERmfEditorNoteInfo const &left, BAERmfEditorNoteInfo const &right) {
@@ -169,2277 +126,6 @@ static bool UndoSnapshotsEqual(UndoDocumentState const &left, UndoDocumentState 
     }
     return true;
 }
-
-class NoteEditDialog final : public wxDialog {
-public:
-    explicit NoteEditDialog(wxWindow *parent, BAERmfEditorNoteInfo const &noteInfo)
-        : wxDialog(parent, wxID_ANY, "Edit Note", wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {
-        wxBoxSizer *rootSizer = new wxBoxSizer(wxVERTICAL);
-        wxFlexGridSizer *gridSizer = new wxFlexGridSizer(2, 6, 8, 8);
-
-        m_startTickText = new wxTextCtrl(this, wxID_ANY, wxString::Format("%u", static_cast<unsigned>(noteInfo.startTick)));
-        m_durationText = new wxTextCtrl(this, wxID_ANY, wxString::Format("%u", static_cast<unsigned>(noteInfo.durationTicks)));
-        m_noteSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, noteInfo.note);
-        m_velocitySpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, noteInfo.velocity);
-        m_bankSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 16383, noteInfo.bank);
-        m_programSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, noteInfo.program);
-
-        gridSizer->Add(new wxStaticText(this, wxID_ANY, "Start Tick"), 0, wxALIGN_CENTER_VERTICAL);
-        gridSizer->Add(m_startTickText, 1, wxEXPAND);
-        gridSizer->Add(new wxStaticText(this, wxID_ANY, "Duration"), 0, wxALIGN_CENTER_VERTICAL);
-        gridSizer->Add(m_durationText, 1, wxEXPAND);
-        gridSizer->Add(new wxStaticText(this, wxID_ANY, "Note"), 0, wxALIGN_CENTER_VERTICAL);
-        gridSizer->Add(m_noteSpin, 1, wxEXPAND);
-        gridSizer->Add(new wxStaticText(this, wxID_ANY, "Velocity"), 0, wxALIGN_CENTER_VERTICAL);
-        gridSizer->Add(m_velocitySpin, 1, wxEXPAND);
-        gridSizer->Add(new wxStaticText(this, wxID_ANY, "Bank"), 0, wxALIGN_CENTER_VERTICAL);
-        gridSizer->Add(m_bankSpin, 1, wxEXPAND);
-        gridSizer->Add(new wxStaticText(this, wxID_ANY, "Program"), 0, wxALIGN_CENTER_VERTICAL);
-        gridSizer->Add(m_programSpin, 1, wxEXPAND);
-        gridSizer->AddGrowableCol(1, 1);
-
-        rootSizer->Add(gridSizer, 1, wxEXPAND | wxALL, 12);
-        rootSizer->Add(CreateSeparatedButtonSizer(wxOK | wxCANCEL), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
-        SetSizerAndFit(rootSizer);
-    }
-
-    bool GetNoteInfo(BAERmfEditorNoteInfo *outNoteInfo) const {
-        unsigned long long startTick;
-        unsigned long long durationTicks;
-
-        if (!outNoteInfo) {
-            return false;
-        }
-        if (!m_startTickText->GetValue().ToULongLong(&startTick) || !m_durationText->GetValue().ToULongLong(&durationTicks) || durationTicks == 0) {
-            return false;
-        }
-        outNoteInfo->startTick = static_cast<uint32_t>(startTick);
-        outNoteInfo->durationTicks = static_cast<uint32_t>(durationTicks);
-        outNoteInfo->note = static_cast<unsigned char>(m_noteSpin->GetValue());
-        outNoteInfo->velocity = static_cast<unsigned char>(m_velocitySpin->GetValue());
-        outNoteInfo->bank = static_cast<uint16_t>(m_bankSpin->GetValue());
-        outNoteInfo->program = static_cast<unsigned char>(m_programSpin->GetValue());
-        return true;
-    }
-
-private:
-    wxTextCtrl *m_startTickText;
-    wxTextCtrl *m_durationText;
-    wxSpinCtrl *m_noteSpin;
-    wxSpinCtrl *m_velocitySpin;
-    wxSpinCtrl *m_bankSpin;
-    wxSpinCtrl *m_programSpin;
-};
-
-class AutomationEditDialog final : public wxDialog {
-public:
-    AutomationEditDialog(wxWindow *parent, wxString const &title, wxString const &valueLabel, uint32_t tick, int value, int maxValue)
-        : wxDialog(parent, wxID_ANY, title, wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {
-        wxBoxSizer *rootSizer = new wxBoxSizer(wxVERTICAL);
-        wxFlexGridSizer *gridSizer = new wxFlexGridSizer(2, 4, 8, 8);
-
-        m_tickText = new wxTextCtrl(this, wxID_ANY, wxString::Format("%u", static_cast<unsigned>(tick)));
-        m_valueSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, maxValue, value);
-
-        gridSizer->Add(new wxStaticText(this, wxID_ANY, "Tick"), 0, wxALIGN_CENTER_VERTICAL);
-        gridSizer->Add(m_tickText, 1, wxEXPAND);
-        gridSizer->Add(new wxStaticText(this, wxID_ANY, valueLabel), 0, wxALIGN_CENTER_VERTICAL);
-        gridSizer->Add(m_valueSpin, 1, wxEXPAND);
-        gridSizer->AddGrowableCol(1, 1);
-
-        rootSizer->Add(gridSizer, 1, wxEXPAND | wxALL, 12);
-        rootSizer->Add(CreateSeparatedButtonSizer(wxOK | wxCANCEL), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
-        SetSizerAndFit(rootSizer);
-    }
-
-    bool GetValues(uint32_t *outTick, int *outValue) const {
-        unsigned long long tick;
-
-        if (!outTick || !outValue) {
-            return false;
-        }
-        if (!m_tickText->GetValue().ToULongLong(&tick)) {
-            return false;
-        }
-        *outTick = static_cast<uint32_t>(tick);
-        *outValue = m_valueSpin->GetValue();
-        return true;
-    }
-
-private:
-    wxTextCtrl *m_tickText;
-    wxSpinCtrl *m_valueSpin;
-};
-
-class PianoRollPanel final : public wxScrolledWindow {
-public:
-    explicit PianoRollPanel(wxWindow *parent)
-        : wxScrolledWindow(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                           wxBORDER_SIMPLE | wxVSCROLL | wxHSCROLL),
-          m_document(nullptr),
-          m_selectedTrack(-1),
-          m_selectedNote(-1),
-          m_dragging(false),
-          m_dragMode(DragMode::None),
-          m_showPlayhead(false),
-          m_playheadTick(0),
-          m_selectedItemKind(PianoRollSelectionKind::None),
-          m_selectedAutomationLane(-1),
-          m_selectedAutomationEvent(-1),
-          m_dragAutomationValid(false),
-          m_dragStartTick(0),
-          m_dragStartNote(0),
-          m_newNoteBank(0),
-                    m_newNoteProgram(0),
-                    m_zoomScale(1.0f) {
-        SetBackgroundStyle(wxBG_STYLE_PAINT);
-        SetScrollRate(16, 16);
-        Bind(wxEVT_PAINT, &PianoRollPanel::OnPaint, this);
-        Bind(wxEVT_LEFT_DOWN, &PianoRollPanel::OnLeftDown, this);
-        Bind(wxEVT_LEFT_UP, &PianoRollPanel::OnLeftUp, this);
-        Bind(wxEVT_LEFT_DCLICK, &PianoRollPanel::OnLeftDoubleClick, this);
-        Bind(wxEVT_RIGHT_DOWN, &PianoRollPanel::OnRightDown, this);
-        Bind(wxEVT_MOTION, &PianoRollPanel::OnMotion, this);
-        Bind(wxEVT_LEAVE_WINDOW, &PianoRollPanel::OnMouseLeave, this);
-        Bind(wxEVT_MOUSEWHEEL, &PianoRollPanel::OnMouseWheel, this);
-        Bind(wxEVT_CHAR_HOOK, &PianoRollPanel::OnCharHook, this);
-        Bind(wxEVT_MENU, &PianoRollPanel::OnEditSelectedItem, this, ID_PianoRollEdit);
-        Bind(wxEVT_MENU, &PianoRollPanel::OnDeleteSelectedItem, this, ID_PianoRollDelete);
-        UpdateVirtualSize();
-    }
-
-    void SetDocument(BAERmfEditorDocument *document) {
-        m_document = document;
-        m_selectedTrack = -1;
-        m_selectedNote = -1;
-        m_selectedItemKind = PianoRollSelectionKind::None;
-        m_selectedAutomationLane = -1;
-        m_selectedAutomationEvent = -1;
-        m_dragAutomationValid = false;
-        m_dragging = false;
-        m_dragMode = DragMode::None;
-        UpdateVirtualSize();
-        ScrollToBottom();
-        Refresh();
-    }
-
-    void SetSelectedTrack(int trackIndex) {
-        m_selectedTrack = trackIndex;
-        m_selectedNote = -1;
-        m_selectedItemKind = PianoRollSelectionKind::None;
-        m_selectedAutomationLane = -1;
-        m_selectedAutomationEvent = -1;
-        m_dragAutomationValid = false;
-        m_dragging = false;
-        m_dragMode = DragMode::None;
-        UpdateVirtualSize();
-        ScrollToBottom();
-        Refresh();
-    }
-
-    void SetSelectionChangedCallback(std::function<void()> callback) {
-        m_selectionChangedCallback = std::move(callback);
-    }
-
-    void SetUndoCallbacks(std::function<void(wxString const &)> beginCallback,
-                          std::function<void(wxString const &)> commitCallback,
-                          std::function<void()> cancelCallback) {
-        m_beginUndoCallback = std::move(beginCallback);
-        m_commitUndoCallback = std::move(commitCallback);
-        m_cancelUndoCallback = std::move(cancelCallback);
-    }
-
-    void RefreshFromDocument(bool clearSelection) {
-        if (clearSelection) {
-            m_selectedItemKind = PianoRollSelectionKind::None;
-            m_selectedNote = -1;
-            m_selectedAutomationLane = -1;
-            m_selectedAutomationEvent = -1;
-        }
-        m_dragging = false;
-        m_dragAutomationValid = false;
-        m_dragMode = DragMode::None;
-        m_dragUndoActive = false;
-        m_dragUndoLabel.clear();
-        UpdateVirtualSize();
-        Refresh();
-        if (m_selectionChangedCallback) {
-            m_selectionChangedCallback();
-        }
-    }
-
-    bool GetSelectedNoteInfo(BAERmfEditorNoteInfo *outNoteInfo) const {
-        if (!outNoteInfo || !HasTrack() || m_selectedNote < 0) {
-            return false;
-        }
-        return BAERmfEditorDocument_GetNoteInfo(m_document,
-                                                static_cast<uint16_t>(m_selectedTrack),
-                                                static_cast<uint32_t>(m_selectedNote),
-                                                outNoteInfo) == BAE_NO_ERROR;
-    }
-
-    void SetSelectedNoteInstrument(uint16_t bank, unsigned char program) {
-        BAERmfEditorNoteInfo noteInfo;
-
-        if (!GetSelectedNoteInfo(&noteInfo)) {
-            return;
-        }
-        noteInfo.bank = bank;
-        noteInfo.program = program;
-        BeginUndoAction("Change Note Instrument");
-        if (BAERmfEditorDocument_SetNoteInfo(m_document,
-                                             static_cast<uint16_t>(m_selectedTrack),
-                                             static_cast<uint32_t>(m_selectedNote),
-                                             &noteInfo) == BAE_NO_ERROR) {
-            CommitUndoAction("Change Note Instrument");
-            Refresh();
-        } else {
-            CancelUndoAction();
-        }
-    }
-
-    void SetNewNoteInstrument(uint16_t bank, unsigned char program) {
-        m_newNoteBank = bank;
-        m_newNoteProgram = program;
-    }
-
-    void SetPlayheadTick(uint32_t tick) {
-        m_showPlayhead = true;
-        m_playheadTick = tick;
-        Refresh();
-    }
-
-    void EnsurePlayheadVisible(uint32_t tick) {
-        int scrollPixelsX;
-        int scrollPixelsY;
-        int viewUnitsX;
-        int viewUnitsY;
-        int viewLeft;
-        int visibleWidth;
-        int playheadX;
-        int followPadding;
-        int followBoundary;
-        int newViewLeft;
-        int maxViewLeft;
-        wxSize virtualSize;
-
-        scrollPixelsX = 0;
-        scrollPixelsY = 0;
-        GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
-        if (scrollPixelsX <= 0) {
-            return;
-        }
-        GetViewStart(&viewUnitsX, &viewUnitsY);
-        viewLeft = viewUnitsX * scrollPixelsX;
-        visibleWidth = GetClientSize().GetWidth();
-        if (visibleWidth <= 0) {
-            return;
-        }
-
-        playheadX = TickToX(tick);
-        followPadding = std::max(48, visibleWidth / 5);
-        followBoundary = viewLeft + visibleWidth - followPadding;
-        if (playheadX <= followBoundary) {
-            return;
-        }
-
-        virtualSize = GetVirtualSize();
-        maxViewLeft = std::max(0, virtualSize.GetWidth() - visibleWidth);
-        newViewLeft = std::min(maxViewLeft, playheadX - (visibleWidth - followPadding));
-        Scroll(newViewLeft / scrollPixelsX, viewUnitsY);
-    }
-
-    void JumpToTick(uint32_t tick) {
-        int scrollPixelsX;
-        int scrollPixelsY;
-        int viewUnitsX;
-        int viewUnitsY;
-        int visibleWidth;
-        int targetX;
-        int targetViewLeft;
-        wxSize virtualSize;
-
-        GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
-        if (scrollPixelsX <= 0) {
-            return;
-        }
-        GetViewStart(&viewUnitsX, &viewUnitsY);
-        visibleWidth = GetClientSize().GetWidth();
-        if (visibleWidth <= 0) {
-            return;
-        }
-        targetX = TickToX(tick);
-        targetViewLeft = targetX - visibleWidth / 4;
-        virtualSize = GetVirtualSize();
-        targetViewLeft = std::clamp(targetViewLeft, 0, std::max(0, virtualSize.GetWidth() - visibleWidth));
-        /* Preserve vertical scroll position; only change horizontal. */
-        Scroll(targetViewLeft / scrollPixelsX, viewUnitsY);
-    }
-
-    void ClearPlayhead() {
-        m_showPlayhead = false;
-        Refresh();
-    }
-
-private:
-    BAERmfEditorDocument *m_document;
-    int m_selectedTrack;
-    long m_selectedNote;
-    bool m_dragging;
-    DragMode m_dragMode;
-    bool m_showPlayhead;
-    uint32_t m_playheadTick;
-    PianoRollSelectionKind m_selectedItemKind;
-    int m_selectedAutomationLane;
-    long m_selectedAutomationEvent;
-    bool m_dragAutomationValid;
-    AutomationHitInfo m_dragAutomationHit;
-    BAERmfEditorNoteInfo m_dragOriginalNote;
-    uint32_t m_dragStartTick;
-    int m_dragStartNote;
-    uint16_t m_newNoteBank;
-    unsigned char m_newNoteProgram;
-    std::function<void()> m_selectionChangedCallback;
-    std::function<void(wxString const &)> m_beginUndoCallback;
-    std::function<void(wxString const &)> m_commitUndoCallback;
-    std::function<void()> m_cancelUndoCallback;
-    bool m_dragUndoActive = false;
-    wxString m_dragUndoLabel;
-    float m_zoomScale;
-
-    void BeginUndoAction(wxString const &label) {
-        if (m_beginUndoCallback) {
-            m_beginUndoCallback(label);
-        }
-    }
-
-    void CommitUndoAction(wxString const &label) {
-        if (m_commitUndoCallback) {
-            m_commitUndoCallback(label);
-        }
-    }
-
-    void CancelUndoAction() {
-        if (m_cancelUndoCallback) {
-            m_cancelUndoCallback();
-        }
-    }
-
-    void ApplyZoomStep(int wheelRotation, wxPoint clientPoint) {
-        double oldScale;
-        uint32_t anchorTick;
-        int scrollPixelsX;
-        int scrollPixelsY;
-        int viewUnitsX;
-        int viewUnitsY;
-        int oldViewLeft;
-        int oldViewTop;
-        int logicalAnchorX;
-        int newAnchorX;
-        int newViewLeft;
-        int maxViewLeft;
-        int clientWidth;
-        wxSize virtualSize;
-
-        oldScale = m_zoomScale;
-        if (wheelRotation > 0) {
-            m_zoomScale = std::min(8.0f, m_zoomScale * 1.15f);
-        } else {
-            m_zoomScale = std::max(0.2f, m_zoomScale / 1.15f);
-        }
-        if (std::abs(m_zoomScale - oldScale) < 0.0001f) {
-            return;
-        }
-
-        GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
-        if (scrollPixelsX <= 0) {
-            scrollPixelsX = 1;
-        }
-        if (scrollPixelsY <= 0) {
-            scrollPixelsY = 1;
-        }
-        GetViewStart(&viewUnitsX, &viewUnitsY);
-        oldViewLeft = viewUnitsX * scrollPixelsX;
-        oldViewTop = viewUnitsY * scrollPixelsY;
-        logicalAnchorX = oldViewLeft + clientPoint.x;
-        anchorTick = XToTick(logicalAnchorX);
-
-        UpdateVirtualSize();
-        newAnchorX = TickToX(anchorTick);
-        newViewLeft = std::max(0, newAnchorX - clientPoint.x);
-        clientWidth = GetClientSize().GetWidth();
-        virtualSize = GetVirtualSize();
-        maxViewLeft = std::max(0, virtualSize.GetWidth() - std::max(1, clientWidth));
-        newViewLeft = std::clamp(newViewLeft, 0, maxViewLeft);
-        Scroll(newViewLeft / scrollPixelsX, oldViewTop / scrollPixelsY);
-        Refresh();
-    }
-
-    wxRect BuildNoteRect(BAERmfEditorNoteInfo const &noteInfo) const {
-        return wxRect(TickToX(noteInfo.startTick),
-                      NoteToY(noteInfo.note),
-                      std::max(8, TickToX(noteInfo.startTick + noteInfo.durationTicks) - TickToX(noteInfo.startTick)),
-                      kNoteHeight - 1);
-    }
-
-    DragMode GetDragModeForPoint(wxRect const &noteRect, wxPoint point) const {
-        if (std::abs(point.x - noteRect.GetLeft()) <= kResizeHandlePixels) {
-            return DragMode::ResizeLeft;
-        }
-        if (std::abs(point.x - noteRect.GetRight()) <= kResizeHandlePixels) {
-            return DragMode::ResizeRight;
-        }
-        return DragMode::Move;
-    }
-
-    void UpdateHoverCursor(wxPoint point) {
-        BAERmfEditorNoteInfo noteInfo;
-        AutomationHitInfo automationHit;
-        long hitNote;
-
-        if (!HasTrack()) {
-            SetCursor(wxNullCursor);
-            return;
-        }
-        hitNote = HitTestNote(point, &noteInfo);
-        if (hitNote < 0) {
-            if (HitTestAutomation(point, &automationHit)) {
-                DragMode mode;
-
-                mode = GetDragModeForAutomation(automationHit, point);
-                if (mode == DragMode::ResizeLeft || mode == DragMode::ResizeRight) {
-                    SetCursor(wxCursor(wxCURSOR_SIZEWE));
-                } else {
-                    SetCursor(wxCursor(wxCURSOR_HAND));
-                }
-                return;
-            }
-            SetCursor(wxNullCursor);
-            return;
-        }
-        wxRect noteRect = BuildNoteRect(noteInfo);
-        DragMode mode = GetDragModeForPoint(noteRect, point);
-        if (mode == DragMode::ResizeLeft || mode == DragMode::ResizeRight) {
-            SetCursor(wxCursor(wxCURSOR_SIZEWE));
-        } else {
-            SetCursor(wxCursor(wxCURSOR_HAND));
-        }
-    }
-
-
-    uint16_t GetTicksPerQuarter() const {
-        uint16_t ticksPerQuarter;
-
-        ticksPerQuarter = 480;
-        if (m_document) {
-            BAERmfEditorDocument_GetTicksPerQuarter(m_document, &ticksPerQuarter);
-        }
-        return ticksPerQuarter ? ticksPerQuarter : 480;
-    }
-
-    int GetPixelsPerQuarter() const {
-        uint32_t bpm;
-        int pixels;
-
-        bpm = 120;
-        if (m_document) {
-            BAERmfEditorDocument_GetTempoBPM(m_document, &bpm);
-        }
-        if (bpm == 0) {
-            bpm = 120;
-        }
-        pixels = static_cast<int>((static_cast<double>(kBasePixelsPerQuarter) * m_zoomScale * 120.0) / static_cast<double>(bpm));
-        return std::clamp(pixels, 16, 768);
-    }
-
-    int TickToX(uint32_t tick) const {
-        return kPianoRollLeftGutter + static_cast<int>((static_cast<uint64_t>(tick) * GetPixelsPerQuarter()) / GetTicksPerQuarter());
-    }
-
-    uint32_t XToTick(int x) const {
-        int localX;
-
-        localX = std::max(0, x - kPianoRollLeftGutter);
-        return static_cast<uint32_t>((static_cast<uint64_t>(localX) * GetTicksPerQuarter()) / GetPixelsPerQuarter());
-    }
-
-    int NoteToY(int note) const {
-        return kPianoRollTopGutter + (127 - note) * kNoteHeight;
-    }
-
-    int YToNote(int y) const {
-        int index;
-
-        index = (y - kPianoRollTopGutter) / kNoteHeight;
-        index = std::clamp(index, 0, 127);
-        return 127 - index;
-    }
-
-    uint32_t SnapTick(uint32_t tick) const {
-        return (tick / kSnapTicks) * kSnapTicks;
-    }
-
-    bool HasTrack() const {
-        return m_document && m_selectedTrack >= 0;
-    }
-
-    bool GetNoteInfo(uint32_t noteIndex, BAERmfEditorNoteInfo *noteInfo) const {
-        if (!HasTrack() || !noteInfo) {
-            return false;
-        }
-        return BAERmfEditorDocument_GetNoteInfo(m_document, static_cast<uint16_t>(m_selectedTrack), noteIndex, noteInfo) == BAE_NO_ERROR;
-    }
-
-    bool IsAutomationLaneVisible(int laneIndex) const {
-        return m_document && (laneIndex == 0 || HasTrack());
-    }
-
-    int AutomationValueFromY(int laneIndex, int y) const {
-        int laneTop;
-        int laneBottom;
-        int value;
-
-        laneTop = GetAutomationLaneY(laneIndex);
-        laneBottom = laneTop + kAutomationLaneHeight;
-        y = std::clamp(y, laneTop, laneBottom - 1);
-        if (kAutomationLanes[laneIndex].controller == 10) {
-            value = 127 - ((y - laneTop) * 127) / std::max(1, kAutomationLaneHeight - 1);
-        } else {
-            value = ((laneBottom - 1 - y) * kAutomationLanes[laneIndex].maxValue) / std::max(1, kAutomationLaneHeight - 1);
-        }
-        return std::clamp(value, 0, kAutomationLanes[laneIndex].maxValue);
-    }
-
-    bool HitTestAutomation(wxPoint point, AutomationHitInfo *outHitInfo = nullptr) const {
-        int laneIndex;
-
-        if (!m_document || point.y < GetAutomationAreaTop()) {
-            return false;
-        }
-        for (laneIndex = 0; laneIndex < kAutomationLaneCount; ++laneIndex) {
-            uint32_t eventCount;
-            uint32_t eventIndex;
-            int laneTop;
-            int laneBottom;
-
-            if (!IsAutomationLaneVisible(laneIndex)) {
-                continue;
-            }
-            laneTop = GetAutomationLaneY(laneIndex);
-            laneBottom = laneTop + kAutomationLaneHeight;
-            if (point.y < laneTop || point.y >= laneBottom) {
-                continue;
-            }
-            if (laneIndex == 0) {
-                eventCount = 0;
-                if (BAERmfEditorDocument_GetTempoEventCount(m_document, &eventCount) != BAE_NO_ERROR || eventCount == 0) {
-                    continue;
-                }
-                for (eventIndex = 0; eventIndex < eventCount; ++eventIndex) {
-                    uint32_t tick;
-                    uint32_t microsecondsPerQuarter;
-                    uint32_t nextTick;
-                    int leftX;
-                    int rightX;
-
-                    if (BAERmfEditorDocument_GetTempoEvent(m_document, eventIndex, &tick, &microsecondsPerQuarter) != BAE_NO_ERROR) {
-                        continue;
-                    }
-                    nextTick = GetDocumentEndTick();
-                    if (eventIndex + 1 < eventCount) {
-                        uint32_t nextMicrosecondsPerQuarter;
-
-                        BAERmfEditorDocument_GetTempoEvent(m_document, eventIndex + 1, &nextTick, &nextMicrosecondsPerQuarter);
-                    }
-                    leftX = TickToX(tick);
-                    rightX = TickToX(std::max(tick + 1, nextTick));
-                    if (point.x >= leftX && point.x < rightX) {
-                        if (outHitInfo) {
-                            outHitInfo->laneIndex = laneIndex;
-                            outHitInfo->eventIndex = eventIndex;
-                            outHitInfo->tick = tick;
-                            outHitInfo->endTick = nextTick;
-                            outHitInfo->laneTop = laneTop;
-                            outHitInfo->laneBottom = laneBottom;
-                            outHitInfo->leftX = leftX;
-                            outHitInfo->rightX = rightX;
-                            outHitInfo->value = microsecondsPerQuarter ? static_cast<int>(60000000UL / microsecondsPerQuarter) : 120;
-                            outHitInfo->hasFollowingEvent = (eventIndex + 1) < eventCount;
-                        }
-                        return true;
-                    }
-                }
-            } else {
-                eventCount = 0;
-                if (BAERmfEditorDocument_GetTrackCCEventCount(m_document,
-                                                              static_cast<uint16_t>(m_selectedTrack),
-                                                              kAutomationLanes[laneIndex].controller,
-                                                              &eventCount) != BAE_NO_ERROR) {
-                    continue;
-                }
-                for (eventIndex = 0; eventIndex < eventCount; ++eventIndex) {
-                    uint32_t tick;
-                    unsigned char value;
-                    uint32_t nextTick;
-                    int leftX;
-                    int rightX;
-
-                    if (BAERmfEditorDocument_GetTrackCCEvent(m_document,
-                                                             static_cast<uint16_t>(m_selectedTrack),
-                                                             kAutomationLanes[laneIndex].controller,
-                                                             eventIndex,
-                                                             &tick,
-                                                             &value) != BAE_NO_ERROR) {
-                        continue;
-                    }
-                    nextTick = GetDocumentEndTick();
-                    if (eventIndex + 1 < eventCount) {
-                        unsigned char nextValue;
-
-                        BAERmfEditorDocument_GetTrackCCEvent(m_document,
-                                                             static_cast<uint16_t>(m_selectedTrack),
-                                                             kAutomationLanes[laneIndex].controller,
-                                                             eventIndex + 1,
-                                                             &nextTick,
-                                                             &nextValue);
-                    }
-                    leftX = TickToX(tick);
-                    rightX = TickToX(std::max(tick + 1, nextTick));
-                    if (point.x >= leftX && point.x < rightX) {
-                        if (outHitInfo) {
-                            outHitInfo->laneIndex = laneIndex;
-                            outHitInfo->eventIndex = eventIndex;
-                            outHitInfo->tick = tick;
-                            outHitInfo->endTick = nextTick;
-                            outHitInfo->laneTop = laneTop;
-                            outHitInfo->laneBottom = laneBottom;
-                            outHitInfo->leftX = leftX;
-                            outHitInfo->rightX = rightX;
-                            outHitInfo->value = value;
-                            outHitInfo->hasFollowingEvent = (eventIndex + 1) < eventCount;
-                        }
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    int GetAutomationLaneIndexFromY(int y) const {
-        int laneIndex;
-
-        for (laneIndex = 0; laneIndex < kAutomationLaneCount; ++laneIndex) {
-            int laneTop;
-            int laneBottom;
-
-            if (!IsAutomationLaneVisible(laneIndex)) {
-                continue;
-            }
-            laneTop = GetAutomationLaneY(laneIndex);
-            laneBottom = laneTop + kAutomationLaneHeight;
-            if (y >= laneTop && y < laneBottom) {
-                return laneIndex;
-            }
-        }
-        return -1;
-    }
-
-    bool GetAutomationEventCount(int laneIndex, uint32_t *outCount) const {
-        if (!outCount || !m_document || !IsAutomationLaneVisible(laneIndex)) {
-            return false;
-        }
-        if (laneIndex == 0) {
-            return BAERmfEditorDocument_GetTempoEventCount(m_document, outCount) == BAE_NO_ERROR;
-        }
-        return BAERmfEditorDocument_GetTrackCCEventCount(m_document,
-                                                         static_cast<uint16_t>(m_selectedTrack),
-                                                         kAutomationLanes[laneIndex].controller,
-                                                         outCount) == BAE_NO_ERROR;
-    }
-
-    bool GetAutomationEvent(int laneIndex, uint32_t eventIndex, uint32_t *outTick, int *outValue) const {
-        if (!outTick || !outValue || !m_document || !IsAutomationLaneVisible(laneIndex)) {
-            return false;
-        }
-        if (laneIndex == 0) {
-            uint32_t microsecondsPerQuarter;
-
-            if (BAERmfEditorDocument_GetTempoEvent(m_document, eventIndex, outTick, &microsecondsPerQuarter) != BAE_NO_ERROR || microsecondsPerQuarter == 0) {
-                return false;
-            }
-            *outValue = static_cast<int>(60000000UL / microsecondsPerQuarter);
-            return true;
-        }
-        {
-            unsigned char value;
-
-            if (BAERmfEditorDocument_GetTrackCCEvent(m_document,
-                                                     static_cast<uint16_t>(m_selectedTrack),
-                                                     kAutomationLanes[laneIndex].controller,
-                                                     eventIndex,
-                                                     outTick,
-                                                     &value) != BAE_NO_ERROR) {
-                return false;
-            }
-            *outValue = value;
-            return true;
-        }
-    }
-
-    bool AddAutomationEvent(int laneIndex, uint32_t tick, int value) {
-        if (!m_document || !IsAutomationLaneVisible(laneIndex)) {
-            return false;
-        }
-        if (laneIndex == 0) {
-            return BAERmfEditorDocument_AddTempoEvent(m_document,
-                                                      tick,
-                                                      static_cast<uint32_t>(60000000UL / std::max(1, value))) == BAE_NO_ERROR;
-        }
-        return BAERmfEditorDocument_AddTrackCCEvent(m_document,
-                                                    static_cast<uint16_t>(m_selectedTrack),
-                                                    kAutomationLanes[laneIndex].controller,
-                                                    tick,
-                                                    static_cast<unsigned char>(value)) == BAE_NO_ERROR;
-    }
-
-    bool SetAutomationEvent(int laneIndex, uint32_t eventIndex, uint32_t tick, int value) {
-        if (!m_document || !IsAutomationLaneVisible(laneIndex)) {
-            return false;
-        }
-        if (laneIndex == 0) {
-            return BAERmfEditorDocument_SetTempoEvent(m_document,
-                                                      eventIndex,
-                                                      tick,
-                                                      static_cast<uint32_t>(60000000UL / std::max(1, value))) == BAE_NO_ERROR;
-        }
-        return BAERmfEditorDocument_SetTrackCCEvent(m_document,
-                                                    static_cast<uint16_t>(m_selectedTrack),
-                                                    kAutomationLanes[laneIndex].controller,
-                                                    eventIndex,
-                                                    tick,
-                                                    static_cast<unsigned char>(value)) == BAE_NO_ERROR;
-    }
-
-    DragMode GetDragModeForAutomation(AutomationHitInfo const &hitInfo, wxPoint point) const {
-        if (std::abs(point.x - hitInfo.leftX) <= kResizeHandlePixels) {
-            return DragMode::ResizeLeft;
-        }
-        if (hitInfo.hasFollowingEvent && std::abs(point.x - hitInfo.rightX) <= kResizeHandlePixels) {
-            return DragMode::ResizeRight;
-        }
-        return DragMode::Move;
-    }
-
-    bool EditSelectedNote() {
-        BAERmfEditorNoteInfo noteInfo;
-
-        if (!GetSelectedNoteInfo(&noteInfo)) {
-            return false;
-        }
-        NoteEditDialog dialog(this, noteInfo);
-        if (dialog.ShowModal() != wxID_OK) {
-            return false;
-        }
-        if (!dialog.GetNoteInfo(&noteInfo)) {
-            wxMessageBox("Invalid note values.", "Edit Note", wxOK | wxICON_ERROR, this);
-            return false;
-        }
-        BeginUndoAction("Edit Note");
-        if (BAERmfEditorDocument_SetNoteInfo(m_document,
-                                             static_cast<uint16_t>(m_selectedTrack),
-                                             static_cast<uint32_t>(m_selectedNote),
-                                             &noteInfo) != BAE_NO_ERROR) {
-            CancelUndoAction();
-            wxMessageBox("Failed to update note.", "Edit Note", wxOK | wxICON_ERROR, this);
-            return false;
-        }
-        CommitUndoAction("Edit Note");
-        UpdateVirtualSize();
-        Refresh();
-        return true;
-    }
-
-    bool EditAutomationEvent(int laneIndex, uint32_t eventIndex) {
-        uint32_t tick;
-        int value;
-        wxString valueLabel;
-        wxString title;
-
-        if (!m_document || !IsAutomationLaneVisible(laneIndex)) {
-            return false;
-        }
-        if (laneIndex == 0) {
-            uint32_t microsecondsPerQuarter;
-
-            if (BAERmfEditorDocument_GetTempoEvent(m_document, eventIndex, &tick, &microsecondsPerQuarter) != BAE_NO_ERROR || microsecondsPerQuarter == 0) {
-                return false;
-            }
-            value = static_cast<int>(60000000UL / microsecondsPerQuarter);
-            valueLabel = "BPM";
-            title = "Edit Tempo Event";
-        } else {
-            unsigned char controllerValue;
-
-            if (BAERmfEditorDocument_GetTrackCCEvent(m_document,
-                                                     static_cast<uint16_t>(m_selectedTrack),
-                                                     kAutomationLanes[laneIndex].controller,
-                                                     eventIndex,
-                                                     &tick,
-                                                     &controllerValue) != BAE_NO_ERROR) {
-                return false;
-            }
-            value = controllerValue;
-            valueLabel = "Value";
-            title = wxString::Format("Edit %s Event", kAutomationLanes[laneIndex].label);
-        }
-        AutomationEditDialog dialog(this, title, valueLabel, tick, value, kAutomationLanes[laneIndex].maxValue);
-        if (dialog.ShowModal() != wxID_OK) {
-            return false;
-        }
-        if (!dialog.GetValues(&tick, &value)) {
-            wxMessageBox("Invalid automation values.", title, wxOK | wxICON_ERROR, this);
-            return false;
-        }
-        BeginUndoAction(title);
-        if (laneIndex == 0) {
-            if (BAERmfEditorDocument_SetTempoEvent(m_document,
-                                                   eventIndex,
-                                                   tick,
-                                                   static_cast<uint32_t>(60000000UL / std::max(1, value))) != BAE_NO_ERROR) {
-                CancelUndoAction();
-                wxMessageBox("Failed to update tempo event.", title, wxOK | wxICON_ERROR, this);
-                return false;
-            }
-        } else {
-            if (BAERmfEditorDocument_SetTrackCCEvent(m_document,
-                                                     static_cast<uint16_t>(m_selectedTrack),
-                                                     kAutomationLanes[laneIndex].controller,
-                                                     eventIndex,
-                                                     tick,
-                                                     static_cast<unsigned char>(value)) != BAE_NO_ERROR) {
-                CancelUndoAction();
-                wxMessageBox("Failed to update automation event.", title, wxOK | wxICON_ERROR, this);
-                return false;
-            }
-        }
-        CommitUndoAction(title);
-        UpdateVirtualSize();
-        Refresh();
-        return true;
-    }
-
-    void DeleteCurrentSelection() {
-        if (m_selectedItemKind == PianoRollSelectionKind::Note) {
-            DeleteSelectedNote();
-            return;
-        }
-        if (m_selectedItemKind == PianoRollSelectionKind::Automation && m_selectedAutomationLane >= 0 && m_selectedAutomationEvent >= 0) {
-            BAEResult result;
-
-            BeginUndoAction("Delete Event");
-            if (m_selectedAutomationLane == 0) {
-                result = BAERmfEditorDocument_DeleteTempoEvent(m_document, static_cast<uint32_t>(m_selectedAutomationEvent));
-            } else {
-                result = BAERmfEditorDocument_DeleteTrackCCEvent(m_document,
-                                                                 static_cast<uint16_t>(m_selectedTrack),
-                                                                 kAutomationLanes[m_selectedAutomationLane].controller,
-                                                                 static_cast<uint32_t>(m_selectedAutomationEvent));
-            }
-            if (result == BAE_NO_ERROR) {
-                CommitUndoAction("Delete Event");
-                m_selectedItemKind = PianoRollSelectionKind::None;
-                m_selectedAutomationLane = -1;
-                m_selectedAutomationEvent = -1;
-                UpdateVirtualSize();
-                Refresh();
-            } else {
-                CancelUndoAction();
-            }
-        }
-    }
-
-    void OnEditSelectedItem(wxCommandEvent &) {
-        if (m_selectedItemKind == PianoRollSelectionKind::Note) {
-            EditSelectedNote();
-        } else if (m_selectedItemKind == PianoRollSelectionKind::Automation && m_selectedAutomationLane >= 0 && m_selectedAutomationEvent >= 0) {
-            EditAutomationEvent(m_selectedAutomationLane, static_cast<uint32_t>(m_selectedAutomationEvent));
-        }
-    }
-
-    void OnDeleteSelectedItem(wxCommandEvent &) {
-        DeleteCurrentSelection();
-    }
-
-    int GetAutomationAreaTop() const {
-        return kPianoRollTopGutter + (128 * kNoteHeight) + 10;
-    }
-
-    int GetAutomationLaneY(int laneIndex) const {
-        return GetAutomationAreaTop() + laneIndex * (kAutomationLaneHeight + kAutomationLaneGap);
-    }
-
-    void ScrollToBottom() {
-        int scrollPixelsX;
-        int scrollPixelsY;
-        int viewUnitsX;
-        int viewUnitsY;
-        int clientHeight;
-        int targetTop;
-        wxSize virtualSize;
-
-        GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
-        if (scrollPixelsY <= 0) {
-            return;
-        }
-        GetViewStart(&viewUnitsX, &viewUnitsY);
-        clientHeight = GetClientSize().GetHeight();
-        if (clientHeight <= 0) {
-            return;
-        }
-        virtualSize = GetVirtualSize();
-        targetTop = std::max(0, virtualSize.GetHeight() - clientHeight);
-        Scroll(0, targetTop / scrollPixelsY);
-    }
-
-    uint32_t GetDocumentEndTick() const {
-        uint32_t lastTick;
-
-        lastTick = GetTicksPerQuarter() * 8;
-        if (!m_document) {
-            return lastTick;
-        }
-        if (HasTrack()) {
-            uint32_t noteCount;
-            uint32_t noteIndex;
-
-            noteCount = 0;
-            if (BAERmfEditorDocument_GetNoteCount(m_document, static_cast<uint16_t>(m_selectedTrack), &noteCount) == BAE_NO_ERROR) {
-                for (noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
-                    BAERmfEditorNoteInfo noteInfo;
-
-                    if (GetNoteInfo(noteIndex, &noteInfo)) {
-                        lastTick = std::max(lastTick, noteInfo.startTick + noteInfo.durationTicks + GetTicksPerQuarter());
-                    }
-                }
-            }
-            for (unsigned char cc : { static_cast<unsigned char>(7), static_cast<unsigned char>(10), static_cast<unsigned char>(11) }) {
-                uint32_t eventCount;
-                uint32_t eventIndex;
-
-                eventCount = 0;
-                if (BAERmfEditorDocument_GetTrackCCEventCount(m_document, static_cast<uint16_t>(m_selectedTrack), cc, &eventCount) != BAE_NO_ERROR) {
-                    continue;
-                }
-                for (eventIndex = 0; eventIndex < eventCount; ++eventIndex) {
-                    uint32_t tick;
-                    unsigned char value;
-
-                    if (BAERmfEditorDocument_GetTrackCCEvent(m_document, static_cast<uint16_t>(m_selectedTrack), cc, eventIndex, &tick, &value) == BAE_NO_ERROR) {
-                        lastTick = std::max(lastTick, tick + GetTicksPerQuarter());
-                    }
-                }
-            }
-        }
-        {
-            uint32_t tempoCount;
-            uint32_t tempoIndex;
-
-            tempoCount = 0;
-            if (BAERmfEditorDocument_GetTempoEventCount(m_document, &tempoCount) == BAE_NO_ERROR) {
-                for (tempoIndex = 0; tempoIndex < tempoCount; ++tempoIndex) {
-                    uint32_t tick;
-                    uint32_t microsecondsPerQuarter;
-
-                    if (BAERmfEditorDocument_GetTempoEvent(m_document, tempoIndex, &tick, &microsecondsPerQuarter) == BAE_NO_ERROR) {
-                        lastTick = std::max(lastTick, tick + GetTicksPerQuarter());
-                    }
-                }
-            }
-        }
-        return lastTick;
-    }
-
-    double TickToSeconds(uint32_t tick) const {
-        uint16_t ticksPerQuarter;
-        uint32_t tempoCount;
-        uint32_t baseBpm;
-        uint32_t currentTick;
-        uint32_t currentMicrosecondsPerQuarter;
-        double seconds;
-        uint32_t tempoIndex;
-
-        ticksPerQuarter = GetTicksPerQuarter();
-        if (ticksPerQuarter == 0) {
-            return 0.0;
-        }
-        baseBpm = 120;
-        if (m_document) {
-            BAERmfEditorDocument_GetTempoBPM(m_document, &baseBpm);
-        }
-        if (baseBpm == 0) {
-            baseBpm = 120;
-        }
-        currentTick = 0;
-        currentMicrosecondsPerQuarter = 60000000UL / baseBpm;
-        seconds = 0.0;
-        tempoCount = 0;
-        if (!m_document || BAERmfEditorDocument_GetTempoEventCount(m_document, &tempoCount) != BAE_NO_ERROR) {
-            return (static_cast<double>(tick) * static_cast<double>(currentMicrosecondsPerQuarter)) /
-                   (static_cast<double>(ticksPerQuarter) * 1000000.0);
-        }
-        for (tempoIndex = 0; tempoIndex < tempoCount; ++tempoIndex) {
-            uint32_t eventTick;
-            uint32_t eventMicrosecondsPerQuarter;
-
-            if (BAERmfEditorDocument_GetTempoEvent(m_document, tempoIndex, &eventTick, &eventMicrosecondsPerQuarter) != BAE_NO_ERROR) {
-                continue;
-            }
-            if (eventTick > tick) {
-                break;
-            }
-            if (eventTick > currentTick) {
-                seconds += (static_cast<double>(eventTick - currentTick) * static_cast<double>(currentMicrosecondsPerQuarter)) /
-                           (static_cast<double>(ticksPerQuarter) * 1000000.0);
-            }
-            currentTick = eventTick;
-            if (eventMicrosecondsPerQuarter > 0) {
-                currentMicrosecondsPerQuarter = eventMicrosecondsPerQuarter;
-            }
-        }
-        if (tick > currentTick) {
-            seconds += (static_cast<double>(tick - currentTick) * static_cast<double>(currentMicrosecondsPerQuarter)) /
-                       (static_cast<double>(ticksPerQuarter) * 1000000.0);
-        }
-        return seconds;
-    }
-
-    void DrawAutomationLanes(wxDC &dc, wxSize const &virtualSize) {
-        static char const *const laneLabels[kAutomationLaneCount] = { "Tempo", "Volume", "Pan", "Expr" };
-        static unsigned char const laneControllers[kAutomationLaneCount] = { 0, 7, 10, 11 };
-        static wxColour const laneColors[kAutomationLaneCount] = {
-            wxColour(202, 128, 52),
-            wxColour(74, 136, 208),
-            wxColour(166, 96, 196),
-            wxColour(76, 170, 92)
-        };
-        int laneIndex;
-
-        for (laneIndex = 0; laneIndex < kAutomationLaneCount; ++laneIndex) {
-            int laneTop;
-            int laneBottom;
-
-            laneTop = GetAutomationLaneY(laneIndex);
-            laneBottom = laneTop + kAutomationLaneHeight;
-            dc.SetPen(*wxTRANSPARENT_PEN);
-            dc.SetBrush(wxBrush(wxColour(32, 34, 38)));
-            dc.DrawRectangle(kPianoRollLeftGutter, laneTop, virtualSize.GetWidth() - kPianoRollLeftGutter, kAutomationLaneHeight);
-            dc.SetBrush(wxBrush(wxColour(42, 44, 50)));
-            dc.DrawRectangle(0, laneTop, kPianoRollLeftGutter, kAutomationLaneHeight);
-            dc.SetPen(wxPen(wxColour(68, 72, 78)));
-            dc.DrawLine(0, laneBottom, virtualSize.GetWidth(), laneBottom);
-            dc.SetTextForeground(wxColour(214, 217, 222));
-            dc.DrawText(laneLabels[laneIndex], 8, laneTop + (kAutomationLaneHeight / 2) - 8);
-            if (laneControllers[laneIndex] == 10) {
-                dc.SetPen(wxPen(wxColour(84, 88, 96)));
-                dc.DrawLine(kPianoRollLeftGutter, laneTop + (kAutomationLaneHeight / 2), virtualSize.GetWidth(), laneTop + (kAutomationLaneHeight / 2));
-            }
-            if (!m_document) {
-                continue;
-            }
-            if (laneIndex == 0) {
-                uint32_t tempoCount;
-                uint32_t tempoIndex;
-
-                tempoCount = 0;
-                if (BAERmfEditorDocument_GetTempoEventCount(m_document, &tempoCount) != BAE_NO_ERROR || tempoCount == 0) {
-                    uint32_t bpm;
-                    int barHeight;
-
-                    bpm = 120;
-                    BAERmfEditorDocument_GetTempoBPM(m_document, &bpm);
-                    barHeight = std::clamp((static_cast<int>(bpm) * kAutomationLaneHeight) / 240, 2, kAutomationLaneHeight);
-                    dc.SetPen(*wxTRANSPARENT_PEN);
-                    dc.SetBrush(wxBrush(laneColors[laneIndex]));
-                    dc.DrawRectangle(kPianoRollLeftGutter, laneBottom - barHeight, virtualSize.GetWidth() - kPianoRollLeftGutter, barHeight);
-                } else {
-                    for (tempoIndex = 0; tempoIndex < tempoCount; ++tempoIndex) {
-                        uint32_t tick;
-                        uint32_t microsecondsPerQuarter;
-                        uint32_t nextTick;
-                        uint32_t bpm;
-                        int x0;
-                        int x1;
-                        int barHeight;
-
-                        if (BAERmfEditorDocument_GetTempoEvent(m_document, tempoIndex, &tick, &microsecondsPerQuarter) != BAE_NO_ERROR || microsecondsPerQuarter == 0) {
-                            continue;
-                        }
-                        nextTick = GetDocumentEndTick();
-                        if (tempoIndex + 1 < tempoCount) {
-                            uint32_t nextMicrosecondsPerQuarter;
-
-                            BAERmfEditorDocument_GetTempoEvent(m_document, tempoIndex + 1, &nextTick, &nextMicrosecondsPerQuarter);
-                        }
-                        bpm = 60000000UL / microsecondsPerQuarter;
-                        x0 = TickToX(tick);
-                        x1 = TickToX(std::max(tick + 1, nextTick));
-                        barHeight = std::clamp((static_cast<int>(bpm) * kAutomationLaneHeight) / 240, 2, kAutomationLaneHeight);
-                        dc.SetPen(*wxTRANSPARENT_PEN);
-                        dc.SetBrush(wxBrush(laneColors[laneIndex]));
-                        dc.DrawRectangle(x0, laneBottom - barHeight, std::max(1, x1 - x0), barHeight);
-                        if (m_selectedItemKind == PianoRollSelectionKind::Automation &&
-                            m_selectedAutomationLane == laneIndex &&
-                            m_selectedAutomationEvent == static_cast<long>(tempoIndex)) {
-                            dc.SetBrush(*wxTRANSPARENT_BRUSH);
-                            dc.SetPen(wxPen(wxColour(255, 232, 190), 2));
-                            dc.DrawRectangle(x0, laneTop + 1, std::max(2, x1 - x0), kAutomationLaneHeight - 2);
-                        }
-                    }
-                }
-            } else if (HasTrack()) {
-                uint32_t eventCount;
-                uint32_t eventIndex;
-                unsigned char controller;
-
-                controller = laneControllers[laneIndex];
-                eventCount = 0;
-                if (BAERmfEditorDocument_GetTrackCCEventCount(m_document, static_cast<uint16_t>(m_selectedTrack), controller, &eventCount) != BAE_NO_ERROR) {
-                    continue;
-                }
-                for (eventIndex = 0; eventIndex < eventCount; ++eventIndex) {
-                    uint32_t tick;
-                    unsigned char value;
-                    uint32_t nextTick;
-                    int x0;
-                    int x1;
-
-                    if (BAERmfEditorDocument_GetTrackCCEvent(m_document, static_cast<uint16_t>(m_selectedTrack), controller, eventIndex, &tick, &value) != BAE_NO_ERROR) {
-                        continue;
-                    }
-                    nextTick = GetDocumentEndTick();
-                    if (eventIndex + 1 < eventCount) {
-                        unsigned char nextValue;
-
-                        BAERmfEditorDocument_GetTrackCCEvent(m_document, static_cast<uint16_t>(m_selectedTrack), controller, eventIndex + 1, &nextTick, &nextValue);
-                    }
-                    x0 = TickToX(tick);
-                    x1 = TickToX(std::max(tick + 1, nextTick));
-                    dc.SetPen(*wxTRANSPARENT_PEN);
-                    dc.SetBrush(wxBrush(laneColors[laneIndex]));
-                    if (controller == 10) {
-                        int centerY;
-                        int offsetY;
-
-                        centerY = laneTop + (kAutomationLaneHeight / 2);
-                        offsetY = ((static_cast<int>(value) - 64) * (kAutomationLaneHeight / 2 - 2)) / 64;
-                        if (offsetY >= 0) {
-                            dc.DrawRectangle(x0, centerY - offsetY, std::max(1, x1 - x0), std::max(1, offsetY));
-                        } else {
-                            dc.DrawRectangle(x0, centerY, std::max(1, x1 - x0), std::max(1, -offsetY));
-                        }
-                    } else {
-                        int barHeight;
-
-                        barHeight = (static_cast<int>(value) * kAutomationLaneHeight) / 127;
-                        barHeight = std::clamp(barHeight, 1, kAutomationLaneHeight);
-                        dc.DrawRectangle(x0, laneBottom - barHeight, std::max(1, x1 - x0), barHeight);
-                    }
-                    if (m_selectedItemKind == PianoRollSelectionKind::Automation &&
-                        m_selectedAutomationLane == laneIndex &&
-                        m_selectedAutomationEvent == static_cast<long>(eventIndex)) {
-                        dc.SetBrush(*wxTRANSPARENT_BRUSH);
-                        dc.SetPen(wxPen(wxColour(238, 240, 244), 2));
-                        dc.DrawRectangle(x0, laneTop + 1, std::max(2, x1 - x0), kAutomationLaneHeight - 2);
-                    }
-                }
-            }
-        }
-    }
-
-    void UpdateVirtualSize() {
-        int width;
-        int height;
-        uint32_t lastTick;
-
-        width = 2400;
-        height = GetAutomationAreaTop() + (kAutomationLaneCount * kAutomationLaneHeight) + ((kAutomationLaneCount - 1) * kAutomationLaneGap) + kPianoRollTopGutter;
-        lastTick = GetDocumentEndTick();
-        width = TickToX(lastTick) + 200;
-        SetVirtualSize(width, height);
-    }
-
-    void DrawStickyRuler(wxDC &dc) {
-        int scrollPixelsX;
-        int scrollPixelsY;
-        int viewUnitsX;
-        int viewUnitsY;
-        int scrollX;
-        int scrollY;
-        int screenW;
-        int rulerH;
-        int rulerTop;
-        int rulerBot;
-        int relLeft;
-        int relRight;
-        int startOff;
-        int beatOff;
-        int pixelsPerQuarter;
-        int pixelsPerStep;
-
-        GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
-        if (scrollPixelsX <= 0) scrollPixelsX = 1;
-        if (scrollPixelsY <= 0) scrollPixelsY = 1;
-        GetViewStart(&viewUnitsX, &viewUnitsY);
-        scrollX = viewUnitsX * scrollPixelsX;
-        scrollY = viewUnitsY * scrollPixelsY;
-        screenW = GetClientSize().GetWidth();
-
-        rulerH  = kPianoRollTopGutter;
-        rulerTop = scrollY;
-        rulerBot = scrollY + rulerH;
-
-        // Ruler background
-        dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.SetBrush(wxBrush(wxColour(42, 44, 50)));
-        dc.DrawRectangle(scrollX, rulerTop, screenW, rulerH);
-
-        // Left gutter corner (darker)
-        dc.SetBrush(wxBrush(wxColour(30, 32, 36)));
-        dc.DrawRectangle(scrollX, rulerTop, kPianoRollLeftGutter, rulerH);
-
-        // Gutter labels pinned to screen-left
-        dc.SetTextForeground(wxColour(130, 135, 140));
-        dc.DrawText("Beat", scrollX + 3, rulerTop + 1);
-        dc.SetTextForeground(wxColour(100, 105, 110));
-        dc.DrawText("Time", scrollX + 3, rulerTop + rulerH / 2);
-
-        relLeft  = std::max(0, scrollX - kPianoRollLeftGutter);
-        relRight = scrollX + screenW - kPianoRollLeftGutter;
-        pixelsPerQuarter = GetPixelsPerQuarter();
-        pixelsPerStep = std::max(1, pixelsPerQuarter / 4);
-        startOff = (relLeft / pixelsPerQuarter) * pixelsPerQuarter;
-
-        // Sub-beat (16th-note) small ticks
-        for (beatOff = (startOff >= pixelsPerQuarter ? startOff - pixelsPerQuarter : 0);
-             beatOff <= relRight;
-             beatOff += pixelsPerStep) {
-            int vx;
-
-            if (beatOff < 0) continue;
-            if ((beatOff % pixelsPerQuarter) == 0) continue;
-            vx = kPianoRollLeftGutter + beatOff;
-            dc.SetPen(wxPen(wxColour(70, 75, 82)));
-            dc.DrawLine(vx, rulerBot - 5, vx, rulerBot - 1);
-        }
-
-        // Quarter-note beat labels and taller ticks
-           for (beatOff = (startOff >= pixelsPerQuarter ? startOff - pixelsPerQuarter : 0);
-             beatOff <= relRight;
-               beatOff += pixelsPerQuarter) {
-            int vx;
-            int beatNum;
-            uint32_t tick;
-            double seconds;
-            int mm;
-            int ss;
-            int ds;
-            bool isBar;
-
-            if (beatOff < 0) continue;
-            vx      = kPianoRollLeftGutter + beatOff;
-            beatNum = beatOff / pixelsPerQuarter + 1;
-            isBar   = ((beatOff % (pixelsPerQuarter * 4)) == 0);
-
-            tick = static_cast<uint32_t>((static_cast<uint64_t>(beatOff) * GetTicksPerQuarter()) / pixelsPerQuarter);
-            seconds = TickToSeconds(tick);
-            mm = static_cast<int>(seconds / 60.0);
-            ss = static_cast<int>(seconds) % 60;
-            ds = static_cast<int>((seconds - std::floor(seconds)) * 10.0);
-
-            // Tick mark: taller at bar starts
-            dc.SetPen(wxPen(isBar ? wxColour(190, 195, 200) : wxColour(130, 135, 140)));
-            dc.DrawLine(vx, rulerTop + (isBar ? 2 : rulerH / 2), vx, rulerBot - 1);
-
-            // Beat number (top row)
-            dc.SetTextForeground(isBar ? wxColour(240, 242, 245) : wxColour(195, 198, 202));
-            dc.DrawText(wxString::Format("%d", beatNum), vx + 2, rulerTop + 1);
-
-            // Time code (bottom row)
-            dc.SetTextForeground(wxColour(140, 145, 150));
-            dc.DrawText(wxString::Format("%d:%02d.%d", mm, ss, ds), vx + 2, rulerTop + rulerH / 2);
-        }
-
-        // Bottom border
-        dc.SetPen(wxPen(wxColour(70, 75, 82)));
-        dc.DrawLine(scrollX, rulerBot - 1, scrollX + screenW, rulerBot - 1);
-
-        // Left gutter right-edge (re-draw on top of ruler)
-        dc.SetPen(wxPen(wxColour(100, 105, 110)));
-        dc.DrawLine(scrollX + kPianoRollLeftGutter, rulerTop, scrollX + kPianoRollLeftGutter, rulerBot);
-    }
-
-    long HitTestNote(wxPoint point, BAERmfEditorNoteInfo *noteInfoOut = nullptr) const {
-        uint32_t noteCount;
-        uint32_t noteIndex;
-
-        if (!HasTrack()) {
-            return -1;
-        }
-        noteCount = 0;
-        if (BAERmfEditorDocument_GetNoteCount(m_document, static_cast<uint16_t>(m_selectedTrack), &noteCount) != BAE_NO_ERROR) {
-            return -1;
-        }
-        for (noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
-            BAERmfEditorNoteInfo noteInfo;
-            wxRect noteRect;
-
-            if (!GetNoteInfo(noteIndex, &noteInfo)) {
-                continue;
-            }
-            noteRect = wxRect(TickToX(noteInfo.startTick),
-                              NoteToY(noteInfo.note),
-                              std::max(8, TickToX(noteInfo.startTick + noteInfo.durationTicks) - TickToX(noteInfo.startTick)),
-                              kNoteHeight - 1);
-            if (noteRect.Contains(point)) {
-                if (noteInfoOut) {
-                    *noteInfoOut = noteInfo;
-                }
-                return static_cast<long>(noteIndex);
-            }
-        }
-        return -1;
-    }
-
-    void DeleteSelectedNote() {
-        if (!HasTrack() || m_selectedNote < 0) {
-            return;
-        }
-        BeginUndoAction("Delete Note");
-        if (BAERmfEditorDocument_DeleteNote(m_document, static_cast<uint16_t>(m_selectedTrack), static_cast<uint32_t>(m_selectedNote)) == BAE_NO_ERROR) {
-            CommitUndoAction("Delete Note");
-            m_selectedNote = -1;
-            UpdateVirtualSize();
-            Refresh();
-        } else {
-            CancelUndoAction();
-        }
-    }
-
-    void OnPaint(wxPaintEvent &) {
-        wxAutoBufferedPaintDC dc(this);
-        wxSize clientSize;
-        wxRect updateRect;
-        int beat;
-        int note;
-        int pixelsPerQuarter;
-        int pixelsPerStep;
-
-        PrepareDC(dc);
-        clientSize = GetVirtualSize();
-        updateRect = GetUpdateRegion().GetBox();
-        dc.SetBackground(wxBrush(wxColour(248, 248, 246)));
-        dc.Clear();
-
-        for (note = 0; note < 128; ++note) {
-            int y;
-            bool blackKey;
-            wxColour fillColor;
-
-            y = NoteToY(note);
-            blackKey = (note % 12 == 1) || (note % 12 == 3) || (note % 12 == 6) || (note % 12 == 8) || (note % 12 == 10);
-            fillColor = blackKey ? wxColour(235, 238, 240) : wxColour(248, 248, 246);
-            dc.SetPen(*wxTRANSPARENT_PEN);
-            dc.SetBrush(wxBrush(fillColor));
-            dc.DrawRectangle(0, y, clientSize.GetWidth(), kNoteHeight);
-            dc.SetPen(wxPen(wxColour(220, 224, 226)));
-            dc.DrawLine(kPianoRollLeftGutter, y, clientSize.GetWidth(), y);
-            if (note % 12 == 0) {
-                dc.SetTextForeground(wxColour(90, 90, 90));
-                dc.DrawText(wxString::Format("C%d", note / 12), 6, y - 1);
-            }
-        }
-
-        pixelsPerQuarter = GetPixelsPerQuarter();
-        pixelsPerStep = std::max(1, pixelsPerQuarter / 4);
-        for (beat = 0; beat < clientSize.GetWidth(); beat += pixelsPerStep) {
-            int x;
-            bool major;
-
-            x = kPianoRollLeftGutter + beat;
-            major = ((beat % pixelsPerQuarter) == 0);
-            dc.SetPen(wxPen(major ? wxColour(180, 186, 190) : wxColour(222, 226, 228)));
-            dc.DrawLine(x, kPianoRollTopGutter, x, clientSize.GetHeight());
-        }
-
-        dc.SetPen(wxPen(wxColour(60, 60, 60)));
-        dc.DrawLine(kPianoRollLeftGutter, 0, kPianoRollLeftGutter, clientSize.GetHeight());
-
-        if (m_showPlayhead) {
-            int playheadX;
-
-            playheadX = TickToX(m_playheadTick);
-            dc.SetPen(wxPen(wxColour(210, 40, 40), 2));
-            dc.DrawLine(playheadX, kPianoRollTopGutter, playheadX, clientSize.GetHeight());
-        }
-
-        if (HasTrack()) {
-            uint32_t noteCount;
-            uint32_t noteIndex;
-
-            noteCount = 0;
-            BAERmfEditorDocument_GetNoteCount(m_document, static_cast<uint16_t>(m_selectedTrack), &noteCount);
-            for (noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
-                BAERmfEditorNoteInfo noteInfo;
-                wxRect noteRect;
-                bool selected;
-
-                if (!GetNoteInfo(noteIndex, &noteInfo)) {
-                    continue;
-                }
-                noteRect = wxRect(TickToX(noteInfo.startTick),
-                                  NoteToY(noteInfo.note),
-                                  std::max(8, TickToX(noteInfo.startTick + noteInfo.durationTicks) - TickToX(noteInfo.startTick)),
-                                  kNoteHeight - 1);
-                selected = (static_cast<long>(noteIndex) == m_selectedNote);
-                dc.SetBrush(wxBrush(selected ? wxColour(216, 106, 58) : wxColour(73, 135, 210)));
-                dc.SetPen(wxPen(selected ? wxColour(110, 42, 17) : wxColour(34, 72, 120)));
-                dc.DrawRectangle(noteRect);
-                if (selected) {
-                    int handleTop;
-
-                    handleTop = noteRect.GetTop() + 1;
-                    dc.SetBrush(wxBrush(wxColour(242, 225, 214)));
-                    dc.SetPen(*wxTRANSPARENT_PEN);
-                    dc.DrawRectangle(noteRect.GetLeft(), handleTop, 3, std::max(2, noteRect.GetHeight() - 2));
-                    dc.DrawRectangle(noteRect.GetRight() - 2, handleTop, 3, std::max(2, noteRect.GetHeight() - 2));
-                }
-            }
-        }
-        DrawAutomationLanes(dc, clientSize);
-        DrawStickyRuler(dc);
-    }
-
-    void OnLeftDown(wxMouseEvent &event) {
-        wxPoint logicalPoint;
-        AutomationHitInfo automationHit;
-        BAERmfEditorNoteInfo noteInfo;
-        long hitNote;
-
-        SetFocus();
-        logicalPoint = CalcUnscrolledPosition(event.GetPosition());
-        hitNote = HitTestNote(logicalPoint, &noteInfo);
-        if (hitNote >= 0) {
-            m_selectedItemKind = PianoRollSelectionKind::Note;
-            m_selectedNote = hitNote;
-            m_selectedAutomationLane = -1;
-            m_selectedAutomationEvent = -1;
-            m_dragging = true;
-            m_dragAutomationValid = false;
-            m_dragOriginalNote = noteInfo;
-            m_dragStartTick = SnapTick(XToTick(logicalPoint.x));
-            m_dragStartNote = YToNote(logicalPoint.y);
-            m_dragMode = GetDragModeForPoint(BuildNoteRect(noteInfo), logicalPoint);
-            m_dragUndoLabel = (m_dragMode == DragMode::Move) ? "Move Note" : "Resize Note";
-            BeginUndoAction(m_dragUndoLabel);
-            m_dragUndoActive = true;
-            CaptureMouse();
-        } else if (HitTestAutomation(logicalPoint, &automationHit)) {
-            m_selectedItemKind = PianoRollSelectionKind::Automation;
-            m_selectedNote = -1;
-            m_selectedAutomationLane = automationHit.laneIndex;
-            m_selectedAutomationEvent = static_cast<long>(automationHit.eventIndex);
-            m_dragging = true;
-            m_dragAutomationValid = true;
-            m_dragAutomationHit = automationHit;
-            m_dragMode = GetDragModeForAutomation(automationHit, logicalPoint);
-            m_dragUndoLabel = (m_dragMode == DragMode::ResizeRight) ? "Resize Event" : "Edit Event";
-            BeginUndoAction(m_dragUndoLabel);
-            m_dragUndoActive = true;
-            CaptureMouse();
-        } else {
-            m_selectedItemKind = PianoRollSelectionKind::None;
-            m_selectedNote = -1;
-            m_selectedAutomationLane = -1;
-            m_selectedAutomationEvent = -1;
-            m_dragging = false;
-            m_dragAutomationValid = false;
-            m_dragMode = DragMode::None;
-            m_dragUndoActive = false;
-            m_dragUndoLabel.clear();
-        }
-        if (m_selectionChangedCallback) {
-            m_selectionChangedCallback();
-        }
-        Refresh();
-    }
-
-    void OnLeftUp(wxMouseEvent &) {
-        if (m_dragging && HasCapture()) {
-            ReleaseMouse();
-        }
-        if (m_dragUndoActive) {
-            CommitUndoAction(m_dragUndoLabel);
-        }
-        m_dragging = false;
-        m_dragAutomationValid = false;
-        m_dragMode = DragMode::None;
-        m_dragUndoActive = false;
-        m_dragUndoLabel.clear();
-    }
-
-    void OnLeftDoubleClick(wxMouseEvent &event) {
-        wxPoint logicalPoint;
-        int laneIndex;
-        uint32_t startTick;
-        int eventValue;
-        unsigned char noteValue;
-
-        if (!m_document) {
-            return;
-        }
-        logicalPoint = CalcUnscrolledPosition(event.GetPosition());
-        if (HitTestNote(logicalPoint) >= 0) {
-            return;
-        }
-        laneIndex = GetAutomationLaneIndexFromY(logicalPoint.y);
-        if (laneIndex >= 0) {
-            startTick = SnapTick(XToTick(logicalPoint.x));
-            eventValue = AutomationValueFromY(laneIndex, logicalPoint.y);
-            m_dragUndoLabel = wxString::Format("Add %s Event", kAutomationLanes[laneIndex].label);
-            BeginUndoAction(m_dragUndoLabel);
-            if (AddAutomationEvent(laneIndex, startTick, eventValue)) {
-                AutomationHitInfo automationHit;
-
-                if (HitTestAutomation(logicalPoint, &automationHit)) {
-                    m_selectedItemKind = PianoRollSelectionKind::Automation;
-                    m_selectedAutomationLane = automationHit.laneIndex;
-                    m_selectedAutomationEvent = static_cast<long>(automationHit.eventIndex);
-                    m_selectedNote = -1;
-                }
-                CommitUndoAction(m_dragUndoLabel);
-                UpdateVirtualSize();
-                Refresh();
-            } else {
-                CancelUndoAction();
-            }
-            return;
-        }
-        if (!HasTrack()) {
-            return;
-        }
-        startTick = SnapTick(XToTick(logicalPoint.x));
-        noteValue = static_cast<unsigned char>(YToNote(logicalPoint.y));
-        BeginUndoAction("Add Note");
-        if (BAERmfEditorDocument_AddNote(m_document,
-                                         static_cast<uint16_t>(m_selectedTrack),
-                                         startTick,
-                                         kDefaultNoteDuration,
-                                         noteValue,
-                                         100) == BAE_NO_ERROR) {
-            uint32_t noteCount;
-
-            noteCount = 0;
-            BAERmfEditorDocument_GetNoteCount(m_document, static_cast<uint16_t>(m_selectedTrack), &noteCount);
-            if (noteCount > 0) {
-                BAERmfEditorNoteInfo noteInfo;
-
-                if (BAERmfEditorDocument_GetNoteInfo(m_document,
-                                                     static_cast<uint16_t>(m_selectedTrack),
-                                                     noteCount - 1,
-                                                     &noteInfo) == BAE_NO_ERROR) {
-                    noteInfo.bank = m_newNoteBank;
-                    noteInfo.program = m_newNoteProgram;
-                    BAERmfEditorDocument_SetNoteInfo(m_document,
-                                                     static_cast<uint16_t>(m_selectedTrack),
-                                                     noteCount - 1,
-                                                     &noteInfo);
-                    m_selectedItemKind = PianoRollSelectionKind::Note;
-                    m_selectedNote = static_cast<long>(noteCount - 1);
-                    m_selectedAutomationLane = -1;
-                    m_selectedAutomationEvent = -1;
-                }
-            }
-            CommitUndoAction("Add Note");
-            UpdateVirtualSize();
-            Refresh();
-        } else {
-            CancelUndoAction();
-        }
-    }
-
-    void OnRightDown(wxMouseEvent &event) {
-        wxPoint logicalPoint;
-        AutomationHitInfo automationHit;
-        long hitNote;
-        wxMenu menu;
-
-        if (!m_document) {
-            return;
-        }
-        logicalPoint = CalcUnscrolledPosition(event.GetPosition());
-        hitNote = HitTestNote(logicalPoint);
-        if (hitNote >= 0) {
-            m_selectedItemKind = PianoRollSelectionKind::Note;
-            m_selectedNote = hitNote;
-            m_selectedAutomationLane = -1;
-            m_selectedAutomationEvent = -1;
-        } else if (HitTestAutomation(logicalPoint, &automationHit)) {
-            m_selectedItemKind = PianoRollSelectionKind::Automation;
-            m_selectedNote = -1;
-            m_selectedAutomationLane = automationHit.laneIndex;
-            m_selectedAutomationEvent = static_cast<long>(automationHit.eventIndex);
-        } else {
-            return;
-        }
-        menu.Append(ID_PianoRollEdit, "Edit");
-        menu.Append(ID_PianoRollDelete, "Delete");
-        PopupMenu(&menu, event.GetPosition());
-        if (m_selectionChangedCallback) {
-            m_selectionChangedCallback();
-        }
-        Refresh();
-    }
-
-    void OnMotion(wxMouseEvent &event) {
-        wxPoint logicalPoint;
-        int automationValue;
-        uint32_t automationTick;
-        uint32_t snappedTick;
-        int snappedNote;
-        BAERmfEditorNoteInfo updatedNote;
-
-        if (!m_document) {
-            return;
-        }
-        if (!m_dragging) {
-            UpdateHoverCursor(CalcUnscrolledPosition(event.GetPosition()));
-            return;
-        }
-        if (!event.Dragging() || !event.LeftIsDown()) {
-            return;
-        }
-        logicalPoint = CalcUnscrolledPosition(event.GetPosition());
-        if (m_selectedItemKind == PianoRollSelectionKind::Note) {
-            if (m_selectedNote < 0 || !HasTrack()) {
-                return;
-            }
-            updatedNote = m_dragOriginalNote;
-            if (m_dragMode == DragMode::Move) {
-                snappedTick = SnapTick(XToTick(logicalPoint.x));
-                snappedNote = YToNote(logicalPoint.y);
-                if (snappedTick >= m_dragStartTick) {
-                    updatedNote.startTick = m_dragOriginalNote.startTick + (snappedTick - m_dragStartTick);
-                } else {
-                    uint32_t deltaTicks;
-
-                    deltaTicks = m_dragStartTick - snappedTick;
-                    updatedNote.startTick = (deltaTicks > m_dragOriginalNote.startTick) ? 0 : (m_dragOriginalNote.startTick - deltaTicks);
-                }
-                updatedNote.note = static_cast<unsigned char>(std::clamp(static_cast<int>(m_dragOriginalNote.note) + (snappedNote - m_dragStartNote), 0, 127));
-            } else if (m_dragMode == DragMode::ResizeLeft) {
-                uint32_t originalEndTick;
-                uint32_t snappedStartTick;
-                uint32_t maxStartTick;
-
-                originalEndTick = m_dragOriginalNote.startTick + m_dragOriginalNote.durationTicks;
-                snappedStartTick = SnapTick(XToTick(logicalPoint.x));
-                maxStartTick = (originalEndTick > kSnapTicks) ? (originalEndTick - kSnapTicks) : 0;
-                updatedNote.startTick = std::min(snappedStartTick, maxStartTick);
-                updatedNote.durationTicks = std::max<uint32_t>(kSnapTicks, originalEndTick - updatedNote.startTick);
-            } else if (m_dragMode == DragMode::ResizeRight) {
-                uint32_t snappedEndTick;
-
-                snappedEndTick = SnapTick(XToTick(logicalPoint.x));
-                if (snappedEndTick <= m_dragOriginalNote.startTick + kSnapTicks) {
-                    snappedEndTick = m_dragOriginalNote.startTick + kSnapTicks;
-                }
-                updatedNote.durationTicks = snappedEndTick - m_dragOriginalNote.startTick;
-            }
-            if (BAERmfEditorDocument_SetNoteInfo(m_document,
-                                                 static_cast<uint16_t>(m_selectedTrack),
-                                                 static_cast<uint32_t>(m_selectedNote),
-                                                 &updatedNote) == BAE_NO_ERROR) {
-                UpdateVirtualSize();
-                Refresh();
-            }
-            return;
-        }
-        if (m_selectedItemKind != PianoRollSelectionKind::Automation || !m_dragAutomationValid || m_selectedAutomationLane < 0 || m_selectedAutomationEvent < 0) {
-            return;
-        }
-        automationTick = SnapTick(XToTick(logicalPoint.x));
-        automationValue = AutomationValueFromY(m_selectedAutomationLane, logicalPoint.y);
-        if (m_dragMode == DragMode::ResizeRight && m_dragAutomationHit.hasFollowingEvent) {
-            uint32_t currentTick;
-            uint32_t nextTickCurrent;
-            int currentValue;
-            int nextValueCurrent;
-            uint32_t nextNextTick;
-            uint32_t eventCount;
-
-            if (!GetAutomationEvent(m_selectedAutomationLane, static_cast<uint32_t>(m_selectedAutomationEvent), &currentTick, &currentValue)) {
-                return;
-            }
-            if (!GetAutomationEvent(m_selectedAutomationLane,
-                                    static_cast<uint32_t>(m_selectedAutomationEvent) + 1,
-                                    &nextTickCurrent,
-                                    &nextValueCurrent)) {
-                return;
-            }
-            nextNextTick = GetDocumentEndTick();
-            eventCount = 0;
-            GetAutomationEventCount(m_selectedAutomationLane, &eventCount);
-            if (static_cast<uint32_t>(m_selectedAutomationEvent) + 2 < eventCount) {
-                int nextNextValue;
-
-                GetAutomationEvent(m_selectedAutomationLane,
-                                   static_cast<uint32_t>(m_selectedAutomationEvent) + 2,
-                                   &nextNextTick,
-                                   &nextNextValue);
-            }
-            automationTick = std::clamp(automationTick,
-                                        currentTick + kSnapTicks,
-                                        nextNextTick > kSnapTicks ? (nextNextTick - kSnapTicks) : currentTick + kSnapTicks);
-            if (SetAutomationEvent(m_selectedAutomationLane,
-                                   static_cast<uint32_t>(m_selectedAutomationEvent) + 1,
-                                   automationTick,
-                                   nextValueCurrent)) {
-                UpdateVirtualSize();
-                Refresh();
-            }
-            return;
-        }
-        {
-            uint32_t previousTick;
-            uint32_t nextTick;
-            uint32_t eventCount;
-            int previousValue;
-            int nextValue;
-
-            previousTick = 0;
-            nextTick = GetDocumentEndTick();
-            eventCount = 0;
-            GetAutomationEventCount(m_selectedAutomationLane, &eventCount);
-            if (m_selectedAutomationEvent > 0) {
-                GetAutomationEvent(m_selectedAutomationLane,
-                                   static_cast<uint32_t>(m_selectedAutomationEvent) - 1,
-                                   &previousTick,
-                                   &previousValue);
-                previousTick += kSnapTicks;
-            }
-            if (static_cast<uint32_t>(m_selectedAutomationEvent) + 1 < eventCount) {
-                GetAutomationEvent(m_selectedAutomationLane,
-                                   static_cast<uint32_t>(m_selectedAutomationEvent) + 1,
-                                   &nextTick,
-                                   &nextValue);
-                if (nextTick > kSnapTicks) {
-                    nextTick -= kSnapTicks;
-                }
-            }
-            automationTick = std::clamp(automationTick, previousTick, nextTick);
-            if (SetAutomationEvent(m_selectedAutomationLane,
-                                   static_cast<uint32_t>(m_selectedAutomationEvent),
-                                   automationTick,
-                                   automationValue)) {
-                UpdateVirtualSize();
-                Refresh();
-            }
-        }
-    }
-
-    void OnCharHook(wxKeyEvent &event) {
-        if (event.GetKeyCode() == WXK_DELETE || event.GetKeyCode() == WXK_BACK) {
-            DeleteCurrentSelection();
-            return;
-        }
-        event.Skip();
-    }
-
-    void OnMouseWheel(wxMouseEvent &event) {
-        if (event.AltDown() && !event.ControlDown()) {
-            int wheelDelta;
-            int wheelRotation;
-            int steps;
-            int linesPerStep;
-            int scrollPixelsX;
-            int scrollPixelsY;
-            int viewUnitsX;
-            int viewUnitsY;
-            int currentLeft;
-            int clientWidth;
-            int maxLeft;
-            int newLeft;
-            wxSize virtualSize;
-
-            wheelDelta = event.GetWheelDelta();
-            wheelRotation = event.GetWheelRotation();
-            if (wheelDelta == 0 || wheelRotation == 0) {
-                return;
-            }
-            steps = wheelRotation / wheelDelta;
-            if (steps == 0) {
-                steps = (wheelRotation > 0) ? 1 : -1;
-            }
-            linesPerStep = std::max(1, event.GetLinesPerAction());
-            GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
-            if (scrollPixelsX <= 0) {
-                return;
-            }
-            GetViewStart(&viewUnitsX, &viewUnitsY);
-            currentLeft = viewUnitsX * scrollPixelsX;
-            clientWidth = std::max(1, GetClientSize().GetWidth());
-            virtualSize = GetVirtualSize();
-            maxLeft = std::max(0, virtualSize.GetWidth() - clientWidth);
-            newLeft = currentLeft - (steps * linesPerStep * scrollPixelsX * 2);
-            newLeft = std::clamp(newLeft, 0, maxLeft);
-            Scroll(newLeft / scrollPixelsX, viewUnitsY);
-            return;
-        }
-        if (event.ControlDown()) {
-            ApplyZoomStep(event.GetWheelRotation(), event.GetPosition());
-            return;
-        }
-        event.Skip();
-    }
-
-    void OnMouseLeave(wxMouseEvent &) {
-        if (!m_dragging) {
-            SetCursor(wxNullCursor);
-        }
-    }
-};
-
-class WaveformPanel final : public wxPanel {
-public:
-    explicit WaveformPanel(wxWindow *parent)
-        : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(480, 180), wxBORDER_SIMPLE),
-          m_waveData(nullptr),
-          m_frameCount(0),
-          m_bitSize(16),
-          m_channels(1) {
-        SetBackgroundStyle(wxBG_STYLE_PAINT);
-        Bind(wxEVT_PAINT, &WaveformPanel::OnPaint, this);
-    }
-
-    void SetWaveform(void const *waveData, uint32_t frameCount, uint16_t bitSize, uint16_t channels) {
-        m_waveData = waveData;
-        m_frameCount = frameCount;
-        m_bitSize = bitSize;
-        m_channels = channels;
-        Refresh();
-    }
-
-private:
-    void const *m_waveData;
-    uint32_t m_frameCount;
-    uint16_t m_bitSize;
-    uint16_t m_channels;
-
-    float SampleAt(uint32_t frame) const {
-        if (!m_waveData || m_frameCount == 0 || frame >= m_frameCount || m_channels == 0) {
-            return 0.0f;
-        }
-        if (m_bitSize == 8) {
-            unsigned char const *pcm = static_cast<unsigned char const *>(m_waveData);
-            uint32_t idx = frame * m_channels;
-            int value = static_cast<int>(pcm[idx]) - 128;
-            return static_cast<float>(value) / 128.0f;
-        }
-        if (m_bitSize == 16) {
-            int16_t const *pcm = static_cast<int16_t const *>(m_waveData);
-            uint32_t idx = frame * m_channels;
-            return static_cast<float>(pcm[idx]) / 32768.0f;
-        }
-        return 0.0f;
-    }
-
-    void OnPaint(wxPaintEvent &) {
-        wxAutoBufferedPaintDC dc(this);
-        wxSize size = GetClientSize();
-        int centerY = size.y / 2;
-
-        dc.SetBackground(wxBrush(wxColour(22, 22, 22)));
-        dc.Clear();
-        dc.SetPen(wxPen(wxColour(70, 70, 70), 1));
-        dc.DrawLine(0, centerY, size.x, centerY);
-
-        if (!m_waveData || m_frameCount == 0 || size.x <= 2 || size.y <= 2) {
-            dc.SetTextForeground(wxColour(200, 200, 200));
-            dc.DrawText("No waveform data", 10, 10);
-            return;
-        }
-
-        dc.SetPen(wxPen(wxColour(98, 215, 255), 1));
-        uint32_t framesPerPixel = std::max<uint32_t>(1, m_frameCount / static_cast<uint32_t>(std::max(1, size.x)));
-        for (int x = 0; x < size.x; ++x) {
-            uint32_t start = static_cast<uint32_t>(x) * framesPerPixel;
-            uint32_t end = std::min<uint32_t>(m_frameCount, start + framesPerPixel);
-            float minV = 1.0f;
-            float maxV = -1.0f;
-            uint32_t frame;
-
-            if (start >= m_frameCount) {
-                break;
-            }
-            if (end <= start) {
-                end = std::min<uint32_t>(m_frameCount, start + 1);
-            }
-            for (frame = start; frame < end; ++frame) {
-                float v = SampleAt(frame);
-                if (v < minV) {
-                    minV = v;
-                }
-                if (v > maxV) {
-                    maxV = v;
-                }
-            }
-            int y1 = centerY - static_cast<int>(maxV * (centerY - 4));
-            int y2 = centerY - static_cast<int>(minV * (centerY - 4));
-            dc.DrawLine(x, y1, x, y2);
-        }
-    }
-};
-
-class InstrumentEditorDialog final : public wxDialog {
-public:
-    struct EditedSample {
-        wxString displayName;
-        wxString sourcePath;
-        unsigned char program;
-        unsigned char rootKey;
-        unsigned char lowKey;
-        unsigned char highKey;
-        BAESampleInfo sampleInfo;
-    };
-
-    InstrumentEditorDialog(wxWindow *parent,
-                           BAERmfEditorDocument const *document,
-                           uint32_t primarySampleIndex,
-                           std::function<void(uint32_t, int)> playCallback,
-                                                     std::function<void()> stopCallback,
-                                                     std::function<bool(uint32_t, wxString const &)> replaceCallback,
-                                                     std::function<bool(uint32_t, wxString const &)> exportCallback)
-        : wxDialog(parent, wxID_ANY, "Embedded Instrument", wxDefaultPosition, wxSize(640, 460), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER),
-          m_document(document),
-          m_currentLocalIndex(-1),
-          m_playCallback(std::move(playCallback)),
-                    m_stopCallback(std::move(stopCallback)),
-                    m_replaceCallback(std::move(replaceCallback)),
-                    m_exportCallback(std::move(exportCallback)) {
-        wxBoxSizer *rootSizer = new wxBoxSizer(wxVERTICAL);
-        wxFlexGridSizer *grid = new wxFlexGridSizer(2, 6, 8, 8);
-        wxBoxSizer *triggerSizer = new wxBoxSizer(wxHORIZONTAL);
-        wxBoxSizer *instrumentSizer = new wxBoxSizer(wxHORIZONTAL);
-
-        BuildSampleGroup(primarySampleIndex);
-        if (m_sampleIndices.empty()) {
-            return;
-        }
-
-        m_splitChoice = new wxChoice(this, wxID_ANY);
-        m_nameText = new wxTextCtrl(this, wxID_ANY, "");
-        m_programSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, m_samples[0].program);
-        m_rootSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, 60);
-        m_lowSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, 0);
-        m_highSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, 127);
-        m_triggerSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(90, -1), wxSP_ARROW_KEYS, 0, 127, 60);
-        m_playButton = new wxButton(this, wxID_ANY, "Play");
-        m_stopButton = new wxButton(this, wxID_ANY, "Stop");
-        m_replaceButton = new wxButton(this, wxID_ANY, "Replace Sample...");
-        m_exportButton = new wxButton(this, wxID_ANY, "Save Sample...");
-        m_rangeLabel = new wxStaticText(this, wxID_ANY, "");
-        m_waveformPanel = new WaveformPanel(this);
-
-        for (size_t i = 0; i < m_samples.size(); ++i) {
-            m_splitChoice->Append(BuildSplitLabel(static_cast<int>(i)));
-        }
-
-        instrumentSizer->Add(new wxStaticText(this, wxID_ANY, "Instrument Program"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        instrumentSizer->Add(m_programSpin, 0, wxRIGHT, 16);
-        instrumentSizer->Add(new wxStaticText(this, wxID_ANY, "Sample"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        instrumentSizer->Add(m_splitChoice, 1, wxEXPAND);
-
-        grid->Add(new wxStaticText(this, wxID_ANY, "Title"), 0, wxALIGN_CENTER_VERTICAL);
-        grid->Add(m_nameText, 1, wxEXPAND);
-        grid->Add(new wxStaticText(this, wxID_ANY, "Key Range"), 0, wxALIGN_CENTER_VERTICAL);
-        grid->Add(m_rangeLabel, 1, wxALIGN_CENTER_VERTICAL);
-        grid->Add(new wxStaticText(this, wxID_ANY, "Root"), 0, wxALIGN_CENTER_VERTICAL);
-        grid->Add(m_rootSpin, 1, wxEXPAND);
-        grid->Add(new wxStaticText(this, wxID_ANY, "Low Key"), 0, wxALIGN_CENTER_VERTICAL);
-        grid->Add(m_lowSpin, 1, wxEXPAND);
-        grid->Add(new wxStaticText(this, wxID_ANY, "High Key"), 0, wxALIGN_CENTER_VERTICAL);
-        grid->Add(m_highSpin, 1, wxEXPAND);
-        grid->AddGrowableCol(1, 1);
-        grid->AddGrowableCol(3, 1);
-        grid->AddGrowableCol(5, 1);
-
-        triggerSizer->Add(new wxStaticText(this, wxID_ANY, "Preview Key"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-        triggerSizer->Add(m_triggerSpin, 0, wxRIGHT, 8);
-        triggerSizer->Add(m_playButton, 0, wxRIGHT, 8);
-        triggerSizer->Add(m_stopButton, 0, wxRIGHT, 8);
-        triggerSizer->Add(m_replaceButton, 0, wxRIGHT, 8);
-        triggerSizer->Add(m_exportButton, 0, wxRIGHT, 8);
-
-        rootSizer->Add(instrumentSizer, 0, wxEXPAND | wxALL, 10);
-        rootSizer->Add(grid, 0, wxEXPAND | wxALL, 10);
-        rootSizer->Add(triggerSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
-        rootSizer->Add(new wxStaticText(this, wxID_ANY, "Waveform"), 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
-        rootSizer->Add(m_waveformPanel, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
-        rootSizer->Add(CreateSeparatedButtonSizer(wxOK | wxCANCEL), 0, wxEXPAND | wxALL, 10);
-        SetSizerAndFit(rootSizer);
-
-        Bind(wxEVT_CHOICE, &InstrumentEditorDialog::OnSplitChanged, this, m_splitChoice->GetId());
-        Bind(wxEVT_BUTTON, &InstrumentEditorDialog::OnPlay, this, m_playButton->GetId());
-        Bind(wxEVT_BUTTON, &InstrumentEditorDialog::OnStop, this, m_stopButton->GetId());
-        Bind(wxEVT_BUTTON, &InstrumentEditorDialog::OnReplace, this, m_replaceButton->GetId());
-        Bind(wxEVT_BUTTON, &InstrumentEditorDialog::OnExport, this, m_exportButton->GetId());
-        Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { ClampRange(); }, m_lowSpin->GetId());
-        Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { ClampRange(); }, m_highSpin->GetId());
-        m_splitChoice->SetSelection(0);
-        LoadLocalSample(0);
-    }
-
-    std::vector<uint32_t> const &GetSampleIndices() const {
-        return m_sampleIndices;
-    }
-
-    std::vector<EditedSample> const &GetEditedSamples() {
-        SaveCurrentFromUI();
-        return m_samples;
-    }
-
-private:
-    static wxString SanitizeDisplayName(wxString const &name) {
-        wxString clean;
-        for (wxUniChar ch : name) {
-            if (ch >= 32 && ch != 127) {
-                clean.Append(ch);
-            }
-        }
-        if (clean.IsEmpty()) {
-            clean = "Embedded Sample";
-        }
-        return clean;
-    }
-
-    BAERmfEditorDocument const *m_document;
-    std::vector<uint32_t> m_sampleIndices;
-    std::vector<EditedSample> m_samples;
-    int m_currentLocalIndex;
-    std::function<void(uint32_t, int)> m_playCallback;
-    std::function<void()> m_stopCallback;
-    std::function<bool(uint32_t, wxString const &)> m_replaceCallback;
-    std::function<bool(uint32_t, wxString const &)> m_exportCallback;
-    wxChoice *m_splitChoice;
-    wxTextCtrl *m_nameText;
-    wxSpinCtrl *m_programSpin;
-    wxSpinCtrl *m_rootSpin;
-    wxSpinCtrl *m_lowSpin;
-    wxSpinCtrl *m_highSpin;
-    wxSpinCtrl *m_triggerSpin;
-    wxButton *m_playButton;
-    wxButton *m_stopButton;
-    wxButton *m_replaceButton;
-    wxButton *m_exportButton;
-    wxStaticText *m_rangeLabel;
-    WaveformPanel *m_waveformPanel;
-
-    void BuildSampleGroup(uint32_t primarySampleIndex) {
-        uint32_t sampleCount;
-        BAERmfEditorSampleInfo primaryInfo;
-
-        sampleCount = 0;
-        if (!m_document ||
-            BAERmfEditorDocument_GetSampleInfo(m_document, primarySampleIndex, &primaryInfo) != BAE_NO_ERROR ||
-            BAERmfEditorDocument_GetSampleCount(m_document, &sampleCount) != BAE_NO_ERROR) {
-            return;
-        }
-        for (uint32_t i = 0; i < sampleCount; ++i) {
-            BAERmfEditorSampleInfo info;
-            if (BAERmfEditorDocument_GetSampleInfo(m_document, i, &info) != BAE_NO_ERROR) {
-                continue;
-            }
-            if (info.program == primaryInfo.program) {
-                EditedSample edited;
-                edited.displayName = SanitizeDisplayName(info.displayName ? wxString::FromUTF8(info.displayName) : wxString());
-                edited.sourcePath = info.sourcePath ? wxString::FromUTF8(info.sourcePath) : wxString();
-                edited.program = info.program;
-                edited.rootKey = info.rootKey;
-                edited.lowKey = info.lowKey;
-                edited.highKey = info.highKey;
-                edited.sampleInfo = info.sampleInfo;
-                m_sampleIndices.push_back(i);
-                m_samples.push_back(edited);
-            }
-        }
-    }
-
-    wxString BuildSplitLabel(int localIndex) const {
-        EditedSample const &s = m_samples[localIndex];
-        return wxString::Format("%d-%d: %s", static_cast<int>(s.lowKey), static_cast<int>(s.highKey), s.displayName);
-    }
-
-    void SaveCurrentFromUI() {
-        if (m_currentLocalIndex < 0 || m_currentLocalIndex >= static_cast<int>(m_samples.size())) {
-            return;
-        }
-        EditedSample &sample = m_samples[static_cast<size_t>(m_currentLocalIndex)];
-        sample.displayName = SanitizeDisplayName(m_nameText->GetValue());
-        sample.rootKey = static_cast<unsigned char>(m_rootSpin->GetValue());
-        sample.lowKey = static_cast<unsigned char>(m_lowSpin->GetValue());
-        sample.highKey = static_cast<unsigned char>(m_highSpin->GetValue());
-        sample.program = static_cast<unsigned char>(m_programSpin->GetValue());
-        m_rangeLabel->SetLabel(wxString::Format("%d-%d", static_cast<int>(sample.lowKey), static_cast<int>(sample.highKey)));
-        if (m_splitChoice && m_currentLocalIndex < static_cast<int>(m_splitChoice->GetCount())) {
-            m_splitChoice->SetString(m_currentLocalIndex, BuildSplitLabel(m_currentLocalIndex));
-        }
-    }
-
-    void LoadLocalSample(int localIndex) {
-        if (localIndex < 0 || localIndex >= static_cast<int>(m_samples.size())) {
-            return;
-        }
-        m_currentLocalIndex = localIndex;
-        EditedSample const &sample = m_samples[static_cast<size_t>(localIndex)];
-        m_nameText->SetValue(sample.displayName);
-        m_rangeLabel->SetLabel(wxString::Format("%d-%d", static_cast<int>(sample.lowKey), static_cast<int>(sample.highKey)));
-        m_rootSpin->SetValue(sample.rootKey);
-        m_lowSpin->SetValue(sample.lowKey);
-        m_highSpin->SetValue(sample.highKey);
-        m_programSpin->SetValue(sample.program);
-        m_triggerSpin->SetValue(sample.rootKey);
-        RefreshWaveform();
-    }
-
-    void ClampRange() {
-        if (m_lowSpin->GetValue() > m_highSpin->GetValue()) {
-            m_highSpin->SetValue(m_lowSpin->GetValue());
-        }
-    }
-
-    void RefreshWaveform() {
-        void const *waveData;
-        uint32_t frameCount;
-        uint16_t bitSize;
-        uint16_t channels;
-        BAE_UNSIGNED_FIXED sampleRate;
-        uint32_t sampleIndex;
-
-        if (m_currentLocalIndex < 0 || m_currentLocalIndex >= static_cast<int>(m_sampleIndices.size())) {
-            return;
-        }
-        sampleIndex = m_sampleIndices[static_cast<size_t>(m_currentLocalIndex)];
-        waveData = nullptr;
-        frameCount = 0;
-        bitSize = 16;
-        channels = 1;
-        sampleRate = 0;
-        if (BAERmfEditorDocument_GetSampleWaveformData(m_document,
-                                                       sampleIndex,
-                                                       &waveData,
-                                                       &frameCount,
-                                                       &bitSize,
-                                                       &channels,
-                                                       &sampleRate) == BAE_NO_ERROR) {
-            m_waveformPanel->SetWaveform(waveData, frameCount, bitSize, channels);
-        }
-    }
-
-    void OnSplitChanged(wxCommandEvent &) {
-        int selection;
-        SaveCurrentFromUI();
-        selection = m_splitChoice->GetSelection();
-        if (selection >= 0) {
-            LoadLocalSample(selection);
-        }
-    }
-
-    void OnPlay(wxCommandEvent &) {
-        uint32_t sampleIndex;
-        if (!m_playCallback || m_currentLocalIndex < 0 || m_currentLocalIndex >= static_cast<int>(m_sampleIndices.size())) {
-            return;
-        }
-        sampleIndex = m_sampleIndices[static_cast<size_t>(m_currentLocalIndex)];
-        m_playCallback(sampleIndex, m_triggerSpin->GetValue());
-    }
-
-    void OnStop(wxCommandEvent &) {
-        if (m_stopCallback) {
-            m_stopCallback();
-        }
-    }
-
-    void OnReplace(wxCommandEvent &) {
-        uint32_t sampleIndex;
-        wxFileDialog dialog(this,
-                            "Replace Embedded Sample",
-                            wxEmptyString,
-                            wxEmptyString,
-                            "Audio files (*.wav;*.aif;*.aiff)|*.wav;*.aif;*.aiff|All files (*.*)|*.*",
-                            wxFD_OPEN | wxFD_FILE_MUST_EXIST);
-        if (!m_replaceCallback || m_currentLocalIndex < 0 || m_currentLocalIndex >= static_cast<int>(m_sampleIndices.size())) {
-            return;
-        }
-        if (dialog.ShowModal() != wxID_OK) {
-            return;
-        }
-        sampleIndex = m_sampleIndices[static_cast<size_t>(m_currentLocalIndex)];
-        if (!m_replaceCallback(sampleIndex, dialog.GetPath())) {
-            wxMessageBox("Failed to replace sample.", "Embedded Instruments", wxOK | wxICON_ERROR, this);
-            return;
-        }
-        {
-            BAERmfEditorSampleInfo info;
-            if (BAERmfEditorDocument_GetSampleInfo(m_document, sampleIndex, &info) == BAE_NO_ERROR) {
-                EditedSample &sample = m_samples[static_cast<size_t>(m_currentLocalIndex)];
-                sample.sourcePath = info.sourcePath ? wxString::FromUTF8(info.sourcePath) : wxString();
-                sample.sampleInfo = info.sampleInfo;
-            }
-        }
-        RefreshWaveform();
-    }
-
-    void OnExport(wxCommandEvent &) {
-        uint32_t sampleIndex;
-        wxString codec;
-        char codecBuf[64];
-        wxString suggestedName;
-        wxString defaultExt;
-        wxFileDialog dialog(this,
-                            "Save Embedded Sample",
-                            wxEmptyString,
-                            wxEmptyString,
-                            "WAV files (*.wav)|*.wav|AIFF files (*.aif)|*.aif|All files (*.*)|*.*",
-                            wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
-
-        if (!m_exportCallback || m_currentLocalIndex < 0 || m_currentLocalIndex >= static_cast<int>(m_sampleIndices.size())) {
-            return;
-        }
-        sampleIndex = m_sampleIndices[static_cast<size_t>(m_currentLocalIndex)];
-        codecBuf[0] = 0;
-        if (BAERmfEditorDocument_GetSampleCodecDescription(m_document, sampleIndex, codecBuf, sizeof(codecBuf)) == BAE_NO_ERROR) {
-            codec = wxString::FromUTF8(codecBuf);
-        }
-        defaultExt = (codec.Lower().Contains("ima")) ? "aif" : "wav";
-        suggestedName = SanitizeDisplayName(m_nameText->GetValue()) + "." + defaultExt;
-        dialog.SetFilename(suggestedName);
-
-        if (dialog.ShowModal() != wxID_OK) {
-            return;
-        }
-        if (!m_exportCallback(sampleIndex, dialog.GetPath())) {
-            wxMessageBox("Failed to save sample.", "Embedded Instruments", wxOK | wxICON_ERROR, this);
-            return;
-        }
-        if (!codec.IsEmpty()) {
-            wxMessageBox(wxString::Format("Saved sample. Source codec: %s", codec),
-                         "Embedded Instruments",
-                         wxOK | wxICON_INFORMATION,
-                         this);
-        }
-    }
-};
 
 class MainFrame final : public wxFrame {
 public:
@@ -2544,17 +230,18 @@ public:
 
         m_positionSlider = new wxSlider(editorPanel, wxID_ANY, 0, 0, 1000, wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL);
 
-        m_pianoRoll = new PianoRollPanel(editorPanel);
+        m_pianoRoll = CreatePianoRollPanel(editorPanel);
         editorSizer->Add(controlsSizer, 0, wxEXPAND | wxALL, 10);
         editorSizer->Add(transportSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
         editorSizer->Add(m_positionSlider, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
-        editorSizer->Add(m_pianoRoll, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        editorSizer->Add(PianoRollPanel_AsWindow(m_pianoRoll), 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         editorPanel->SetSizer(editorSizer);
 
-        m_pianoRoll->SetSelectionChangedCallback([this]() { UpdateControlsFromSelection(); });
-        m_pianoRoll->SetUndoCallbacks([this](wxString const &label) { BeginUndoAction(label); },
-                          [this](wxString const &label) { CommitUndoAction(label); },
-                          [this]() { CancelUndoAction(); });
+        PianoRollPanel_SetSelectionChangedCallback(m_pianoRoll, [this]() { UpdateControlsFromSelection(); });
+        PianoRollPanel_SetUndoCallbacks(m_pianoRoll,
+                        [this](wxString const &label) { BeginUndoAction(label); },
+                        [this](wxString const &label) { CommitUndoAction(label); },
+                        [this]() { CancelUndoAction(); });
 
         splitter->SplitVertically(sidebar, editorPanel, 240);
         splitter->SetMinimumPaneSize(180);
@@ -2633,6 +320,7 @@ private:
     wxChoice *m_playScopeChoice;
     wxSlider *m_positionSlider;
     wxListBox *m_sampleList;
+    std::vector<uint32_t> m_sampleListMap; /* list row -> first sample index for that program */
     wxButton *m_sampleAddButton;
     BAEMixer m_playbackMixer;
     BAESong m_playbackSong;
@@ -2891,7 +579,7 @@ private:
         if (m_redoStack.size() > 128) {
             m_redoStack.erase(m_redoStack.begin());
         }
-        m_pianoRoll->RefreshFromDocument(true);
+        PianoRollPanel_RefreshFromDocument(m_pianoRoll, true);
         UpdateControlsFromSelection();
         SetStatusText(entry.label.empty() ? "Undo" : wxString::Format("Undid %s", entry.label), 0);
         UpdateUndoMenuState();
@@ -2918,7 +606,7 @@ private:
         if (m_undoStack.size() > 128) {
             m_undoStack.erase(m_undoStack.begin());
         }
-        m_pianoRoll->RefreshFromDocument(true);
+        PianoRollPanel_RefreshFromDocument(m_pianoRoll, true);
         UpdateControlsFromSelection();
         SetStatusText(entry.label.empty() ? "Redo" : wxString::Format("Redid %s", entry.label), 0);
         UpdateUndoMenuState();
@@ -2998,29 +686,45 @@ private:
         uint32_t sampleIndex;
 
         m_sampleList->Clear();
+        m_sampleListMap.clear();
         if (!m_document) {
             return;
         }
         sampleCount = 0;
         BAERmfEditorDocument_GetSampleCount(m_document, &sampleCount);
+        /* One list row per unique program number, showing the first sample's name. */
+        std::vector<bool> seen(128, false);
         for (sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
             BAERmfEditorSampleInfo sampleInfo;
-            wxString label;
 
             if (BAERmfEditorDocument_GetSampleInfo(m_document, sampleIndex, &sampleInfo) != BAE_NO_ERROR) {
                 continue;
             }
-            label = wxString::Format("P%u Root %u [%u-%u] %s",
-                                     static_cast<unsigned>(sampleInfo.program),
-                                     static_cast<unsigned>(sampleInfo.rootKey),
-                                     static_cast<unsigned>(sampleInfo.lowKey),
-                                     static_cast<unsigned>(sampleInfo.highKey),
-                                     sampleInfo.displayName ? sampleInfo.displayName : "(unnamed)");
+            if (seen[sampleInfo.program]) {
+                continue;
+            }
+            seen[sampleInfo.program] = true;
+            /* Count how many samples share this program for the split hint. */
+            uint32_t splitCount = 0;
+            for (uint32_t j = 0; j < sampleCount; ++j) {
+                BAERmfEditorSampleInfo other;
+                if (BAERmfEditorDocument_GetSampleInfo(m_document, j, &other) == BAE_NO_ERROR &&
+                    other.program == sampleInfo.program) {
+                    ++splitCount;
+                }
+            }
+            wxString label = wxString::Format("P%u: %s",
+                                              static_cast<unsigned>(sampleInfo.program),
+                                              sampleInfo.displayName ? sampleInfo.displayName : "(unnamed)");
+            if (splitCount > 1) {
+                label += wxString::Format(" (%u splits)", splitCount);
+            }
             m_sampleList->Append(label);
+            m_sampleListMap.push_back(sampleIndex);
         }
     }
 
-    bool PreviewSampleAtKey(uint32_t sampleIndex, int midiKey) {
+    bool PreviewSampleAtKey(uint32_t sampleIndex, int midiKey, BAESampleInfo const *overrideInfo = nullptr) {
         BAERmfEditorSampleInfo sampleInfo;
         BAEResult loadResult;
         BAEResult startResult;
@@ -3051,6 +755,64 @@ private:
         stopResult = BAESound_Stop(m_previewSound, FALSE);
         fprintf(stderr, "[nbstudio] Preview sample %u stop result=%d\n", static_cast<unsigned>(sampleIndex), static_cast<int>(stopResult));
 
+        loadResult = BAE_GENERAL_ERR;
+
+        /* When the caller provides live loop overrides, always use raw PCM so
+           loop settings from the UI are honoured instead of stale file data. */
+        if (overrideInfo) {
+            void const *waveData;
+            uint32_t frameCount;
+            uint16_t bitSize;
+            uint16_t channels;
+            BAE_UNSIGNED_FIXED sampleRate;
+            uint32_t loopStart;
+            uint32_t loopEnd;
+
+            waveData = nullptr;
+            frameCount = 0;
+            bitSize = 16;
+            channels = 1;
+            sampleRate = 0;
+            if (BAERmfEditorDocument_GetSampleWaveformData(m_document,
+                                                           sampleIndex,
+                                                           &waveData,
+                                                           &frameCount,
+                                                           &bitSize,
+                                                           &channels,
+                                                           &sampleRate) == BAE_NO_ERROR &&
+                frameCount > 0 &&
+                (bitSize == 8 || bitSize == 16) &&
+                (channels == 1 || channels == 2)) {
+                if (sampleRate < (8000U << 16)) {
+                    if (sampleRate >= 4000U && sampleRate <= 384000U) {
+                        sampleRate <<= 16;
+                    } else {
+                        sampleRate = (44100U << 16);
+                    }
+                }
+                loopStart = overrideInfo->startLoop;
+                loopEnd   = overrideInfo->endLoop;
+                if (loopStart >= frameCount || loopEnd > frameCount || loopEnd <= loopStart) {
+                    loopStart = 0;
+                    loopEnd   = 0;
+                }
+                loadResult = BAESound_LoadCustomSample(m_previewSound,
+                                                       const_cast<void *>(waveData),
+                                                       frameCount,
+                                                       bitSize,
+                                                       channels,
+                                                       sampleRate,
+                                                       loopStart,
+                                                       loopEnd);
+                if (loadResult != BAE_NO_ERROR) {
+                    loadResult = BAE_GENERAL_ERR; /* fall through to file paths */
+                }
+            }
+        }
+
+        if (loadResult == BAE_NO_ERROR) {
+            goto preview_loaded;
+        }
         loadResult = BAE_GENERAL_ERR;
 
         if (sampleInfo.sourcePath && sampleInfo.sourcePath[0]) {
@@ -3143,6 +905,10 @@ private:
             }
             loopStart = sampleInfo.sampleInfo.startLoop;
             loopEnd = sampleInfo.sampleInfo.endLoop;
+            if (overrideInfo) {
+                loopStart = overrideInfo->startLoop;
+                loopEnd   = overrideInfo->endLoop;
+            }
             if (loopStart >= frameCount || loopEnd > frameCount || loopEnd <= loopStart) {
                 loopStart = 0;
                 loopEnd = 0;
@@ -3167,6 +933,7 @@ private:
                     static_cast<unsigned>(sampleIndex));
         }
 
+        preview_loaded:
         {
             BAESampleInfo loadedInfo;
             if (BAESound_GetInfo(m_previewSound, &loadedInfo) == BAE_NO_ERROR) {
@@ -3456,8 +1223,8 @@ private:
         m_document = document;
         ClearUndoHistory();
         m_currentPath = path;
-        m_pianoRoll->SetDocument(m_document);
-        m_pianoRoll->ClearPlayhead();
+        PianoRollPanel_SetDocument(m_pianoRoll, m_document);
+        PianoRollPanel_ClearPlayhead(m_pianoRoll);
         m_ignoreSeekEvent = true;
         m_positionSlider->SetValue(0);
         m_ignoreSeekEvent = false;
@@ -3493,9 +1260,9 @@ private:
         }
         if (!m_trackList->IsEmpty()) {
             m_trackList->SetSelection(0);
-            m_pianoRoll->SetSelectedTrack(0);
+            PianoRollPanel_SetSelectedTrack(m_pianoRoll, 0);
         } else {
-            m_pianoRoll->SetSelectedTrack(-1);
+            PianoRollPanel_SetSelectedTrack(m_pianoRoll, -1);
         }
         UpdateControlsFromSelection();
     }
@@ -3523,7 +1290,7 @@ private:
         if (selectedTrack >= 0 && BAERmfEditorDocument_GetTrackInfo(m_document, static_cast<uint16_t>(selectedTrack), &trackInfo) == BAE_NO_ERROR) {
             BAERmfEditorNoteInfo selectedNote;
 
-            if (m_pianoRoll->GetSelectedNoteInfo(&selectedNote)) {
+            if (PianoRollPanel_GetSelectedNoteInfo(m_pianoRoll, &selectedNote)) {
                 m_bankSpin->SetValue(DisplayBankFromInternal(selectedNote.bank));
                 m_programSpin->SetValue(selectedNote.program);
             } else {
@@ -3533,7 +1300,9 @@ private:
             m_transposeSpin->SetValue(trackInfo.transpose);
             m_panSpin->SetValue(trackInfo.pan);
             m_volumeSpin->SetValue(trackInfo.volume);
-            m_pianoRoll->SetNewNoteInstrument(InternalBankFromDisplay(static_cast<uint16_t>(m_bankSpin->GetValue())), static_cast<unsigned char>(m_programSpin->GetValue()));
+            PianoRollPanel_SetNewNoteInstrument(m_pianoRoll,
+                                                InternalBankFromDisplay(static_cast<uint16_t>(m_bankSpin->GetValue())),
+                                                static_cast<unsigned char>(m_programSpin->GetValue()));
         }
         m_updatingControls = false;
     }
@@ -3651,7 +1420,7 @@ private:
     }
 
     void OnTrackSelected(wxCommandEvent &) {
-        m_pianoRoll->SetSelectedTrack(GetSelectedTrack());
+        PianoRollPanel_SetSelectedTrack(m_pianoRoll, GetSelectedTrack());
         UpdateControlsFromSelection();
     }
 
@@ -3662,7 +1431,7 @@ private:
         BeginUndoAction("Change Tempo");
         if (BAERmfEditorDocument_SetTempoBPM(m_document, static_cast<uint32_t>(m_tempoSpin->GetValue())) == BAE_NO_ERROR) {
             CommitUndoAction("Change Tempo");
-            m_pianoRoll->RefreshFromDocument(false);
+            PianoRollPanel_RefreshFromDocument(m_pianoRoll, false);
         } else {
             CancelUndoAction();
         }
@@ -3680,11 +1449,11 @@ private:
         if (selectedTrack < 0 || BAERmfEditorDocument_GetTrackInfo(m_document, static_cast<uint16_t>(selectedTrack), &trackInfo) != BAE_NO_ERROR) {
             return;
         }
-        if (m_pianoRoll->GetSelectedNoteInfo(&selectedNote)) {
+        if (PianoRollPanel_GetSelectedNoteInfo(m_pianoRoll, &selectedNote)) {
             selectedNote.bank = InternalBankFromDisplay(static_cast<uint16_t>(m_bankSpin->GetValue()));
             selectedNote.program = static_cast<unsigned char>(m_programSpin->GetValue());
-            m_pianoRoll->SetSelectedNoteInstrument(selectedNote.bank, selectedNote.program);
-            m_pianoRoll->SetNewNoteInstrument(selectedNote.bank, selectedNote.program);
+            PianoRollPanel_SetSelectedNoteInstrument(m_pianoRoll, selectedNote.bank, selectedNote.program);
+            PianoRollPanel_SetNewNoteInstrument(m_pianoRoll, selectedNote.bank, selectedNote.program);
             return;
         }
         trackInfo.bank = InternalBankFromDisplay(static_cast<uint16_t>(m_bankSpin->GetValue()));
@@ -3696,8 +1465,8 @@ private:
             if (selectedTrack >= 0 && selectedTrack < static_cast<int>(m_trackList->GetCount())) {
                 m_trackList->SetString(static_cast<unsigned>(selectedTrack), BuildTrackLabel(selectedTrack, trackInfo));
             }
-            m_pianoRoll->SetNewNoteInstrument(trackInfo.bank, trackInfo.program);
-            m_pianoRoll->Refresh();
+            PianoRollPanel_SetNewNoteInstrument(m_pianoRoll, trackInfo.bank, trackInfo.program);
+            PianoRollPanel_Refresh(m_pianoRoll);
         }
     }
 
@@ -3757,7 +1526,7 @@ private:
             ClearUndoHistory();
             PopulateTrackList();
             m_trackList->SetSelection(newTrackIndex);
-            m_pianoRoll->SetSelectedTrack(newTrackIndex);
+            PianoRollPanel_SetSelectedTrack(m_pianoRoll, newTrackIndex);
             UpdateControlsFromSelection();
         }
     }
@@ -3968,7 +1737,7 @@ private:
         m_positionSlider->SetValue(0);
         m_ignoreSeekEvent = false;
         m_autoFollowPlayhead = true;
-        m_pianoRoll->SetPlayheadTick(0);
+        PianoRollPanel_SetPlayheadTick(m_pianoRoll, 0);
         SetStatusText("Playing", 0);
     }
 
@@ -3994,7 +1763,7 @@ private:
         m_ignoreSeekEvent = true;
         m_positionSlider->SetValue(0);
         m_ignoreSeekEvent = false;
-        m_pianoRoll->ClearPlayhead();
+        PianoRollPanel_ClearPlayhead(m_pianoRoll);
         SetStatusText("Stopped", 0);
     }
 
@@ -4024,9 +1793,9 @@ private:
                     uint32_t playheadTick;
 
                     playheadTick = MicrosecondsToTicks(posUsec);
-                    m_pianoRoll->SetPlayheadTick(playheadTick);
+                    PianoRollPanel_SetPlayheadTick(m_pianoRoll, playheadTick);
                     if (m_autoFollowPlayhead) {
-                        m_pianoRoll->EnsurePlayheadVisible(playheadTick);
+                        PianoRollPanel_EnsurePlayheadVisible(m_pianoRoll, playheadTick);
                     }
                 }
             }
@@ -4057,8 +1826,8 @@ private:
         BAESong_SetMicrosecondPosition(m_playbackSong, targetUsec);
         {
             uint32_t seekTick = MicrosecondsToTicks(targetUsec);
-            m_pianoRoll->SetPlayheadTick(seekTick);
-            m_pianoRoll->JumpToTick(seekTick);
+            PianoRollPanel_SetPlayheadTick(m_pianoRoll, seekTick);
+            PianoRollPanel_JumpToTick(m_pianoRoll, seekTick);
         }
     }
 
@@ -4177,7 +1946,13 @@ private:
 
         PopulateSampleList();
         if (newSampleIndex < static_cast<uint32_t>(m_sampleList->GetCount())) {
-            m_sampleList->SetSelection(static_cast<int>(newSampleIndex));
+            /* Find the list row that maps to this new sample's program. */
+            for (size_t row = 0; row < m_sampleListMap.size(); ++row) {
+                if (m_sampleListMap[row] == newSampleIndex) {
+                    m_sampleList->SetSelection(static_cast<int>(row));
+                    break;
+                }
+            }
         }
 
         {
@@ -4185,38 +1960,69 @@ private:
             OnSampleEdit(dummyEvent);
         }
 
-        if (newSampleIndex < static_cast<uint32_t>(m_sampleList->GetCount())) {
-            BAERmfEditorSampleInfo verifyInfo;
-            if (BAERmfEditorDocument_GetSampleInfo(m_document, newSampleIndex, &verifyInfo) == BAE_NO_ERROR &&
-                verifyInfo.sourcePath == NULL && verifyInfo.sampleInfo.waveFrames <= 1) {
-                /* User likely canceled without replacing; remove placeholder sample. */
-                BAERmfEditorDocument_DeleteSample(m_document, newSampleIndex);
-                PopulateSampleList();
+        {
+            int curSel = m_sampleList->GetSelection();
+            if (curSel >= 0 && static_cast<size_t>(curSel) < m_sampleListMap.size()) {
+                uint32_t checkIndex = m_sampleListMap[static_cast<size_t>(curSel)];
+                BAERmfEditorSampleInfo verifyInfo;
+                if (BAERmfEditorDocument_GetSampleInfo(m_document, checkIndex, &verifyInfo) == BAE_NO_ERROR &&
+                    verifyInfo.sourcePath == NULL && verifyInfo.sampleInfo.waveFrames <= 1) {
+                    /* User likely canceled without replacing; remove placeholder sample. */
+                    BAERmfEditorDocument_DeleteSample(m_document, checkIndex);
+                    PopulateSampleList();
+                }
             }
         }
     }
 
     void OnSampleDelete(wxCommandEvent &) {
         int selected;
+        uint32_t firstSampleIndex;
+        BAERmfEditorSampleInfo firstInfo;
+        uint32_t sampleCount;
+        unsigned char program;
+        std::vector<uint32_t> toDelete;
 
         if (!m_document) {
             return;
         }
         selected = m_sampleList->GetSelection();
-        if (selected < 0) {
+        if (selected < 0 || static_cast<size_t>(selected) >= m_sampleListMap.size()) {
             return;
         }
-        if (wxMessageBox("Delete selected sample?", "Confirm Delete", wxYES_NO | wxICON_QUESTION, this) != wxYES) {
+        firstSampleIndex = m_sampleListMap[static_cast<size_t>(selected)];
+        if (BAERmfEditorDocument_GetSampleInfo(m_document, firstSampleIndex, &firstInfo) != BAE_NO_ERROR) {
             return;
         }
-        if (BAERmfEditorDocument_DeleteSample(m_document, static_cast<uint32_t>(selected)) == BAE_NO_ERROR) {
-            PopulateSampleList();
-            if (selected >= static_cast<int>(m_sampleList->GetCount())) {
-                selected = static_cast<int>(m_sampleList->GetCount()) - 1;
+        program = firstInfo.program;
+        sampleCount = 0;
+        BAERmfEditorDocument_GetSampleCount(m_document, &sampleCount);
+        for (uint32_t i = 0; i < sampleCount; ++i) {
+            BAERmfEditorSampleInfo info;
+            if (BAERmfEditorDocument_GetSampleInfo(m_document, i, &info) == BAE_NO_ERROR &&
+                info.program == program) {
+                toDelete.push_back(i);
             }
-            if (selected >= 0) {
-                m_sampleList->SetSelection(selected);
-            }
+        }
+        wxString msg = toDelete.size() > 1
+            ? wxString::Format("Delete instrument P%u and all %u of its splits?",
+                               static_cast<unsigned>(program),
+                               static_cast<unsigned>(toDelete.size()))
+            : wxString::Format("Delete instrument P%u?", static_cast<unsigned>(program));
+        if (wxMessageBox(msg, "Confirm Delete", wxYES_NO | wxICON_QUESTION, this) != wxYES) {
+            return;
+        }
+        /* Delete in reverse order so earlier indices stay valid. */
+        for (auto it = toDelete.rbegin(); it != toDelete.rend(); ++it) {
+            BAERmfEditorDocument_DeleteSample(m_document, *it);
+        }
+        PopulateSampleList();
+        int newSel = selected;
+        if (newSel >= static_cast<int>(m_sampleList->GetCount())) {
+            newSel = static_cast<int>(m_sampleList->GetCount()) - 1;
+        }
+        if (newSel >= 0) {
+            m_sampleList->SetSelection(newSel);
         }
     }
 
@@ -4230,10 +2036,10 @@ private:
             return;
         }
         selected = m_sampleList->GetSelection();
-        if (selected < 0) {
+        if (selected < 0 || static_cast<size_t>(selected) >= m_sampleListMap.size()) {
             return;
         }
-        if (BAERmfEditorDocument_GetSampleInfo(m_document, static_cast<uint32_t>(selected), &selectedInfo) != BAE_NO_ERROR) {
+        if (BAERmfEditorDocument_GetSampleInfo(m_document, m_sampleListMap[static_cast<size_t>(selected)], &selectedInfo) != BAE_NO_ERROR) {
             return;
         }
 
@@ -4271,39 +2077,43 @@ private:
 
     void OnSampleEdit(wxCommandEvent &) {
         int selected;
+        std::vector<uint32_t> indices;
+        std::vector<InstrumentEditorEditedSample> editedSamples;
+        bool accepted;
 
         if (!m_document) {
             return;
         }
         selected = m_sampleList->GetSelection();
-        if (selected < 0) {
+        if (selected < 0 || static_cast<size_t>(selected) >= m_sampleListMap.size()) {
             return;
         }
-        InstrumentEditorDialog dialog(this,
-                                      m_document,
-                                      static_cast<uint32_t>(selected),
-                                      [this](uint32_t sampleIndex, int key) {
-                                          if (!PreviewSampleAtKey(sampleIndex, key)) {
-                                              wxMessageBox("Preview playback failed for this sample.", "Sample Preview", wxOK | wxICON_ERROR, this);
-                                          }
-                                      },
-                                      [this]() {
-                                          StopPreviewSample();
-                                      },
-                                      [this](uint32_t sampleIndex, wxString const &path) {
-                                          return ReplaceSampleFromPath(sampleIndex, path);
-                                      },
-                                      [this](uint32_t sampleIndex, wxString const &path) {
-                                          return ExportSampleToPath(sampleIndex, path);
-                                      });
-        if (dialog.ShowModal() != wxID_OK) {
+
+        accepted = ShowInstrumentEditorDialog(this,
+                                              m_document,
+                                              m_sampleListMap[static_cast<size_t>(selected)],
+                                              [this](uint32_t sampleIndex, int key, BAESampleInfo const *overrideInfo) {
+                                                  if (!PreviewSampleAtKey(sampleIndex, key, overrideInfo)) {
+                                                      wxMessageBox("Preview playback failed for this sample.", "Sample Preview", wxOK | wxICON_ERROR, this);
+                                                  }
+                                              },
+                                              [this]() {
+                                                  StopPreviewSample();
+                                              },
+                                              [this](uint32_t sampleIndex, wxString const &path) {
+                                                  return ReplaceSampleFromPath(sampleIndex, path);
+                                              },
+                                              [this](uint32_t sampleIndex, wxString const &path) {
+                                                  return ExportSampleToPath(sampleIndex, path);
+                                              },
+                                              &indices,
+                                              &editedSamples);
+        if (!accepted) {
             StopPreviewSample();
             return;
         }
         StopPreviewSample();
         {
-            std::vector<uint32_t> const &indices = dialog.GetSampleIndices();
-            std::vector<InstrumentEditorDialog::EditedSample> const &editedSamples = dialog.GetEditedSamples();
             bool ok = true;
 
             for (size_t i = 0; i < indices.size() && i < editedSamples.size(); ++i) {
