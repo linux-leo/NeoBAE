@@ -1747,8 +1747,9 @@ static BAEResult PV_LoadRmfFileIntoDocument(BAERmfEditorDocument *document, BAEP
         XFileClose(fileRef);
         return BAE_BAD_FILE;
     }
-    if (songInfo->songTempo > 0)
+    if (songInfo->songTempo > 0 && songInfo->songTempo <= 500)
     {
+        /* Some files store BPM here, while classic RMF stores a master-tempo scalar. */
         document->tempoBPM = (uint32_t)songInfo->songTempo;
     }
     document->maxMidiNotes = songInfo->maxMidiNotes;
@@ -2208,6 +2209,15 @@ static BAEResult PV_EncodeMidiForResourceType(XResourceType resourceType,
     }
 
     return BAE_PARAM_ERR;
+}
+
+static XBOOL PV_IsMidiResourceType(XResourceType resourceType)
+{
+    return (resourceType == ID_ECMI ||
+            resourceType == ID_EMID ||
+            resourceType == ID_CMID ||
+            resourceType == ID_MIDI ||
+            resourceType == ID_MIDI_OLD) ? TRUE : FALSE;
 }
 
 static int PV_CompareMidiEvents(void const *left, void const *right)
@@ -3120,7 +3130,8 @@ static BAEResult PV_AddSongResource(BAERmfEditorDocument *document, XFILE fileRe
     songInfo->mixLevel = document->mixLevel;
     songInfo->reverbType = (int16_t)document->reverbType;
     songInfo->songVolume = document->songVolume;
-    songInfo->songTempo = (int32_t)document->tempoBPM;
+    /* RMF songTempo is a legacy master-tempo scalar where 16667 == 100% speed. */
+    songInfo->songTempo = 16667;
     songInfo->songPitchShift = 0;
     songInfo->songLocked = FALSE;
     songInfo->songEmbedded = FALSE;
@@ -3183,7 +3194,8 @@ static BAEResult PV_AddSongResourceWithID(BAERmfEditorDocument *document,
     songInfo->mixLevel = document->mixLevel;
     songInfo->reverbType = (int16_t)document->reverbType;
     songInfo->songVolume = document->songVolume;
-    songInfo->songTempo = (int32_t)document->tempoBPM;
+    /* RMF songTempo is a legacy master-tempo scalar where 16667 == 100% speed. */
+    songInfo->songTempo = 16667;
     songInfo->songPitchShift = 0;
     songInfo->songLocked = FALSE;
     songInfo->songEmbedded = FALSE;
@@ -3586,7 +3598,7 @@ BAEResult BAERmfEditorDocument_AddTrackCCEvent(BAERmfEditorDocument *document,
     BAERmfEditorTrack *track;
     BAEResult result;
 
-    if (!document || value > 127 || (cc != 7 && cc != 10 && cc != 11))
+    if (!document || value > 127)
     {
         return BAE_PARAM_ERR;
     }
@@ -3621,7 +3633,7 @@ BAEResult BAERmfEditorDocument_SetTrackCCEvent(BAERmfEditorDocument *document,
     BAERmfEditorTrack *track;
     BAERmfEditorCCEvent *event;
 
-    if (!document || value > 127 || (cc != 7 && cc != 10 && cc != 11))
+    if (!document || value > 127)
     {
         return BAE_PARAM_ERR;
     }
@@ -3658,7 +3670,7 @@ BAEResult BAERmfEditorDocument_DeleteTrackCCEvent(BAERmfEditorDocument *document
     BAERmfEditorTrack *track;
     uint32_t actualIndex;
 
-    if (!document || (cc != 7 && cc != 10 && cc != 11))
+    if (!document)
     {
         return BAE_PARAM_ERR;
     }
@@ -3680,6 +3692,108 @@ BAEResult BAERmfEditorDocument_DeleteTrackCCEvent(BAERmfEditorDocument *document
     track->ccEventCount--;
     PV_MarkDocumentDirty(document);
     return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorDocument_GetTrackPitchBendEventCount(BAERmfEditorDocument const *document,
+                                                           uint16_t trackIndex,
+                                                           uint32_t *outCount)
+{
+    return BAERmfEditorDocument_GetTrackCCEventCount(document, trackIndex, 0xFF, outCount);
+}
+
+BAEResult BAERmfEditorDocument_GetTrackPitchBendEvent(BAERmfEditorDocument const *document,
+                                                      uint16_t trackIndex,
+                                                      uint32_t eventIndex,
+                                                      uint32_t *outTick,
+                                                      uint16_t *outValue)
+{
+    BAERmfEditorTrack const *track;
+    BAERmfEditorCCEvent const *event;
+
+    if (!document || !outTick || !outValue)
+    {
+        return BAE_PARAM_ERR;
+    }
+    track = PV_GetTrackConst(document, trackIndex);
+    if (!track)
+    {
+        return BAE_PARAM_ERR;
+    }
+    event = PV_FindTrackCCEventConst(track, 0xFF, eventIndex, NULL);
+    if (!event)
+    {
+        return BAE_PARAM_ERR;
+    }
+    *outTick = event->tick;
+    *outValue = (uint16_t)(((uint16_t)(event->data2 & 0x7F) << 7) | (uint16_t)(event->value & 0x7F));
+    return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorDocument_AddTrackPitchBendEvent(BAERmfEditorDocument *document,
+                                                      uint16_t trackIndex,
+                                                      uint32_t tick,
+                                                      uint16_t value)
+{
+    BAERmfEditorTrack *track;
+    BAEResult result;
+
+    if (!document || value > 16383)
+    {
+        return BAE_PARAM_ERR;
+    }
+    track = PV_GetTrack(document, trackIndex);
+    if (!track)
+    {
+        return BAE_PARAM_ERR;
+    }
+    result = PV_AddCCEventToTrack(track,
+                                  tick,
+                                  0xFF,
+                                  (unsigned char)(value & 0x7F),
+                                  (unsigned char)((value >> 7) & 0x7F));
+    if (result == BAE_NO_ERROR)
+    {
+        PV_MarkDocumentDirty(document);
+    }
+    return result;
+}
+
+BAEResult BAERmfEditorDocument_SetTrackPitchBendEvent(BAERmfEditorDocument *document,
+                                                      uint16_t trackIndex,
+                                                      uint32_t eventIndex,
+                                                      uint32_t tick,
+                                                      uint16_t value)
+{
+    BAERmfEditorTrack *track;
+    BAERmfEditorCCEvent *event;
+
+    if (!document || value > 16383)
+    {
+        return BAE_PARAM_ERR;
+    }
+    track = PV_GetTrack(document, trackIndex);
+    if (!track)
+    {
+        return BAE_PARAM_ERR;
+    }
+    event = PV_FindTrackCCEvent(track, 0xFF, eventIndex, NULL);
+    if (!event)
+    {
+        return BAE_PARAM_ERR;
+    }
+    event->tick = tick;
+    event->value = (unsigned char)(value & 0x7F);
+    event->data2 = (unsigned char)((value >> 7) & 0x7F);
+    qsort(track->ccEvents, track->ccEventCount, sizeof(BAERmfEditorCCEvent), PV_CompareCCEvents);
+    PV_MarkDocumentDirty(document);
+    return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorDocument_DeleteTrackPitchBendEvent(BAERmfEditorDocument *document,
+                                                         uint16_t trackIndex,
+                                                         uint32_t eventIndex)
+{
+    return BAERmfEditorDocument_DeleteTrackCCEvent(document, trackIndex, 0xFF, eventIndex);
 }
 
 BAEResult BAERmfEditorDocument_GetTempoBPM(BAERmfEditorDocument const *document, uint32_t *outBpm)
@@ -4678,11 +4792,7 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
     if (document->loadedFromRmf && document->originalResourceCount > 0 && document->originalObjectResourceID != 0)
     {
         uint32_t resourceIndex;
-        XBOOL wroteMidi;
-        XBOOL wroteSong;
 
-        wroteMidi = FALSE;
-        wroteSong = FALSE;
         for (resourceIndex = 0; resourceIndex < document->originalResourceCount; ++resourceIndex)
         {
             BAERmfEditorResourceEntry const *entry;
@@ -4698,51 +4808,14 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
             {
                 continue;
             }
-            if (entry->type == document->originalMidiType && entry->id == document->originalObjectResourceID)
+            /* Skip all legacy MIDI payloads; we re-emit exactly one ECMI payload below. */
+            if (PV_IsMidiResourceType(entry->type))
             {
-                XPTR encodedMidi;
-                int32_t encodedMidiSize;
-
-                result = PV_EncodeMidiForResourceType(document->originalMidiType,
-                                                      &midiData,
-                                                      &encodedMidi,
-                                                      &encodedMidiSize);
-                if (result != BAE_NO_ERROR)
-                {
-                    XFileClose(fileRef);
-                    PV_ByteBufferDispose(&midiData);
-                    return result;
-                }
-                if (XAddFileResource(fileRef,
-                                     document->originalMidiType,
-                                     document->originalObjectResourceID,
-                                     entry->pascalName,
-                                     encodedMidi,
-                                     encodedMidiSize) != 0)
-                {
-                    XDisposePtr(encodedMidi);
-                    XFileClose(fileRef);
-                    PV_ByteBufferDispose(&midiData);
-                    return BAE_FILE_IO_ERROR;
-                }
-                XDisposePtr(encodedMidi);
-                wroteMidi = TRUE;
                 continue;
             }
-            if (entry->type == ID_SONG && entry->id == document->originalSongID)
+            /* Always rebuild SONG so objectResourceID points at the regenerated MIDI payload. */
+            if (entry->type == ID_SONG)
             {
-                result = PV_AddSongResourceWithID(document,
-                                                  fileRef,
-                                                  document->originalObjectResourceID,
-                                                  document->originalSongID,
-                                                  entry->pascalName);
-                if (result != BAE_NO_ERROR)
-                {
-                    XFileClose(fileRef);
-                    PV_ByteBufferDispose(&midiData);
-                    return result;
-                }
-                wroteSong = TRUE;
                 continue;
             }
             if (XAddFileResource(fileRef,
@@ -4757,14 +4830,13 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
                 return BAE_FILE_IO_ERROR;
             }
         }
-        if (!wroteMidi)
         {
             char midiPascalName[256];
             XPTR encodedMidi;
             int32_t encodedMidiSize;
 
             PV_CreatePascalName(document->info[TITLE_INFO] ? document->info[TITLE_INFO] : "Song", midiPascalName);
-            result = PV_EncodeMidiForResourceType(document->originalMidiType ? document->originalMidiType : ID_MIDI,
+            result = PV_EncodeMidiForResourceType(ID_ECMI,
                                                   &midiData,
                                                   &encodedMidi,
                                                   &encodedMidiSize);
@@ -4775,7 +4847,7 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
                 return result;
             }
             if (XAddFileResource(fileRef,
-                                 document->originalMidiType ? document->originalMidiType : ID_MIDI,
+                                 ID_ECMI,
                                  document->originalObjectResourceID,
                                  midiPascalName,
                                  encodedMidi,
@@ -4788,19 +4860,16 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
             }
             XDisposePtr(encodedMidi);
         }
-        if (!wroteSong)
+        result = PV_AddSongResourceWithID(document,
+                                          fileRef,
+                                          document->originalObjectResourceID,
+                                          document->originalSongID ? document->originalSongID : 1,
+                                          NULL);
+        if (result != BAE_NO_ERROR)
         {
-            result = PV_AddSongResourceWithID(document,
-                                              fileRef,
-                                              document->originalObjectResourceID,
-                                              document->originalSongID ? document->originalSongID : 1,
-                                              NULL);
-            if (result != BAE_NO_ERROR)
-            {
-                XFileClose(fileRef);
-                PV_ByteBufferDispose(&midiData);
-                return result;
-            }
+            XFileClose(fileRef);
+            PV_ByteBufferDispose(&midiData);
+            return result;
         }
         result = PV_AddSampleResources(document, fileRef);
         BAE_STDERR("[RMF Save] loadedFromRmf AddSampleResources result=%d, sampleCount=%u\n",
@@ -4822,21 +4891,35 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
         return BAE_NO_ERROR;
     }
 
-    if (PV_GetAvailableResourceID(fileRef, ID_MIDI, 1, &midiID) != BAE_NO_ERROR)
+    if (PV_GetAvailableResourceID(fileRef, ID_ECMI, 1, &midiID) != BAE_NO_ERROR)
     {
-        BAE_STDERR("[RMF Save] GetAvailableResourceID for ID_MIDI failed\n");
+        BAE_STDERR("[RMF Save] GetAvailableResourceID for ID_ECMI failed\n");
         XFileClose(fileRef);
         PV_ByteBufferDispose(&midiData);
         return BAE_FILE_IO_ERROR;
     }
-    BAE_STDERR("[RMF Save] Writing MIDI resource id=%ld size=%u\n", (long)midiID, midiData.size);
+    BAE_STDERR("[RMF Save] Writing ECMI resource id=%ld size=%u\n", (long)midiID, midiData.size);
     PV_CreatePascalName(document->info[TITLE_INFO] ? document->info[TITLE_INFO] : "Song", midiName);
-    if (XAddFileResource(fileRef, ID_MIDI, midiID, midiName, midiData.data, midiData.size) != 0)
     {
-        BAE_STDERR("[RMF Save] XAddFileResource(MIDI) failed\n");
-        XFileClose(fileRef);
-        PV_ByteBufferDispose(&midiData);
-        return BAE_FILE_IO_ERROR;
+        XPTR encodedMidi;
+        int32_t encodedMidiSize;
+
+        result = PV_EncodeMidiForResourceType(ID_ECMI, &midiData, &encodedMidi, &encodedMidiSize);
+        if (result != BAE_NO_ERROR)
+        {
+            XFileClose(fileRef);
+            PV_ByteBufferDispose(&midiData);
+            return result;
+        }
+        if (XAddFileResource(fileRef, ID_ECMI, midiID, midiName, encodedMidi, encodedMidiSize) != 0)
+        {
+            XDisposePtr(encodedMidi);
+            BAE_STDERR("[RMF Save] XAddFileResource(ECMI) failed\n");
+            XFileClose(fileRef);
+            PV_ByteBufferDispose(&midiData);
+            return BAE_FILE_IO_ERROR;
+        }
+        XDisposePtr(encodedMidi);
     }
     result = PV_AddSampleResources(document, fileRef);
     BAE_STDERR("[RMF Save] AddSampleResources result=%d, sampleCount=%u\n", (int)result, document->sampleCount);

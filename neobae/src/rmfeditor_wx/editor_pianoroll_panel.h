@@ -19,6 +19,7 @@ wxWindow *PianoRollPanel_AsWindow(PianoRollPanel *panel);
 void PianoRollPanel_SetDocument(PianoRollPanel *panel, BAERmfEditorDocument *document);
 void PianoRollPanel_SetSelectedTrack(PianoRollPanel *panel, int trackIndex);
 void PianoRollPanel_SetSelectionChangedCallback(PianoRollPanel *panel, std::function<void()> callback);
+void PianoRollPanel_SetSeekRequestedCallback(PianoRollPanel *panel, std::function<void(uint32_t)> callback);
 void PianoRollPanel_SetUndoCallbacks(PianoRollPanel *panel,
                                      std::function<void(wxString const &)> beginCallback,
                                      std::function<void(wxString const &)> commitCallback,
@@ -30,5 +31,6 @@ void PianoRollPanel_SetNewNoteInstrument(PianoRollPanel *panel, uint16_t bank, u
 void PianoRollPanel_SetPlayheadTick(PianoRollPanel *panel, uint32_t tick);
 void PianoRollPanel_EnsurePlayheadVisible(PianoRollPanel *panel, uint32_t tick);
 void PianoRollPanel_JumpToTick(PianoRollPanel *panel, uint32_t tick);
+uint32_t PianoRollPanel_GetDocumentEndTick(PianoRollPanel *panel);
 void PianoRollPanel_ClearPlayhead(PianoRollPanel *panel);
 void PianoRollPanel_Refresh(PianoRollPanel *panel);

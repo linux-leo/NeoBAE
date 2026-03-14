@@ -31,7 +31,6 @@ extern "C" {
 
 namespace {
 
-constexpr int kAutomationLaneCount = 4;
 constexpr char const *kVersionString = "0.02 alpha";
 
 enum {
@@ -51,13 +50,14 @@ struct UndoTempoEventState {
 };
 
 struct UndoCCEventState {
+    unsigned char controller;
     uint32_t tick;
     unsigned char value;
 };
 
 struct UndoTrackState {
     std::vector<BAERmfEditorNoteInfo> notes;
-    std::vector<UndoCCEventState> ccEvents[kAutomationLaneCount - 1];
+    std::vector<UndoCCEventState> ccEvents;
 };
 
 struct UndoDocumentState {
@@ -71,15 +71,6 @@ struct UndoEntry {
     UndoDocumentState before;
     UndoDocumentState after;
 };
-
-static unsigned char GetUndoCCController(int ccSlot) {
-    static unsigned char const kControllers[kAutomationLaneCount - 1] = { 7, 10, 11 };
-
-    if (ccSlot < 0 || ccSlot >= kAutomationLaneCount - 1) {
-        return 0;
-    }
-    return kControllers[ccSlot];
-}
 
 static bool NoteInfoEquals(BAERmfEditorNoteInfo const &left, BAERmfEditorNoteInfo const &right) {
     return left.startTick == right.startTick &&
@@ -112,15 +103,14 @@ static bool UndoSnapshotsEqual(UndoDocumentState const &left, UndoDocumentState 
                 return false;
             }
         }
-        for (int ccSlot = 0; ccSlot < kAutomationLaneCount - 1; ++ccSlot) {
-            if (leftTrack.ccEvents[ccSlot].size() != rightTrack.ccEvents[ccSlot].size()) {
+        if (leftTrack.ccEvents.size() != rightTrack.ccEvents.size()) {
+            return false;
+        }
+        for (size_t eventIndex = 0; eventIndex < leftTrack.ccEvents.size(); ++eventIndex) {
+            if (leftTrack.ccEvents[eventIndex].controller != rightTrack.ccEvents[eventIndex].controller ||
+                leftTrack.ccEvents[eventIndex].tick != rightTrack.ccEvents[eventIndex].tick ||
+                leftTrack.ccEvents[eventIndex].value != rightTrack.ccEvents[eventIndex].value) {
                 return false;
-            }
-            for (size_t eventIndex = 0; eventIndex < leftTrack.ccEvents[ccSlot].size(); ++eventIndex) {
-                if (leftTrack.ccEvents[ccSlot][eventIndex].tick != rightTrack.ccEvents[ccSlot][eventIndex].tick ||
-                    leftTrack.ccEvents[ccSlot][eventIndex].value != rightTrack.ccEvents[ccSlot][eventIndex].value) {
-                    return false;
-                }
             }
         }
     }
@@ -229,15 +219,24 @@ public:
         transportSizer->Add(m_playScopeChoice, 0, wxALIGN_CENTER_VERTICAL, 0);
 
         m_positionSlider = new wxSlider(editorPanel, wxID_ANY, 0, 0, 1000, wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL);
+        m_positionLabel = new wxStaticText(editorPanel, wxID_ANY, "0:00.0 / 0:00.0");
 
         m_pianoRoll = CreatePianoRollPanel(editorPanel);
         editorSizer->Add(controlsSizer, 0, wxEXPAND | wxALL, 10);
         editorSizer->Add(transportSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
-        editorSizer->Add(m_positionSlider, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        {
+            wxBoxSizer *positionSizer;
+
+            positionSizer = new wxBoxSizer(wxHORIZONTAL);
+            positionSizer->Add(m_positionSlider, 1, wxEXPAND | wxRIGHT, 10);
+            positionSizer->Add(m_positionLabel, 0, wxALIGN_CENTER_VERTICAL);
+            editorSizer->Add(positionSizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        }
         editorSizer->Add(PianoRollPanel_AsWindow(m_pianoRoll), 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
         editorPanel->SetSizer(editorSizer);
 
         PianoRollPanel_SetSelectionChangedCallback(m_pianoRoll, [this]() { UpdateControlsFromSelection(); });
+        PianoRollPanel_SetSeekRequestedCallback(m_pianoRoll, [this](uint32_t tick) { SeekToTickFromPianoRoll(tick); });
         PianoRollPanel_SetUndoCallbacks(m_pianoRoll,
                         [this](wxString const &label) { BeginUndoAction(label); },
                         [this](wxString const &label) { CommitUndoAction(label); },
@@ -319,6 +318,7 @@ private:
     wxButton *m_stopButton;
     wxChoice *m_playScopeChoice;
     wxSlider *m_positionSlider;
+    wxStaticText *m_positionLabel;
     wxListBox *m_sampleList;
     std::vector<uint32_t> m_sampleListMap; /* list row -> first sample index for that program */
     wxButton *m_sampleAddButton;
@@ -405,16 +405,16 @@ private:
                     }
                 }
             }
-            for (int ccSlot = 0; ccSlot < kAutomationLaneCount - 1; ++ccSlot) {
+            for (int controllerValue = 0; controllerValue < 128; ++controllerValue) {
                 uint32_t eventCount;
                 unsigned char controller;
 
-                controller = GetUndoCCController(ccSlot);
+                controller = static_cast<unsigned char>(controllerValue);
                 eventCount = 0;
                 if (BAERmfEditorDocument_GetTrackCCEventCount(m_document, trackIndex, controller, &eventCount) != BAE_NO_ERROR) {
                     continue;
                 }
-                trackState.ccEvents[ccSlot].reserve(eventCount);
+                trackState.ccEvents.reserve(trackState.ccEvents.size() + eventCount);
                 for (uint32_t eventIndex = 0; eventIndex < eventCount; ++eventIndex) {
                     UndoCCEventState eventState;
 
@@ -424,7 +424,8 @@ private:
                                                              eventIndex,
                                                              &eventState.tick,
                                                              &eventState.value) == BAE_NO_ERROR) {
-                        trackState.ccEvents[ccSlot].push_back(eventState);
+                        eventState.controller = controller;
+                        trackState.ccEvents.push_back(eventState);
                     }
                 }
             }
@@ -488,26 +489,29 @@ private:
                     return false;
                 }
             }
-            for (int ccSlot = 0; ccSlot < kAutomationLaneCount - 1; ++ccSlot) {
+            for (int controllerValue = 0; controllerValue < 128; ++controllerValue) {
                 uint32_t eventCount;
                 unsigned char controller;
 
-                controller = GetUndoCCController(ccSlot);
+                controller = static_cast<unsigned char>(controllerValue);
                 eventCount = 0;
                 BAERmfEditorDocument_GetTrackCCEventCount(m_document, trackIndex, controller, &eventCount);
                 for (uint32_t eventIndex = eventCount; eventIndex > 0; --eventIndex) {
                     BAERmfEditorDocument_DeleteTrackCCEvent(m_document, trackIndex, controller, eventIndex - 1);
                 }
-                for (UndoCCEventState const &eventState : trackState.ccEvents[ccSlot]) {
+            }
+            for (UndoCCEventState const &eventState : trackState.ccEvents) {
+                if (eventState.controller > 127) {
+                    continue;
+                }
                     if (BAERmfEditorDocument_AddTrackCCEvent(m_document,
                                                              trackIndex,
-                                                             controller,
+                                                             eventState.controller,
                                                              eventState.tick,
                                                              eventState.value) != BAE_NO_ERROR) {
                         return false;
                     }
                 }
-            }
         }
         return true;
     }
@@ -1085,9 +1089,9 @@ private:
             BAERmfEditorNoteInfo noteInfo;
 
             if (BAERmfEditorDocument_GetNoteInfo(m_document, static_cast<uint16_t>(trackIndex), noteIndex, &noteInfo) == BAE_NO_ERROR) {
-                if (noteInfo.program < 128) {
-                    requiredPrograms[noteInfo.program] = 1;
-                }
+                /* Preview should audition using the track-level instrument controls. */
+                noteInfo.bank = trackInfo.bank;
+                noteInfo.program = trackInfo.program;
                 BAERmfEditorDocument_AddNote(playDoc,
                                              addedTrackIndex,
                                              noteInfo.startTick,
@@ -1109,7 +1113,10 @@ private:
                 static_cast<unsigned>(trackInfo.program));
         trackInfo.noteCount = noteCount;
         BAERmfEditorDocument_SetTrackInfo(playDoc, addedTrackIndex, &trackInfo);
-        for (unsigned char cc : { static_cast<unsigned char>(7), static_cast<unsigned char>(10), static_cast<unsigned char>(11) }) {
+        for (unsigned int ccValue = 0; ccValue < 128; ++ccValue) {
+            unsigned char cc;
+
+            cc = static_cast<unsigned char>(ccValue);
             ccCount = 0;
             BAERmfEditorDocument_GetTrackCCEventCount(m_document, static_cast<uint16_t>(trackIndex), cc, &ccCount);
             for (uint32_t ccIndex = 0; ccIndex < ccCount; ++ccIndex) {
@@ -1140,6 +1147,160 @@ private:
         }
         fprintf(stderr,
                 "[nbstudio] Single-track sample copy copied=%u\n",
+                static_cast<unsigned>(copiedSampleCount));
+        return playDoc;
+    }
+
+    BAERmfEditorDocument *BuildPreviewPlaybackDocument(bool singleTrackMode, int selectedTrack) {
+        BAERmfEditorDocument *playDoc;
+        uint16_t sourceTrackCount;
+        uint16_t sourceTrackIndex;
+        uint32_t copiedSampleCount;
+        unsigned char requiredPrograms[128];
+        uint32_t tempo;
+        uint16_t tpq;
+
+        if (!m_document) {
+            return nullptr;
+        }
+        sourceTrackCount = 0;
+        BAERmfEditorDocument_GetTrackCount(m_document, &sourceTrackCount);
+        if (sourceTrackCount == 0) {
+            return nullptr;
+        }
+        if (singleTrackMode) {
+            if (selectedTrack < 0 || selectedTrack >= static_cast<int>(sourceTrackCount)) {
+                return nullptr;
+            }
+        }
+
+        playDoc = BAERmfEditorDocument_New();
+        if (!playDoc) {
+            return nullptr;
+        }
+
+        tempo = 120;
+        tpq = 480;
+        BAERmfEditorDocument_GetTempoBPM(m_document, &tempo);
+        BAERmfEditorDocument_GetTicksPerQuarter(m_document, &tpq);
+        BAERmfEditorDocument_SetTempoBPM(playDoc, tempo);
+        BAERmfEditorDocument_SetTicksPerQuarter(playDoc, tpq);
+        BAERmfEditorDocument_CopyTempoMapFrom(playDoc, m_document);
+
+        std::fill(requiredPrograms, requiredPrograms + 128, static_cast<unsigned char>(0));
+
+        for (sourceTrackIndex = 0; sourceTrackIndex < sourceTrackCount; ++sourceTrackIndex) {
+            BAERmfEditorTrackInfo trackInfo;
+            BAERmfEditorTrackSetup setup;
+            uint16_t addedTrackIndex;
+            uint32_t noteCount;
+            uint32_t noteIndex;
+            uint32_t ccCount;
+            uint32_t pitchBendCount;
+
+            if (singleTrackMode && sourceTrackIndex != static_cast<uint16_t>(selectedTrack)) {
+                continue;
+            }
+            if (BAERmfEditorDocument_GetTrackInfo(m_document, sourceTrackIndex, &trackInfo) != BAE_NO_ERROR) {
+                BAERmfEditorDocument_Delete(playDoc);
+                return nullptr;
+            }
+
+            setup.channel = trackInfo.channel;
+            setup.bank = trackInfo.bank;
+            setup.program = trackInfo.program;
+            setup.name = const_cast<char *>(trackInfo.name);
+            if (BAERmfEditorDocument_AddTrack(playDoc, &setup, &addedTrackIndex) != BAE_NO_ERROR) {
+                BAERmfEditorDocument_Delete(playDoc);
+                return nullptr;
+            }
+
+            if (trackInfo.program < 128) {
+                requiredPrograms[trackInfo.program] = 1;
+            }
+
+            noteCount = 0;
+            BAERmfEditorDocument_GetNoteCount(m_document, sourceTrackIndex, &noteCount);
+            for (noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
+                BAERmfEditorNoteInfo noteInfo;
+
+                if (BAERmfEditorDocument_GetNoteInfo(m_document, sourceTrackIndex, noteIndex, &noteInfo) != BAE_NO_ERROR) {
+                    continue;
+                }
+                /* Preview should audition using each track's current bank/program controls. */
+                noteInfo.bank = trackInfo.bank;
+                noteInfo.program = trackInfo.program;
+                BAERmfEditorDocument_AddNote(playDoc,
+                                             addedTrackIndex,
+                                             noteInfo.startTick,
+                                             noteInfo.durationTicks,
+                                             noteInfo.note,
+                                             noteInfo.velocity);
+                BAERmfEditorDocument_SetNoteInfo(playDoc,
+                                                 addedTrackIndex,
+                                                 noteIndex,
+                                                 &noteInfo);
+            }
+
+            trackInfo.noteCount = noteCount;
+            BAERmfEditorDocument_SetTrackInfo(playDoc, addedTrackIndex, &trackInfo);
+
+            for (unsigned int ccValue = 0; ccValue < 128; ++ccValue) {
+                unsigned char cc;
+
+                cc = static_cast<unsigned char>(ccValue);
+                ccCount = 0;
+                BAERmfEditorDocument_GetTrackCCEventCount(m_document, sourceTrackIndex, cc, &ccCount);
+                for (uint32_t ccIndex = 0; ccIndex < ccCount; ++ccIndex) {
+                    uint32_t tick;
+                    unsigned char value;
+
+                    if (BAERmfEditorDocument_GetTrackCCEvent(m_document,
+                                                             sourceTrackIndex,
+                                                             cc,
+                                                             ccIndex,
+                                                             &tick,
+                                                             &value) == BAE_NO_ERROR) {
+                        BAERmfEditorDocument_AddTrackCCEvent(playDoc,
+                                                             addedTrackIndex,
+                                                             cc,
+                                                             tick,
+                                                             value);
+                    }
+                }
+            }
+
+            pitchBendCount = 0;
+            BAERmfEditorDocument_GetTrackPitchBendEventCount(m_document, sourceTrackIndex, &pitchBendCount);
+            for (uint32_t pbIndex = 0; pbIndex < pitchBendCount; ++pbIndex) {
+                uint32_t tick;
+                uint16_t value;
+
+                if (BAERmfEditorDocument_GetTrackPitchBendEvent(m_document,
+                                                                sourceTrackIndex,
+                                                                pbIndex,
+                                                                &tick,
+                                                                &value) == BAE_NO_ERROR) {
+                    BAERmfEditorDocument_AddTrackPitchBendEvent(playDoc,
+                                                                addedTrackIndex,
+                                                                tick,
+                                                                value);
+                }
+            }
+        }
+
+        copiedSampleCount = 0;
+        if (BAERmfEditorDocument_CopySamplesForPrograms(playDoc,
+                                                        m_document,
+                                                        requiredPrograms,
+                                                        &copiedSampleCount) != BAE_NO_ERROR) {
+            BAERmfEditorDocument_Delete(playDoc);
+            return nullptr;
+        }
+        fprintf(stderr,
+                "[nbstudio] Preview build mode=%s selectedTrack=%d copiedSamples=%u\n",
+                singleTrackMode ? "single" : "full",
+                selectedTrack,
                 static_cast<unsigned>(copiedSampleCount));
         return playDoc;
     }
@@ -1184,20 +1345,157 @@ private:
         return !m_previewSampleTempPath.empty();
     }
 
-    uint32_t MicrosecondsToTicks(uint32_t usec) const {
-        uint32_t tempo;
+    uint64_t TicksToMicroseconds(uint32_t tick) const {
         uint16_t tpq;
-        uint64_t ticks;
+        uint32_t baseBpm;
+        uint32_t tempoCount;
+        uint32_t currentTick;
+        uint32_t currentMicrosecondsPerQuarter;
+        uint32_t tempoIndex;
+        uint64_t usec;
 
         if (!m_document) {
             return 0;
         }
-        tempo = 120;
         tpq = 480;
-        BAERmfEditorDocument_GetTempoBPM(m_document, &tempo);
         BAERmfEditorDocument_GetTicksPerQuarter(m_document, &tpq);
-        ticks = (static_cast<uint64_t>(usec) * static_cast<uint64_t>(tempo) * static_cast<uint64_t>(tpq)) / 60000000ULL;
-        return static_cast<uint32_t>(ticks);
+        if (tpq == 0) {
+            tpq = 480;
+        }
+        baseBpm = 120;
+        BAERmfEditorDocument_GetTempoBPM(m_document, &baseBpm);
+        if (baseBpm == 0) {
+            baseBpm = 120;
+        }
+        tempoCount = 0;
+        currentTick = 0;
+        currentMicrosecondsPerQuarter = 60000000UL / baseBpm;
+        usec = 0;
+        if (BAERmfEditorDocument_GetTempoEventCount(m_document, &tempoCount) != BAE_NO_ERROR) {
+            return (static_cast<uint64_t>(tick) * static_cast<uint64_t>(currentMicrosecondsPerQuarter)) / static_cast<uint64_t>(tpq);
+        }
+        for (tempoIndex = 0; tempoIndex < tempoCount; ++tempoIndex) {
+            uint32_t eventTick;
+            uint32_t eventMicrosecondsPerQuarter;
+
+            if (BAERmfEditorDocument_GetTempoEvent(m_document, tempoIndex, &eventTick, &eventMicrosecondsPerQuarter) != BAE_NO_ERROR) {
+                continue;
+            }
+            if (eventTick > tick) {
+                break;
+            }
+            if (eventTick > currentTick) {
+                usec += (static_cast<uint64_t>(eventTick - currentTick) * static_cast<uint64_t>(currentMicrosecondsPerQuarter)) / static_cast<uint64_t>(tpq);
+            }
+            currentTick = eventTick;
+            if (eventMicrosecondsPerQuarter > 0) {
+                currentMicrosecondsPerQuarter = eventMicrosecondsPerQuarter;
+            }
+        }
+        if (tick > currentTick) {
+            usec += (static_cast<uint64_t>(tick - currentTick) * static_cast<uint64_t>(currentMicrosecondsPerQuarter)) / static_cast<uint64_t>(tpq);
+        }
+        return usec;
+    }
+
+    uint32_t MicrosecondsToTicks(uint32_t usec) const {
+        uint16_t tpq;
+        uint32_t baseBpm;
+        uint32_t tempoCount;
+        uint32_t currentTick;
+        uint32_t currentMicrosecondsPerQuarter;
+        uint32_t tempoIndex;
+        uint64_t remainingUsec;
+
+        if (!m_document) {
+            return 0;
+        }
+        tpq = 480;
+        BAERmfEditorDocument_GetTicksPerQuarter(m_document, &tpq);
+        if (tpq == 0) {
+            tpq = 480;
+        }
+        baseBpm = 120;
+        BAERmfEditorDocument_GetTempoBPM(m_document, &baseBpm);
+        if (baseBpm == 0) {
+            baseBpm = 120;
+        }
+        tempoCount = 0;
+        currentTick = 0;
+        currentMicrosecondsPerQuarter = 60000000UL / baseBpm;
+        remainingUsec = usec;
+        if (BAERmfEditorDocument_GetTempoEventCount(m_document, &tempoCount) != BAE_NO_ERROR) {
+            return static_cast<uint32_t>((remainingUsec * static_cast<uint64_t>(tpq)) / static_cast<uint64_t>(currentMicrosecondsPerQuarter));
+        }
+        for (tempoIndex = 0; tempoIndex < tempoCount; ++tempoIndex) {
+            uint32_t eventTick;
+            uint32_t eventMicrosecondsPerQuarter;
+
+            if (BAERmfEditorDocument_GetTempoEvent(m_document, tempoIndex, &eventTick, &eventMicrosecondsPerQuarter) != BAE_NO_ERROR) {
+                continue;
+            }
+            if (eventTick <= currentTick) {
+                if (eventMicrosecondsPerQuarter > 0) {
+                    currentMicrosecondsPerQuarter = eventMicrosecondsPerQuarter;
+                }
+                continue;
+            }
+            {
+                uint32_t segmentTicks;
+                uint64_t segmentUsec;
+
+                segmentTicks = eventTick - currentTick;
+                segmentUsec = (static_cast<uint64_t>(segmentTicks) * static_cast<uint64_t>(currentMicrosecondsPerQuarter)) / static_cast<uint64_t>(tpq);
+                if (remainingUsec < segmentUsec) {
+                    return currentTick + static_cast<uint32_t>((remainingUsec * static_cast<uint64_t>(tpq)) / static_cast<uint64_t>(currentMicrosecondsPerQuarter));
+                }
+                remainingUsec -= segmentUsec;
+                currentTick = eventTick;
+            }
+            if (eventMicrosecondsPerQuarter > 0) {
+                currentMicrosecondsPerQuarter = eventMicrosecondsPerQuarter;
+            }
+        }
+        return currentTick + static_cast<uint32_t>((remainingUsec * static_cast<uint64_t>(tpq)) / static_cast<uint64_t>(currentMicrosecondsPerQuarter));
+    }
+
+    wxString FormatUsecClock(uint64_t usec) const {
+        uint64_t totalSeconds;
+        uint64_t minutes;
+        uint64_t seconds;
+        uint64_t tenths;
+
+        totalSeconds = usec / 1000000ULL;
+        minutes = totalSeconds / 60ULL;
+        seconds = totalSeconds % 60ULL;
+        tenths = (usec % 1000000ULL) / 100000ULL;
+        return wxString::Format("%llu:%02llu.%llu",
+                                static_cast<unsigned long long>(minutes),
+                                static_cast<unsigned long long>(seconds),
+                                static_cast<unsigned long long>(tenths));
+    }
+
+    void UpdatePositionLabel(uint64_t posUsec, uint64_t lenUsec) {
+        if (!m_positionLabel) {
+            return;
+        }
+        m_positionLabel->SetLabel(wxString::Format("%s / %s",
+                                                   FormatUsecClock(posUsec),
+                                                   FormatUsecClock(lenUsec)));
+    }
+
+    void UpdatePositionLabelFromDocumentTick(uint32_t tick) {
+        uint32_t endTick;
+        uint64_t posUsec;
+        uint64_t lenUsec;
+
+        endTick = PianoRollPanel_GetDocumentEndTick(m_pianoRoll);
+        posUsec = TicksToMicroseconds(tick);
+        lenUsec = TicksToMicroseconds(endTick);
+        if (lenUsec < posUsec) {
+            lenUsec = posUsec;
+        }
+        UpdatePositionLabel(posUsec, lenUsec);
     }
 
     int GetSelectedTrack() const {
@@ -1228,6 +1526,7 @@ private:
         m_ignoreSeekEvent = true;
         m_positionSlider->SetValue(0);
         m_ignoreSeekEvent = false;
+        UpdatePositionLabelFromDocumentTick(0);
         StopPlayback(true);
         PopulateTrackList();
         PopulateSampleList();
@@ -1555,12 +1854,7 @@ private:
         wxScopedCharBuffer utf8CurrentPath;
         BAERmfEditorDocument *playDoc;
         bool singleTrackMode;
-        bool sourceLooksMidi;
-        bool sourceLooksRmf;
-        bool exportAsMidi;
         int selectedTrack;
-        uint16_t sourceTrackCount;
-        bool runtimeMuteSingleTrack;
         BAEResult saveResult;
         BAEResult loadResult;
 
@@ -1572,96 +1866,42 @@ private:
             wxMessageBox("Failed to initialize audio engine.", "Playback Error", wxOK | wxICON_ERROR, this);
             return;
         }
+        if (!EnsurePlaybackTempPath(false)) {
+            wxMessageBox("Failed to prepare playback temp file path.", "Playback Error", wxOK | wxICON_ERROR, this);
+            return;
+        }
         selectedTrack = GetSelectedTrack();
-        sourceTrackCount = 0;
-        BAERmfEditorDocument_GetTrackCount(m_document, &sourceTrackCount);
         singleTrackMode = (m_playScopeChoice->GetSelection() == 1);
-        runtimeMuteSingleTrack = false;
         fprintf(stderr,
             "[nbstudio] OnPlay scope=%d selectedTrack=%d currentPath='%s'\n",
             singleTrackMode ? 1 : 0,
             selectedTrack,
             m_currentPath.empty() ? "" : static_cast<char const *>(m_currentPath.utf8_str()));
-        sourceLooksMidi = false;
-        sourceLooksRmf = false;
         if (!m_currentPath.empty()) {
             utf8CurrentPath = m_currentPath.utf8_str();
-            {
-                BAEFileType sourceType = X_DetermineFileTypeByPath(utf8CurrentPath.data());
-                sourceLooksMidi = (sourceType == BAE_MIDI_TYPE);
-                sourceLooksRmf = (sourceType == BAE_RMF);
-                {
-                    wxFileName srcName(m_currentPath);
-                    wxString ext = srcName.GetExt().Lower();
-
-                    /* Some detectors report RMF as MIDI; extension must win for playback routing. */
-                    if (ext == "rmf") {
-                        sourceLooksRmf = true;
-                        sourceLooksMidi = false;
-                    } else if (!sourceLooksRmf) {
-                        sourceLooksMidi = sourceLooksMidi || (ext == "mid" || ext == "midi" || ext == "rmi");
-                    }
-                }
-            }
         }
-        /* Preserve embedded resources for RMF sessions, including single-track playback. */
-        exportAsMidi = sourceLooksMidi && !sourceLooksRmf;
-        fprintf(stderr,
-            "[nbstudio] OnPlay detected sourceLooksMidi=%d sourceLooksRmf=%d exportAsMidi=%d tempPath='%s'\n",
-            sourceLooksMidi ? 1 : 0,
-            sourceLooksRmf ? 1 : 0,
-            exportAsMidi ? 1 : 0,
-            static_cast<char const *>(m_playbackTempPath.utf8_str()));
-        if (!EnsurePlaybackTempPath(exportAsMidi)) {
-            wxMessageBox("Failed to create temporary playback file.", "Playback Error", wxOK | wxICON_ERROR, this);
+        playDoc = BuildPreviewPlaybackDocument(singleTrackMode, selectedTrack);
+        if (!playDoc) {
+            wxMessageBox("Failed to build preview playback document.", "Playback Error", wxOK | wxICON_ERROR, this);
             return;
-        }
-        playDoc = m_document;
-        if (singleTrackMode) {
-            if (selectedTrack < 0 || selectedTrack >= static_cast<int>(sourceTrackCount)) {
-                wxMessageBox("No valid track selected for Current Track playback.", "Playback Error", wxOK | wxICON_ERROR, this);
-                return;
-            }
-            /*
-             * Full-document RMF playback is known-good for instrument loading.
-             * For current-track audition, isolate by muting other tracks at runtime.
-             */
-            runtimeMuteSingleTrack = true;
         }
         utf8Path = m_playbackTempPath.utf8_str();
-        if (exportAsMidi) {
-            saveResult = BAERmfEditorDocument_SaveAsMidi(playDoc, const_cast<char *>(utf8Path.data()));
-        } else {
-            saveResult = BAERmfEditorDocument_SaveAsRmf(playDoc, const_cast<char *>(utf8Path.data()));
-        }
+        saveResult = BAERmfEditorDocument_SaveAsRmf(playDoc, const_cast<char *>(utf8Path.data()));
         if (saveResult != BAE_NO_ERROR) {
-            if (playDoc != m_document) {
-                BAERmfEditorDocument_Delete(playDoc);
-            }
-            wxMessageBox(exportAsMidi ? "Failed to build playback MIDI." : "Failed to build playback RMF.",
-                         "Playback Error",
-                         wxOK | wxICON_ERROR,
-                         this);
+            BAERmfEditorDocument_Delete(playDoc);
+            wxMessageBox("Failed to build playback RMF.", "Playback Error", wxOK | wxICON_ERROR, this);
             return;
         }
-        if (playDoc != m_document) {
-            BAERmfEditorDocument_Delete(playDoc);
-        }
+        BAERmfEditorDocument_Delete(playDoc);
         StopPlayback(true);
         m_playbackSong = BAESong_New(m_playbackMixer);
         if (!m_playbackSong) {
             wxMessageBox("Failed to allocate playback song.", "Playback Error", wxOK | wxICON_ERROR, this);
             return;
         }
-        if (exportAsMidi) {
-            fprintf(stderr, "[nbstudio] Loading MIDI from file: %s\n", utf8Path.data());
-            loadResult = BAESong_LoadMidiFromFile(m_playbackSong, const_cast<char *>(utf8Path.data()), TRUE);
-            fprintf(stderr, "[nbstudio] BAESong_LoadMidiFromFile result=%d\n", static_cast<int>(loadResult));
-        } else {
-            fprintf(stderr, "[nbstudio] Loading RMF from file: %s\n", utf8Path.data());
-            loadResult = BAESong_LoadRmfFromFile(m_playbackSong, const_cast<char *>(utf8Path.data()), 0, TRUE);
-            fprintf(stderr, "[nbstudio] BAESong_LoadRmfFromFile result=%d\n", static_cast<int>(loadResult));
-        }
+        fprintf(stderr, "[nbstudio] Loading RMF from file: %s\n", utf8Path.data());
+        loadResult = BAESong_LoadRmfFromFile(m_playbackSong, const_cast<char *>(utf8Path.data()), 0, TRUE);
+        fprintf(stderr, "[nbstudio] BAESong_LoadRmfFromFile result=%d\n", static_cast<int>(loadResult));
         if (loadResult != BAE_NO_ERROR) {
             BAESong_Delete(m_playbackSong);
             m_playbackSong = nullptr;
@@ -1681,36 +1921,6 @@ private:
                     static_cast<int>(loopResult),
                     static_cast<int>(seekResult),
                     static_cast<int>(prerollResult));
-
-            if (runtimeMuteSingleTrack) {
-                uint16_t trackIndex;
-                uint16_t engineSelectedTrack;
-
-                engineSelectedTrack = static_cast<uint16_t>(selectedTrack + 1);
-
-                for (trackIndex = 0; trackIndex < sourceTrackCount; ++trackIndex) {
-                    BAEResult muteResult;
-                    uint16_t engineTrackIndex;
-
-                    engineTrackIndex = static_cast<uint16_t>(trackIndex + 1);
-
-                    if (engineTrackIndex == engineSelectedTrack) {
-                        muteResult = BAESong_UnmuteTrack(m_playbackSong, engineTrackIndex);
-                        fprintf(stderr,
-                                "[nbstudio] Runtime isolate uiTrack=%u engineTrack=%u: unmute result=%d\n",
-                                static_cast<unsigned>(trackIndex),
-                                static_cast<unsigned>(engineTrackIndex),
-                                static_cast<int>(muteResult));
-                    } else {
-                        muteResult = BAESong_MuteTrack(m_playbackSong, engineTrackIndex);
-                        fprintf(stderr,
-                                "[nbstudio] Runtime isolate uiTrack=%u engineTrack=%u: mute result=%d\n",
-                                static_cast<unsigned>(trackIndex),
-                                static_cast<unsigned>(engineTrackIndex),
-                                static_cast<int>(muteResult));
-                    }
-                }
-                }
         }
         BAEResult startResult = BAESong_Start(m_playbackSong, 0);
         fprintf(stderr, "[nbstudio] BAESong_Start result=%d\n", static_cast<int>(startResult));
@@ -1738,6 +1948,13 @@ private:
         m_ignoreSeekEvent = false;
         m_autoFollowPlayhead = true;
         PianoRollPanel_SetPlayheadTick(m_pianoRoll, 0);
+        {
+            uint32_t lenUsec;
+
+            lenUsec = 0;
+            BAESong_GetMicrosecondLength(m_playbackSong, &lenUsec);
+            UpdatePositionLabel(0, lenUsec);
+        }
         SetStatusText("Playing", 0);
     }
 
@@ -1764,6 +1981,7 @@ private:
         m_positionSlider->SetValue(0);
         m_ignoreSeekEvent = false;
         PianoRollPanel_ClearPlayhead(m_pianoRoll);
+        UpdatePositionLabelFromDocumentTick(0);
         SetStatusText("Stopped", 0);
     }
 
@@ -1789,6 +2007,7 @@ private:
                 m_ignoreSeekEvent = true;
                 m_positionSlider->SetValue(std::clamp(sliderPos, 0, 1000));
                 m_ignoreSeekEvent = false;
+                UpdatePositionLabel(posUsec, lenUsec);
                 {
                     uint32_t playheadTick;
 
@@ -1806,29 +2025,95 @@ private:
             m_ignoreSeekEvent = true;
             m_positionSlider->SetValue(1000);
             m_ignoreSeekEvent = false;
+            UpdatePositionLabelFromDocumentTick(PianoRollPanel_GetDocumentEndTick(m_pianoRoll));
             SetStatusText("Playback complete", 0);
         }
     }
 
     void OnSeekSlider(wxCommandEvent &) {
-        uint32_t lenUsec;
-        uint32_t targetUsec;
+        uint64_t lenUsec;
+        uint64_t targetUsec;
+        uint32_t seekTick;
 
-        if (m_ignoreSeekEvent || !m_playbackSong) {
-            return;
-        }
-        lenUsec = 0;
-        if (BAESong_GetMicrosecondLength(m_playbackSong, &lenUsec) != BAE_NO_ERROR || lenUsec == 0) {
+        if (m_ignoreSeekEvent) {
             return;
         }
         m_autoFollowPlayhead = false;
-        targetUsec = static_cast<uint32_t>((static_cast<uint64_t>(lenUsec) * static_cast<uint64_t>(m_positionSlider->GetValue())) / 1000ULL);
-        BAESong_SetMicrosecondPosition(m_playbackSong, targetUsec);
-        {
-            uint32_t seekTick = MicrosecondsToTicks(targetUsec);
-            PianoRollPanel_SetPlayheadTick(m_pianoRoll, seekTick);
-            PianoRollPanel_JumpToTick(m_pianoRoll, seekTick);
+        seekTick = 0;
+        if (m_playbackSong) {
+            uint32_t lenUsec32;
+
+            lenUsec = 0;
+            lenUsec32 = 0;
+            if (BAESong_GetMicrosecondLength(m_playbackSong, &lenUsec32) == BAE_NO_ERROR && lenUsec32 > 0) {
+                lenUsec = lenUsec32;
+                targetUsec = (lenUsec * static_cast<uint64_t>(m_positionSlider->GetValue())) / 1000ULL;
+                BAESong_SetMicrosecondPosition(m_playbackSong, static_cast<uint32_t>(targetUsec));
+                seekTick = MicrosecondsToTicks(static_cast<uint32_t>(targetUsec));
+                UpdatePositionLabel(targetUsec, lenUsec);
+            }
+        } else {
+            uint32_t endTick;
+
+            endTick = PianoRollPanel_GetDocumentEndTick(m_pianoRoll);
+            lenUsec = TicksToMicroseconds(endTick);
+            targetUsec = (lenUsec * static_cast<uint64_t>(m_positionSlider->GetValue())) / 1000ULL;
+            seekTick = MicrosecondsToTicks(static_cast<uint32_t>(targetUsec));
+            UpdatePositionLabel(targetUsec, lenUsec);
         }
+        PianoRollPanel_SetPlayheadTick(m_pianoRoll, seekTick);
+        PianoRollPanel_JumpToTick(m_pianoRoll, seekTick);
+    }
+
+    void SeekToTickFromPianoRoll(uint32_t tick) {
+        uint32_t endTick;
+        uint32_t playheadTick;
+        uint64_t totalUsec;
+        uint64_t targetUsec;
+        int sliderPos;
+
+        if (m_ignoreSeekEvent || !m_document) {
+            return;
+        }
+        endTick = PianoRollPanel_GetDocumentEndTick(m_pianoRoll);
+        if (endTick == 0) {
+            return;
+        }
+        tick = std::min(tick, endTick);
+        playheadTick = tick;
+        totalUsec = TicksToMicroseconds(endTick);
+        targetUsec = TicksToMicroseconds(tick);
+        if (totalUsec == 0) {
+            totalUsec = 1;
+        }
+        if (m_playbackSong) {
+            uint32_t lenUsec;
+
+            lenUsec = 0;
+            if (BAESong_GetMicrosecondLength(m_playbackSong, &lenUsec) == BAE_NO_ERROR && lenUsec > 0) {
+                if (targetUsec > lenUsec) {
+                    targetUsec = lenUsec;
+                }
+                sliderPos = static_cast<int>((targetUsec * 1000ULL) / static_cast<uint64_t>(lenUsec));
+                sliderPos = std::clamp(sliderPos, 0, 1000);
+                m_autoFollowPlayhead = false;
+                m_ignoreSeekEvent = true;
+                m_positionSlider->SetValue(sliderPos);
+                m_ignoreSeekEvent = false;
+                BAESong_SetMicrosecondPosition(m_playbackSong, static_cast<uint32_t>(targetUsec));
+                playheadTick = MicrosecondsToTicks(static_cast<uint32_t>(targetUsec));
+                UpdatePositionLabel(targetUsec, lenUsec);
+            }
+        } else {
+            sliderPos = static_cast<int>((targetUsec * 1000ULL) / totalUsec);
+            sliderPos = std::clamp(sliderPos, 0, 1000);
+            m_autoFollowPlayhead = false;
+            m_ignoreSeekEvent = true;
+            m_positionSlider->SetValue(sliderPos);
+            m_ignoreSeekEvent = false;
+            UpdatePositionLabel(targetUsec, totalUsec);
+        }
+        PianoRollPanel_SetPlayheadTick(m_pianoRoll, playheadTick);
     }
 
     void OnLoadBank(wxCommandEvent &) {

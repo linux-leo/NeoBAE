@@ -3001,6 +3001,26 @@ BAEResult BAERmfEditorDocument_DeleteTrackCCEvent(BAERmfEditorDocument *document
                                                                   uint16_t trackIndex,
                                                                   unsigned char cc,
                                                                   uint32_t eventIndex);
+BAEResult BAERmfEditorDocument_GetTrackPitchBendEventCount(BAERmfEditorDocument const *document,
+                                                           uint16_t trackIndex,
+                                                           uint32_t *outCount);
+BAEResult BAERmfEditorDocument_GetTrackPitchBendEvent(BAERmfEditorDocument const *document,
+                                                      uint16_t trackIndex,
+                                                      uint32_t eventIndex,
+                                                      uint32_t *outTick,
+                                                      uint16_t *outValue);
+BAEResult BAERmfEditorDocument_AddTrackPitchBendEvent(BAERmfEditorDocument *document,
+                                                      uint16_t trackIndex,
+                                                      uint32_t tick,
+                                                      uint16_t value);
+BAEResult BAERmfEditorDocument_SetTrackPitchBendEvent(BAERmfEditorDocument *document,
+                                                      uint16_t trackIndex,
+                                                      uint32_t eventIndex,
+                                                      uint32_t tick,
+                                                      uint16_t value);
+BAEResult BAERmfEditorDocument_DeleteTrackPitchBendEvent(BAERmfEditorDocument *document,
+                                                         uint16_t trackIndex,
+                                                         uint32_t eventIndex);
 BAEResult BAERmfEditorDocument_CopySamplesFrom(BAERmfEditorDocument *dest,
                                                BAERmfEditorDocument const *src);
 BAEResult BAERmfEditorDocument_CopySamplesForPrograms(BAERmfEditorDocument *dest,
