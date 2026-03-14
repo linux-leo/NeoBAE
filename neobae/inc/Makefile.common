@@ -241,6 +241,7 @@ endif
 # Primary libNeoBAE sources
 SRC		+=	src/BAE_Source/Common/DriverTools.c \
 			src/BAE_Source/Common/GenAudioStreams.c \
+			src/BAE_Source/Common/BAERmfEditor.c \
 			src/BAE_Source/Common/GenCache.c \
 			src/BAE_Source/Common/GenChorus.c \
 			src/BAE_Source/Common/GenFiltersReverbU3232.c \
@@ -404,6 +405,9 @@ ifeq ($(BUILD_GUI),1)
 		SRC_BIN += src/gui/gui_debug_console.c
 	endif
 else
+
+
+
 ifeq ($(RMFINFO),1)
 	# libNeoBAE srcs + rmfinfo.c
 	SRC_BIN	:= $(SRC) src/rmfinfo/rmfinfo.c
@@ -416,8 +420,12 @@ else
 		# libNeoBAE srcs + mid2rmi.c
 		SRC_BIN	:= $(SRC) src/mid2rmi/mid2rmi.c
 	else
-	# playbae = libNeoBAE srcs + playbae.c
-	SRC_BIN	:= $(SRC) src/playbae/playbae.c
+		ifeq ($(NBSTUDIO),1)
+			SRC_BIN := $(SRC) src/rmfeditor_wx/editor_main.cpp
+		else
+			# playbae = libNeoBAE srcs + playbae.c
+			SRC_BIN	:= $(SRC) src/playbae/playbae.c
+		endif
 	endif
 endif
 endif

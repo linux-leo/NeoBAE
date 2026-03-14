@@ -2829,6 +2829,190 @@ BAEResult BAESong_LoadRmiFromFile(BAESong song, BAEPathName filePath, BAE_BOOL i
 BAEResult BAESong_LoadRmiFromMemory(BAESong song, void const *pRmiData, uint32_t rmiSize, BAE_BOOL ignoreBadInstruments, BAE_BOOL useEmbeddedBank);
 XBOOL GM_IsAudioTailActive(GM_Mixer *mixer);
 
+typedef struct BAERmfEditorDocument BAERmfEditorDocument;
+
+typedef struct BAERmfEditorTrackSetup
+{
+    unsigned char channel;
+    uint16_t bank;
+    unsigned char program;
+    char *name;
+} BAERmfEditorTrackSetup;
+
+typedef struct BAERmfEditorTrackInfo
+{
+    char const *name;
+    unsigned char channel;
+    uint16_t bank;
+    unsigned char program;
+    unsigned char pan;
+    unsigned char volume;
+    int16_t transpose;
+    uint32_t noteCount;
+} BAERmfEditorTrackInfo;
+
+typedef struct BAERmfEditorNoteInfo
+{
+    uint32_t startTick;
+    uint32_t durationTicks;
+    unsigned char note;
+    unsigned char velocity;
+    uint16_t bank;
+    unsigned char program;
+} BAERmfEditorNoteInfo;
+
+typedef struct BAERmfEditorSampleSetup
+{
+    unsigned char program;
+    unsigned char rootKey;
+    unsigned char lowKey;
+    unsigned char highKey;
+    char *displayName;
+} BAERmfEditorSampleSetup;
+
+typedef struct BAERmfEditorSampleInfo
+{
+    char const *displayName;
+    char const *sourcePath;
+    unsigned char program;
+    unsigned char rootKey;
+    unsigned char lowKey;
+    unsigned char highKey;
+    BAESampleInfo sampleInfo;
+} BAERmfEditorSampleInfo;
+
+BAERmfEditorDocument *BAERmfEditorDocument_New(void);
+BAERmfEditorDocument *BAERmfEditorDocument_LoadFromFile(BAEPathName filePath);
+BAEResult BAERmfEditorDocument_Delete(BAERmfEditorDocument *document);
+BAEResult BAERmfEditorDocument_SetTempoBPM(BAERmfEditorDocument *document, uint32_t bpm);
+BAEResult BAERmfEditorDocument_GetTempoBPM(BAERmfEditorDocument const *document, uint32_t *outBpm);
+BAEResult BAERmfEditorDocument_AddTempoEvent(BAERmfEditorDocument *document,
+                                             uint32_t tick,
+                                             uint32_t microsecondsPerQuarter);
+BAEResult BAERmfEditorDocument_SetTempoEvent(BAERmfEditorDocument *document,
+                                             uint32_t eventIndex,
+                                             uint32_t tick,
+                                             uint32_t microsecondsPerQuarter);
+BAEResult BAERmfEditorDocument_DeleteTempoEvent(BAERmfEditorDocument *document,
+                                                uint32_t eventIndex);
+BAEResult BAERmfEditorDocument_SetTicksPerQuarter(BAERmfEditorDocument *document, uint16_t ticksPerQuarter);
+BAEResult BAERmfEditorDocument_GetTicksPerQuarter(BAERmfEditorDocument const *document, uint16_t *outTicksPerQuarter);
+BAEResult BAERmfEditorDocument_SetInfo(BAERmfEditorDocument *document, BAEInfoType infoType, char const *value);
+char const *BAERmfEditorDocument_GetInfo(BAERmfEditorDocument const *document, BAEInfoType infoType);
+BAEResult BAERmfEditorDocument_AddTrack(BAERmfEditorDocument *document,
+                                        BAERmfEditorTrackSetup const *setup,
+                                        uint16_t *outTrackIndex);
+BAEResult BAERmfEditorDocument_GetTrackCount(BAERmfEditorDocument const *document,
+                                             uint16_t *outTrackCount);
+BAEResult BAERmfEditorDocument_GetTrackInfo(BAERmfEditorDocument const *document,
+                                            uint16_t trackIndex,
+                                            BAERmfEditorTrackInfo *outTrackInfo);
+BAEResult BAERmfEditorDocument_SetTrackInfo(BAERmfEditorDocument *document,
+                                            uint16_t trackIndex,
+                                            BAERmfEditorTrackInfo const *trackInfo);
+BAEResult BAERmfEditorDocument_DeleteTrack(BAERmfEditorDocument *document,
+                                           uint16_t trackIndex);
+BAEResult BAERmfEditorDocument_AddNote(BAERmfEditorDocument *document,
+                                       uint16_t trackIndex,
+                                       uint32_t startTick,
+                                       uint32_t durationTicks,
+                                       unsigned char note,
+                                       unsigned char velocity);
+BAEResult BAERmfEditorDocument_GetNoteCount(BAERmfEditorDocument const *document,
+                                            uint16_t trackIndex,
+                                            uint32_t *outNoteCount);
+BAEResult BAERmfEditorDocument_GetNoteInfo(BAERmfEditorDocument const *document,
+                                           uint16_t trackIndex,
+                                           uint32_t noteIndex,
+                                           BAERmfEditorNoteInfo *outNoteInfo);
+BAEResult BAERmfEditorDocument_SetNoteInfo(BAERmfEditorDocument *document,
+                                           uint16_t trackIndex,
+                                           uint32_t noteIndex,
+                                           BAERmfEditorNoteInfo const *noteInfo);
+BAEResult BAERmfEditorDocument_DeleteNote(BAERmfEditorDocument *document,
+                                          uint16_t trackIndex,
+                                          uint32_t noteIndex);
+BAEResult BAERmfEditorDocument_AddSampleFromFile(BAERmfEditorDocument *document,
+                                                 BAEPathName filePath,
+                                                 BAERmfEditorSampleSetup const *setup,
+                                                 BAESampleInfo *outSampleInfo);
+BAEResult BAERmfEditorDocument_AddEmptySample(BAERmfEditorDocument *document,
+                                              BAERmfEditorSampleSetup const *setup,
+                                              uint32_t *outSampleIndex,
+                                              BAESampleInfo *outSampleInfo);
+BAEResult BAERmfEditorDocument_GetSampleCount(BAERmfEditorDocument const *document,
+                                              uint32_t *outSampleCount);
+BAEResult BAERmfEditorDocument_GetSampleInfo(BAERmfEditorDocument const *document,
+                                             uint32_t sampleIndex,
+                                             BAERmfEditorSampleInfo *outSampleInfo);
+BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
+                                             uint32_t sampleIndex,
+                                             BAERmfEditorSampleInfo const *sampleInfo);
+BAEResult BAERmfEditorDocument_DeleteSample(BAERmfEditorDocument *document,
+                                            uint32_t sampleIndex);
+BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *document,
+                                                     uint32_t sampleIndex,
+                                                     BAEPathName filePath,
+                                                     BAESampleInfo *outSampleInfo);
+BAEResult BAERmfEditorDocument_GetSampleWaveformData(BAERmfEditorDocument const *document,
+                                                     uint32_t sampleIndex,
+                                                     void const **outWaveData,
+                                                     uint32_t *outFrameCount,
+                                                     uint16_t *outBitSize,
+                                                     uint16_t *outChannels,
+                                                     BAE_UNSIGNED_FIXED *outSampleRate);
+BAEResult BAERmfEditorDocument_GetSampleCodecDescription(BAERmfEditorDocument const *document,
+                                                         uint32_t sampleIndex,
+                                                         char *outCodec,
+                                                         uint32_t outCodecSize);
+BAEResult BAERmfEditorDocument_ExportSampleToFile(BAERmfEditorDocument const *document,
+                                                  uint32_t sampleIndex,
+                                                  BAEPathName filePath);
+BAEResult BAERmfEditorDocument_CopyTempoMapFrom(BAERmfEditorDocument *dest,
+                                                BAERmfEditorDocument const *src);
+BAEResult BAERmfEditorDocument_GetTempoEventCount(BAERmfEditorDocument const *document,
+                                                  uint32_t *outCount);
+BAEResult BAERmfEditorDocument_GetTempoEvent(BAERmfEditorDocument const *document,
+                                             uint32_t eventIndex,
+                                             uint32_t *outTick,
+                                             uint32_t *outMicrosecondsPerQuarter);
+BAEResult BAERmfEditorDocument_GetTrackCCEventCount(BAERmfEditorDocument const *document,
+                                                    uint16_t trackIndex,
+                                                    unsigned char cc,
+                                                    uint32_t *outCount);
+BAEResult BAERmfEditorDocument_GetTrackCCEvent(BAERmfEditorDocument const *document,
+                                               uint16_t trackIndex,
+                                               unsigned char cc,
+                                               uint32_t eventIndex,
+                                               uint32_t *outTick,
+                                               unsigned char *outValue);
+BAEResult BAERmfEditorDocument_AddTrackCCEvent(BAERmfEditorDocument *document,
+                                                              uint16_t trackIndex,
+                                                              unsigned char cc,
+                                                              uint32_t tick,
+                                                              unsigned char value);
+BAEResult BAERmfEditorDocument_SetTrackCCEvent(BAERmfEditorDocument *document,
+                                                              uint16_t trackIndex,
+                                                              unsigned char cc,
+                                                              uint32_t eventIndex,
+                                                              uint32_t tick,
+                                                              unsigned char value);
+BAEResult BAERmfEditorDocument_DeleteTrackCCEvent(BAERmfEditorDocument *document,
+                                                                  uint16_t trackIndex,
+                                                                  unsigned char cc,
+                                                                  uint32_t eventIndex);
+BAEResult BAERmfEditorDocument_CopySamplesFrom(BAERmfEditorDocument *dest,
+                                               BAERmfEditorDocument const *src);
+BAEResult BAERmfEditorDocument_CopySamplesForPrograms(BAERmfEditorDocument *dest,
+                                                      BAERmfEditorDocument const *src,
+                                                      unsigned char const *programFlags128,
+                                                      uint32_t *outCopiedCount);
+BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
+                                         BAEPathName filePath);
+BAEResult BAERmfEditorDocument_SaveAsMidi(BAERmfEditorDocument *document,
+                                          BAEPathName filePath);
+BAEResult BAERmfEditorDocument_Validate(BAERmfEditorDocument *document);
+
 /* Wrapper that accepts a BAEMixer (opaque) and returns whether the audio tail is active.
  * Implemented in NeoBAE.c so callers without access to sBAEMixer internals can use it. */
 XBOOL BAEMixer_IsAudioTailActive(BAEMixer mixer);
