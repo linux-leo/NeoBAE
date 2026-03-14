@@ -171,6 +171,12 @@
     </ClCompile>
     <!-- LAME libmp3lame -->
     <!-- LAME mpglib -->
+    <ClCompile Include="..\src\rmfeditor_wx\editor_instrument_dialog.cpp">
+      <Filter>Source Files\RMF Editor</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\rmfeditor_wx\editor_pianoroll_panel.cpp">
+      <Filter>Source Files\RMF Editor</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\BAE_Source\Common\NeoBAE.h">
@@ -189,6 +195,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="nbstudio\msvc_compat.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\rmfeditor_wx\editor_instrument_dialog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\rmfeditor_wx\editor_pianoroll_panel.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

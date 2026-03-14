@@ -136,6 +136,7 @@ wxbase33u.lib;libmp3lame.lib;FLAC.lib;vorbisfile.lib;vorbisenc.lib;vorbis.lib;ds
        ================================================================ -->
   <ItemGroup>
     <!-- RMF Editor (wxWidgets application) -->
+    <ClCompile Include="..\src\rmfeditor_wx\editor_instrument_dialog.cpp" />
     <ClCompile Include="..\src\rmfeditor_wx\editor_main.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -277,6 +278,7 @@ wxbase33u.lib;libmp3lame.lib;FLAC.lib;vorbisfile.lib;vorbisenc.lib;vorbis.lib;ds
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <!-- FLAC Windows UTF-8 I/O shim -->
+    <ClCompile Include="..\src\rmfeditor_wx\editor_pianoroll_panel.cpp" />
     <ClCompile Include="..\src\thirdparty\flac\src\share\win_utf8_io\win_utf8_io.c">
       <CompileAs>CompileAsC</CompileAs>
       <AdditionalIncludeDirectories>
@@ -301,6 +303,8 @@ wxbase33u.lib;libmp3lame.lib;FLAC.lib;vorbisfile.lib;vorbisenc.lib;vorbis.lib;ds
     <ClInclude Include="..\src\BAE_Source\Common\BAERmfEditor.h" />
     <ClInclude Include="..\src\BAE_Source\Platform\BAE_API.h" />
     <ClInclude Include="..\src\BAE_Source\Platform\BAEBuildOptions_WinOS.h" />
+    <ClInclude Include="..\src\rmfeditor_wx\editor_instrument_dialog.h" />
+    <ClInclude Include="..\src\rmfeditor_wx\editor_pianoroll_panel.h" />
     <ClInclude Include="generated\BAEPatches.h" />
     <ClInclude Include="nbstudio\msvc_compat.h" />
   </ItemGroup>
