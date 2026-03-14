@@ -108,7 +108,7 @@ endif
 # Ensure the legacy MPG API implementation is built when MP3 encoder or
 # decoder support is enabled. XMPEG_BAE_API.c implements MPG_* and
 # X* MPEG helper functions needed across the codebase.
-ifeq ($(filter 1,$(MP3_ENC) $(MP3_DEC)),1)
+ifneq ($(filter 1,$(MP3_ENC) $(MP3_DEC)),)
 	SRC += src/BAE_MPEG_Source_II/XMPEG_BAE_API.c
 endif
 

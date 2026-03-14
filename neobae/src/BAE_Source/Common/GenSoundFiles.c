@@ -3513,9 +3513,13 @@ OPErr XExpandVorbis(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst)
             }
 
             // Copy the decoded audio data starting from the requested frame
-            XBlockMove(decoded->theWaveform + (startFrame * bytesPerFrame), 
+#ifdef _MSC_VER
+            XBlockMove((XBYTE*)decoded->theWaveform + (startFrame * bytesPerFrame),
+#else
+            XBlockMove(decoded->theWaveform + (startFrame * bytesPerFrame),
+#endif
                       dst->theWaveform, requestedBytes);
-            
+
             dst->waveSize = requestedBytes;
             dst->waveFrames = availableFrames;
         }
@@ -3846,9 +3850,13 @@ OPErr XExpandOpus(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst)
             }
 
             // Copy the decoded audio data starting from the requested frame
-            XBlockMove(decoded->theWaveform + (startFrame * bytesPerFrame), 
+#ifdef _MSC_VER
+            XBlockMove((XBYTE*)decoded->theWaveform + (startFrame * bytesPerFrame),
+#else
+            XBlockMove(decoded->theWaveform + (startFrame * bytesPerFrame),
+#endif
                       dst->theWaveform, requestedBytes);
-            
+
             dst->waveSize = requestedBytes;
             dst->waveFrames = availableFrames;
         }

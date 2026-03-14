@@ -1,0 +1,9 @@
+{
+  "dependencies": [
+    "libflac",
+    "libogg",
+    "libvorbis",
+    "wxwidgets",
+    "mp3lame"
+  ]
+}
