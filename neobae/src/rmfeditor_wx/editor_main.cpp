@@ -38,7 +38,7 @@ constexpr int kAutomationLaneGap = 6;
 constexpr int kAutomationLaneCount = 4;
 constexpr uint32_t kDefaultNoteDuration = 480;
 constexpr uint32_t kSnapTicks = 120;
-constexpr char const *kVersionString = "0.01 alpha";
+constexpr char const *kVersionString = "0.02 alpha";
 
 enum class DragMode {
     None,

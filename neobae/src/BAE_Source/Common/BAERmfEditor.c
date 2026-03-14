@@ -21,8 +21,9 @@ typedef struct BAERmfEditorNote
 typedef struct BAERmfEditorCCEvent
 {
     uint32_t tick;
-    unsigned char cc;
-    unsigned char value;
+    unsigned char cc;    /* 0-127 = CC number; 0xFF = pitch bend sentinel */
+    unsigned char value; /* CC value, or pitch bend LSB when cc == 0xFF */
+    unsigned char data2; /* 0 for CC events; pitch bend MSB when cc == 0xFF */
 } BAERmfEditorCCEvent;
 
 typedef struct BAERmfEditorTrack
@@ -134,7 +135,7 @@ static BAEResult PV_CreatePascalName(char const *source, char outName[256]);
 static BAEResult PV_GrowBuffer(void **buffer, uint32_t *capacity, uint32_t elementSize, uint32_t minimumCount);
 static void PV_ClearTempoEvents(BAERmfEditorDocument *document);
 static BAEResult PV_AddTempoEvent(BAERmfEditorDocument *document, uint32_t tick, uint32_t microsecondsPerQuarter);
-static BAEResult PV_AddCCEventToTrack(BAERmfEditorTrack *track, uint32_t tick, unsigned char cc, unsigned char value);
+static BAEResult PV_AddCCEventToTrack(BAERmfEditorTrack *track, uint32_t tick, unsigned char cc, unsigned char value, unsigned char data2);
 static int PV_CompareCCEvents(void const *left, void const *right);
 static BAERmfEditorCCEvent *PV_FindTrackCCEvent(BAERmfEditorTrack *track, unsigned char cc, uint32_t eventIndex, uint32_t *outActualIndex);
 static BAERmfEditorCCEvent const *PV_FindTrackCCEventConst(BAERmfEditorTrack const *track, unsigned char cc, uint32_t eventIndex, uint32_t *outActualIndex);
@@ -258,7 +259,7 @@ static BAEResult PV_AddTempoEvent(BAERmfEditorDocument *document, uint32_t tick,
     return BAE_NO_ERROR;
 }
 
-static BAEResult PV_AddCCEventToTrack(BAERmfEditorTrack *track, uint32_t tick, unsigned char cc, unsigned char value)
+static BAEResult PV_AddCCEventToTrack(BAERmfEditorTrack *track, uint32_t tick, unsigned char cc, unsigned char value, unsigned char data2)
 {
     BAEResult result;
     BAERmfEditorCCEvent *event;
@@ -279,6 +280,7 @@ static BAEResult PV_AddCCEventToTrack(BAERmfEditorTrack *track, uint32_t tick, u
     event->tick = tick;
     event->cc = cc;
     event->value = value;
+    event->data2 = data2;
     track->ccEventCount++;
     qsort(track->ccEvents, track->ccEventCount, sizeof(BAERmfEditorCCEvent), PV_CompareCCEvents);
     return BAE_NO_ERROR;
@@ -1237,14 +1239,25 @@ static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
                     {
                         track->pan = data2;
                     }
-                    if (channel == track->channel && (data1 == 7 || data1 == 10 || data1 == 11))
+                    /* Store all CCs for this channel except bank selects (handled via per-note bank tracking). */
+                    if (channel == track->channel && data1 != BANK_MSB && data1 != BANK_LSB)
                     {
-                        result = PV_AddCCEventToTrack(track, currentTick, data1, data2);
+                        result = PV_AddCCEventToTrack(track, currentTick, data1, data2, 0);
                         if (result != BAE_NO_ERROR)
                         {
                             PV_DisposeActiveNotes(&activeNotes);
                             return result;
                         }
+                    }
+                }
+                else if (eventType == PITCH_BEND && channel == track->channel)
+                {
+                    /* Pitch bend: data1=LSB, data2=MSB. Stored with cc sentinel 0xFF. */
+                    result = PV_AddCCEventToTrack(track, currentTick, 0xFF, data1, data2);
+                    if (result != BAE_NO_ERROR)
+                    {
+                        PV_DisposeActiveNotes(&activeNotes);
+                        return result;
                     }
                 }
                 break;
@@ -1441,6 +1454,20 @@ static BAEResult PV_AddEmbeddedSampleVariant(BAERmfEditorDocument *document,
     }
     /* theWaveform now contains raw PCM copy; keep compression metadata aligned with data format */
     waveform->compressionType = C_NONE;
+    /* When INST midiRootKey is 0 ("no override"), the engine relies on the SND's baseFrequency
+     * for pitch calibration.  Recover the original baseFrequency from sdi.baseKey so that
+     * sample->rootKey and the regenerated SND both carry the correct root note. */
+    if (rootKey == 0)
+    {
+        if (sdi.baseKey > 0 && sdi.baseKey <= 127)
+        {
+            rootKey = (unsigned char)sdi.baseKey;
+        }
+        else
+        {
+            rootKey = 60; /* safe default: middle C */
+        }
+    }
     waveform->baseMidiPitch = rootKey;
     if (pcmOwner)
     {
@@ -1528,18 +1555,43 @@ static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE 
         splitCount = (int16_t)XGetShort(&inst->keySplitCount);
         program = (unsigned char)(instID % 128);
 
+        /* Detect whether this INST uses miscParameter1 as the per-sample root key
+         * (useSoundModifierAsRootKey), or whether the root key comes from the SND's
+         * own baseFrequency.  The two paths require different loading strategies:
+         *   useSoundModifierAsRootKey=TRUE  → miscParameter1 (split or INST) IS the root key
+         *   useSoundModifierAsRootKey=FALSE → SND's baseFrequency is the root key
+         *     (pass rootKey=0 to PV_AddEmbeddedSampleVariant so it falls back to sdi.baseKey)
+         * NOTE: midiRootKey 0 and 60 are both no-ops in the engine (shift by 0 semitones).
+         * For non-trivial masterRootKey values the effective root would be
+         * masterRootKey + baseMidiPitch - 60, but that edge case is uncommon in practice.
+         */
+        {
+            XBOOL useSoundModifierAsRootKey = TEST_FLAG_VALUE(inst->flags2, ZBF_useSoundModifierAsRootKey);
+            int16_t instMiscParam1 = (int16_t)XGetShort(&inst->miscParameter1);
+
         if (splitCount > 0)
         {
             for (splitIndex = 0; splitIndex < splitCount; ++splitIndex)
             {
                 KeySplit split;
-                int16_t splitRoot;
+                unsigned char splitRootForLoad;
 
                 XGetKeySplitFromPtr(inst, splitIndex, &split);
-                splitRoot = split.miscParameter1;
-                if (splitRoot < 0 || splitRoot > 127)
+                if (useSoundModifierAsRootKey)
                 {
-                    splitRoot = baseRootKey;
+                    /* miscParameter1 is the authoritative per-split root key */
+                    int16_t splitRoot = split.miscParameter1;
+                    if (splitRoot < 0 || splitRoot > 127)
+                    {
+                        splitRoot = baseRootKey;
+                    }
+                    splitRootForLoad = PV_ClampMidi7Bit(splitRoot);
+                }
+                else
+                {
+                    /* Root key comes from the SND's baseFrequency; pass 0 so
+                     * PV_AddEmbeddedSampleVariant falls back to sdi.baseKey. */
+                    splitRootForLoad = 0;
                 }
                 if (PV_AddEmbeddedSampleVariant(document,
                                                 fileRef,
@@ -1547,7 +1599,7 @@ static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE 
                                                 instName,
                                                 program,
                                                 split.sndResourceID,
-                                                PV_ClampMidi7Bit(splitRoot),
+                                                splitRootForLoad,
                                                 PV_ClampMidi7Bit((int32_t)split.lowMidi),
                                                 PV_ClampMidi7Bit((int32_t)split.highMidi)) != BAE_NO_ERROR)
                 {
@@ -1558,19 +1610,32 @@ static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE 
         }
         else
         {
+            unsigned char nonSplitRootForLoad;
+            if (useSoundModifierAsRootKey)
+            {
+                /* miscParameter1 holds the root key override for non-split instruments */
+                nonSplitRootForLoad = PV_ClampMidi7Bit(instMiscParam1 ? instMiscParam1 : baseRootKey);
+            }
+            else
+            {
+                /* Root key comes from the SND's baseFrequency; pass 0 so
+                 * PV_AddEmbeddedSampleVariant falls back to sdi.baseKey. */
+                nonSplitRootForLoad = 0;
+            }
             if (PV_AddEmbeddedSampleVariant(document,
                                             fileRef,
                                             instID,
                                             instName,
                                             program,
                                             baseSndID,
-                                            PV_ClampMidi7Bit(baseRootKey),
+                                            nonSplitRootForLoad,
                                             0,
                                             127) != BAE_NO_ERROR)
             {
                 BAE_STDERR("[RMF] INST ID=%ld failed to load base sndID=%d\n",
                            (long)instID, (int)baseSndID);
             }
+        }
         }
         XDisposePtr(instData);
     }
@@ -2411,9 +2476,19 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track, ByteBuffer *t
             ccEvent = &events[(track->noteCount * 2) + eventIndex];
             ccEvent->tick = track->ccEvents[eventIndex].tick;
             ccEvent->order = 1;
-            ccEvent->status = (unsigned char)(CONTROL_CHANGE | (track->channel & 0x0F));
-            ccEvent->data1 = track->ccEvents[eventIndex].cc;
-            ccEvent->data2 = track->ccEvents[eventIndex].value;
+            if (track->ccEvents[eventIndex].cc == 0xFF)
+            {
+                /* Pitch bend: sentinel cc=0xFF, value=LSB, data2=MSB */
+                ccEvent->status = (unsigned char)(PITCH_BEND | (track->channel & 0x0F));
+                ccEvent->data1 = track->ccEvents[eventIndex].value;
+                ccEvent->data2 = track->ccEvents[eventIndex].data2;
+            }
+            else
+            {
+                ccEvent->status = (unsigned char)(CONTROL_CHANGE | (track->channel & 0x0F));
+                ccEvent->data1 = track->ccEvents[eventIndex].cc;
+                ccEvent->data2 = track->ccEvents[eventIndex].value;
+            }
             ccEvent->bank = track->bank;
             ccEvent->program = track->program;
             ccEvent->applyProgram = 0;
@@ -2949,7 +3024,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 XPutShort(instBytes + kInstOffset_sndResourceID, (uint16_t)sampleSndIDs[leaderIndex]);
                 XPutShort(instBytes + kInstOffset_midiRootKey, 60);
                 instBytes[kInstOffset_panPlacement] = 0;
-                instBytes[kInstOffset_flags1] = 0;
+                instBytes[kInstOffset_flags1] = ZBF_useSampleRate; /* engine must scale pitch for actual sample rate */
                 instBytes[kInstOffset_flags2] = 0;
                 instBytes[kInstOffset_smodResourceID] = 0;
                 XPutShort(instBytes + kInstOffset_miscParameter1, 60);
@@ -2999,6 +3074,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             XSetMemory(&instrument, sizeof(instrument), 0);
             XPutShort(&instrument.sndResourceID, (uint16_t)sampleSndIDs[leaderIndex]);
             XPutShort(&instrument.midiRootKey, 60);
+            instrument.flags1 = ZBF_useSampleRate; /* engine must scale pitch for actual sample rate */
             XPutShort(&instrument.miscParameter1, (uint16_t)leaderSample->rootKey);
             XPutShort(&instrument.miscParameter2, 256);
             XPutShort(&instrument.keySplitCount, 0);
@@ -3519,7 +3595,7 @@ BAEResult BAERmfEditorDocument_AddTrackCCEvent(BAERmfEditorDocument *document,
     {
         return BAE_PARAM_ERR;
     }
-    result = PV_AddCCEventToTrack(track, tick, cc, value);
+    result = PV_AddCCEventToTrack(track, tick, cc, value, 0);
     if (result == BAE_NO_ERROR)
     {
         if (cc == 7 && tick == 0)
@@ -4616,6 +4692,12 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
             {
                 continue;
             }
+            /* SND and INST resources are regenerated from document->samples below;
+             * skip any originals so the new packing fully replaces them. */
+            if (entry->type == ID_SND || entry->type == ID_INST)
+            {
+                continue;
+            }
             if (entry->type == document->originalMidiType && entry->id == document->originalObjectResourceID)
             {
                 XPTR encodedMidi;
@@ -4719,6 +4801,15 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
                 PV_ByteBufferDispose(&midiData);
                 return result;
             }
+        }
+        result = PV_AddSampleResources(document, fileRef);
+        BAE_STDERR("[RMF Save] loadedFromRmf AddSampleResources result=%d, sampleCount=%u\n",
+                   (int)result, document->sampleCount);
+        if (result != BAE_NO_ERROR)
+        {
+            XFileClose(fileRef);
+            PV_ByteBufferDispose(&midiData);
+            return result;
         }
         if (XCleanResourceFile(fileRef) == FALSE)
         {
