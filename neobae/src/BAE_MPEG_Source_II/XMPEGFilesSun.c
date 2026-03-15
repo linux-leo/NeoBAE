@@ -396,48 +396,60 @@ XMPEGDecodedData*   stream;
                 }
 
                 /* Trim leading encoder-delay silence that startFrame didn't cover.
-                 * Old RMF files often have startFrame==0 (or an insufficient value)
-                 * even though the MPEG encoder introduced leading silence and the
-                 * decoder synthesis filter needs a warmup period.  Scan up to four
-                 * MPEG decoded frames (covers any real-world encoder delay plus
-                 * synthesis warmup) for leading near-silent samples and shift the
-                 * data forward.  A small threshold catches synthesis-warmup values
-                 * that are non-zero but below audible level.  Loop points are
-                 * adjusted accordingly. */
-#define MPEG_SILENCE_THRESHOLD 8   /* ~0.024% of full-scale 16-bit; below noise floor */
+                 * LAME's encoderDelay accounts for the encoder's algorithmic delay,
+                 * but the minimp3 polyphase synthesis filter still introduces ~500
+                 * samples of warmup artifacts in the first decoded audio frame.
+                 * These render as a visually flat (near-silent) region at the start
+                 * of the waveform even though they are technically non-zero.
+                 *
+                 * Scan frame-by-frame (all channels checked per frame) until we find
+                 * a frame where any channel sample exceeds MPEG_SILENCE_THRESHOLD
+                 * (~-30 dBFS / 3% full-scale).  Stop after four decoded MPEG frames
+                 * to avoid trimming legitimate quiet content.
+                 *
+                 * Scanning per-frame avoids the integer-division bug that would
+                 * occur if we scanned per-sample and then divided by channels
+                 * (e.g. silentSamples=1, channels=2 → trimFrames=0, no trim).
+                 * Loop points are adjusted to compensate. */
+#define MPEG_SILENCE_THRESHOLD 1024  /* ~3% of full-scale 16-bit; ~-30 dBFS; covers LAME/minimp3 synthesis warmup */
                 if (definedBytes > 0 && dst->channels > 0)
                 {
-                /* Limit to four decoded MPEG frames to avoid stripping intentional
-                 * silence that happens to appear at the very start of a sample. */
-                UINT32 maxScanSamples = (stream->frameBufferSize * 4u) / (UINT32)sizeof(int16_t);
-                UINT32 maxFromDefined = definedBytes / (UINT32)sizeof(int16_t);
-                UINT32 scanLimit = (maxScanSamples < maxFromDefined) ? maxScanSamples : maxFromDefined;
+                UINT32 maxScanFrames = (stream->frameBufferSize * 4u) / bytesPerFrame;
+                UINT32 maxFromDefined = definedBytes / bytesPerFrame;
+                UINT32 frameScanLimit = (maxScanFrames < maxFromDefined) ? maxScanFrames : maxFromDefined;
                 int16_t const *pcm = (int16_t const *)decodingData;
-                UINT32 silentSamples;
+                UINT32 silentFrames;
+                UINT32 ch;
 
-                    for (silentSamples = 0; silentSamples < scanLimit; silentSamples++)
+                    for (silentFrames = 0; silentFrames < frameScanLimit; silentFrames++)
                     {
-                        int16_t s = pcm[silentSamples];
-                        if (s > MPEG_SILENCE_THRESHOLD || s < -MPEG_SILENCE_THRESHOLD) break;
+                        XBOOL hasAudio = FALSE;
+                        for (ch = 0; ch < (UINT32)dst->channels; ch++)
+                        {
+                            int16_t s = pcm[silentFrames * (UINT32)dst->channels + ch];
+                            if (s > MPEG_SILENCE_THRESHOLD || s < -MPEG_SILENCE_THRESHOLD)
+                            {
+                                hasAudio = TRUE;
+                                break;
+                            }
+                        }
+                        if (hasAudio) break;
                     }
-                    if (silentSamples > 0)
+                    if (silentFrames > 0)
                     {
-                    /* Round down to a complete multi-channel frame boundary */
-                    UINT32 trimFrames  = silentSamples / (UINT32)dst->channels;
-                    UINT32 trimSamples = trimFrames * (UINT32)dst->channels;
-                    UINT32 trimBytes   = trimSamples * (UINT32)sizeof(int16_t);
+                    UINT32 trimBytes = silentFrames * bytesPerFrame;
 
-                        if (trimBytes > 0 && trimBytes < definedBytes)
+                        if (trimBytes < definedBytes)
                         {
                             XBlockMove((XPTR)((XBYTE *)decodingData + trimBytes),
                                         decodingData,
                                         definedBytes - trimBytes);
-                            definedBytes     -= trimBytes;
-                            dst->waveFrames  -= trimFrames;
-                            if (dst->startLoop > trimFrames) dst->startLoop -= trimFrames;
-                            else                             dst->startLoop  = 0;
-                            if (dst->endLoop   > trimFrames) dst->endLoop   -= trimFrames;
-                            else                             dst->endLoop    = 0;
+                            definedBytes    -= trimBytes;
+                            dst->waveFrames -= silentFrames;
+                            if (dst->startLoop > silentFrames) dst->startLoop -= silentFrames;
+                            else                               dst->startLoop  = 0;
+                            if (dst->endLoop   > silentFrames) dst->endLoop   -= silentFrames;
+                            else                               dst->endLoop    = 0;
                         }
                     }
                 }

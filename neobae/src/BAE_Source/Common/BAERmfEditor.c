@@ -2908,6 +2908,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                     compType    = C_MPEG_96;
                     compSubType = CS_MPEG2;
                     break;
+#if USE_VORBIS_ENCODER == TRUE && USE_VORBIS_DECODER == TRUE                    
                 case BAE_EDITOR_COMPRESSION_VORBIS_32K:
                     compType    = C_VORBIS;
                     compSubType = CS_VORBIS_32K;
@@ -2920,10 +2921,13 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                     compType    = C_VORBIS;
                     compSubType = CS_VORBIS_96K;
                     break;
+#endif /* USE_VORBIS_ENCODER && USE_VORBIS_DECODER */                    
+#if USE_FLAC_ENCODER == TRUE && USE_FLAC_DECODER == TRUE
                 case BAE_EDITOR_COMPRESSION_FLAC:
                     compType    = C_FLAC;
                     compSubType = CS_DEFAULT;
                     break;
+#endif /* USE_FLAC_ENCODER && USE_FLAC_DECODER */
                 case BAE_EDITOR_COMPRESSION_PCM:
                 default:
                     compType    = C_NONE;
@@ -4481,6 +4485,18 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
     sample->lowKey = sampleInfo->lowKey;
     sample->highKey = sampleInfo->highKey;
 
+    /* Propagate rootKey and loop points into the waveform and sampleInfo so
+     * that the save path, preview, and subsequent GetSampleInfo all agree. */
+    if (sample->waveform)
+    {
+        sample->waveform->baseMidiPitch = sampleInfo->rootKey;
+        sample->waveform->startLoop    = sampleInfo->sampleInfo.startLoop;
+        sample->waveform->endLoop      = sampleInfo->sampleInfo.endLoop;
+    }
+    sample->sampleInfo.baseMidiPitch = sampleInfo->rootKey;
+    sample->sampleInfo.startLoop     = sampleInfo->sampleInfo.startLoop;
+    sample->sampleInfo.endLoop       = sampleInfo->sampleInfo.endLoop;
+
     /* Validate and store compression type.
      * DONT_CHANGE is only legal when we have the original compressed blob. */
     if (sampleInfo->compressionType == BAE_EDITOR_COMPRESSION_DONT_CHANGE)
@@ -4585,6 +4601,10 @@ BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *docum
     }
 
     sample = &document->samples[sampleIndex];
+    /* Preserve the existing rootKey into the new waveform before swapping, so
+     * the save path and preview always use the instrument's assigned root key
+     * rather than whatever baseMidiPitch happened to be in the new audio file. */
+    waveform->baseMidiPitch = sample->rootKey;
     if (sample->waveform)
     {
         GM_FreeWaveform(sample->waveform);
@@ -4603,7 +4623,7 @@ BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *docum
 
     sample->sampleInfo.bitSize = waveform->bitSize;
     sample->sampleInfo.channels = waveform->channels;
-    sample->sampleInfo.baseMidiPitch = waveform->baseMidiPitch;
+    sample->sampleInfo.baseMidiPitch = sample->rootKey;
     sample->sampleInfo.waveSize = waveform->waveSize;
     sample->sampleInfo.waveFrames = waveform->waveFrames;
     sample->sampleInfo.startLoop = waveform->startLoop;
@@ -4708,6 +4728,64 @@ BAEResult BAERmfEditorDocument_ExportSampleToFile(BAERmfEditorDocument const *do
         return BAE_BAD_FILE;
     }
 
+    /* For compressed formats with an original SND blob, extract and write the
+     * raw bitstream directly: FLAC → .flac, Vorbis → .ogg, MPEG → .mp3.
+     * The blob is laid out as XSndHeader3 (int16_t format tag + XSoundHeader3),
+     * with the compressed bitstream at sndBuffer.sampleArea[0]. */
+    if (sample->originalSndData && sample->originalSndSize > (int32_t)sizeof(XSndHeader3))
+    {
+        SndCompressionType srcCodec = (SndCompressionType)sample->sourceCompressionType;
+        XBOOL isCompressed = FALSE;
+
+        switch (srcCodec)
+        {
+#if USE_FLAC_DECODER == TRUE
+        case C_FLAC:
+            isCompressed = TRUE;
+            break;
+#endif
+#if USE_VORBIS_DECODER == TRUE
+        case C_VORBIS:
+            isCompressed = TRUE;
+            break;
+#endif
+#if USE_MPEG_DECODER != 0
+        case C_MPEG_32:  case C_MPEG_40:  case C_MPEG_48:  case C_MPEG_56:
+        case C_MPEG_64:  case C_MPEG_80:  case C_MPEG_96:  case C_MPEG_112:
+        case C_MPEG_128: case C_MPEG_160: case C_MPEG_192: case C_MPEG_224:
+        case C_MPEG_256: case C_MPEG_320:
+            isCompressed = TRUE;
+            break;
+#endif
+        default:
+            break;
+        }
+
+        if (isCompressed)
+        {
+            XSndHeader3 const *hdr3      = (XSndHeader3 const *)sample->originalSndData;
+            int32_t bitstreamSize        = XGetLong(&hdr3->sndBuffer.encodedBytes);
+            unsigned char const *bitstream = (unsigned char const *)&hdr3->sndBuffer.sampleArea[0];
+            unsigned char const *blobEnd   = (unsigned char const *)sample->originalSndData + sample->originalSndSize;
+
+            if (bitstreamSize > 0 && bitstream + bitstreamSize <= blobEnd)
+            {
+                XFILE outFile;
+                XERR writeErr;
+                XConvertPathToXFILENAME(filePath, &fileName);
+                outFile = XFileOpenForWrite(&fileName, TRUE);
+                if (!outFile)
+                {
+                    return BAE_FILE_IO_ERROR;
+                }
+                writeErr = XFileWrite(outFile, (XPTRC)bitstream, bitstreamSize);
+                XFileClose(outFile);
+                return (writeErr == 0) ? BAE_NO_ERROR : BAE_FILE_IO_ERROR;
+            }
+        }
+    }
+
+    /* PCM/ADPCM or no original blob: export decoded waveform as WAV or AIFF. */
     ext = strrchr(filePath, '.');
     if (ext && (!XStrCmp(ext, ".aif") || !XStrCmp(ext, ".aiff") ||
                !XStrCmp(ext, ".AIF") || !XStrCmp(ext, ".AIFF")))
@@ -4939,9 +5017,9 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
             {
                 continue;
             }
-            /* SND and INST resources are regenerated from document->samples below;
+            /* SND, CSND, ESND, and INST resources are regenerated from document->samples below;
              * skip any originals so the new packing fully replaces them. */
-            if (entry->type == ID_SND || entry->type == ID_INST)
+            if (entry->type == ID_SND || entry->type == ID_CSND || entry->type == ID_ESND || entry->type == ID_INST)
             {
                 continue;
             }

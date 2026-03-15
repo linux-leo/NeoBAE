@@ -3496,7 +3496,11 @@ OPErr XExpandVorbis(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst)
             dst->sampledRate = decoded->sampledRate;
             dst->bitSize = decoded->bitSize;
             dst->channels = decoded->channels;
-            dst->baseMidiPitch = decoded->baseMidiPitch;
+            /* Vorbis bitstreams carry no MIDI pitch info; the decoder defaults
+             * baseMidiPitch to 60.  Preserve the value from the SND header
+             * (already in src->baseMidiPitch) so the engine and editor see the
+             * rootKey that was stored at save time. */
+            dst->baseMidiPitch = src->baseMidiPitch ? src->baseMidiPitch : decoded->baseMidiPitch;
             dst->compressionType = C_NONE; // Decoded is uncompressed
             dst->startLoop = decoded->startLoop > startFrame ? decoded->startLoop - startFrame : 0;
             dst->endLoop = decoded->endLoop > startFrame ? decoded->endLoop - startFrame : 0;
@@ -4630,7 +4634,11 @@ OPErr XExpandFLAC(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst)
         dst->bitSize = decoded->bitSize;
         dst->channels = decoded->channels;
         dst->sampledRate = decoded->sampledRate;
-        dst->baseMidiPitch = decoded->baseMidiPitch;
+        /* FLAC bitstreams carry no MIDI pitch info; the decoder defaults
+         * baseMidiPitch to 60.  Preserve the value from the SND header
+         * (already in src->baseMidiPitch) so the engine and editor see the
+         * rootKey that was stored at save time. */
+        dst->baseMidiPitch = src->baseMidiPitch ? src->baseMidiPitch : decoded->baseMidiPitch;
         dst->compressionType = C_NONE;
 
         // Free temporary decoded buffer and struct

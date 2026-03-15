@@ -197,6 +197,7 @@ public:
         m_exportButton = new wxButton(this, wxID_ANY, "Save As...");
         m_rangeLabel = new wxStaticText(this, wxID_ANY, "");
         m_waveformPanel = new WaveformPanel(this);
+        m_codecLabel = new wxStaticText(this, wxID_ANY, wxString());
         m_compressionChoice = new wxChoice(this, wxID_ANY);
         m_compressionChoice->Append("Don't Change");
         m_compressionChoice->Append("RAW PCM");
@@ -254,6 +255,7 @@ public:
             wxBoxSizer *compressionSizer = new wxBoxSizer(wxHORIZONTAL);
             compressionSizer->Add(new wxStaticText(this, wxID_ANY, "Compression"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
             compressionSizer->Add(m_compressionChoice, 0);
+            compressionSizer->Add(m_codecLabel, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 12);
             rootSizer->Add(compressionSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
         }
         rootSizer->Add(triggerSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
@@ -328,6 +330,7 @@ private:
     wxStaticText *m_rangeLabel;
     WaveformPanel *m_waveformPanel;
     wxChoice *m_compressionChoice;
+    wxStaticText *m_codecLabel;
 
     static int CompressionTypeToChoiceIndex(BAERmfEditorCompressionType t) {
         switch (t) {
@@ -450,6 +453,15 @@ private:
             /* Disable the "Don't Change" item text visually via choice label when unavailable.
              * We can't grey individual items in wxChoice portably, so rename it. */
             m_compressionChoice->SetString(0, canKeep ? "Don't Change" : "Don't Change (N/A)");
+        }
+        {
+            char codecBuf[64] = {};
+            uint32_t sampleIndex = m_sampleIndices[static_cast<size_t>(localIndex)];
+            if (BAERmfEditorDocument_GetSampleCodecDescription(m_document, sampleIndex, codecBuf, sizeof(codecBuf)) == BAE_NO_ERROR) {
+                m_codecLabel->SetLabel(wxString::Format("(source: %s)", wxString::FromUTF8(codecBuf)));
+            } else {
+                m_codecLabel->SetLabel(wxString());
+            }
         }
         {
             bool loopEnabled = (sample.sampleInfo.startLoop < sample.sampleInfo.endLoop);
@@ -648,6 +660,7 @@ private:
                 /* Update the compression UI: "Don't Change" now unavailable */
                 m_compressionChoice->SetString(0, "Don't Change (N/A)");
                 m_compressionChoice->SetSelection(CompressionTypeToChoiceIndex(BAE_EDITOR_COMPRESSION_PCM));
+                m_codecLabel->SetLabel("(source: no compression)");
             }
         }
         RefreshWaveform();
@@ -659,12 +672,7 @@ private:
         char codecBuf[64];
         wxString suggestedName;
         wxString defaultExt;
-        wxFileDialog dialog(this,
-                            "Save Embedded Sample",
-                            wxEmptyString,
-                            wxEmptyString,
-                            "WAV files (*.wav)|*.wav|AIFF files (*.aif)|*.aif|All files (*.*)|*.*",
-                            wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+        wxString filter;
 
         if (!m_exportCallback || m_currentLocalIndex < 0 || m_currentLocalIndex >= static_cast<int>(m_sampleIndices.size())) {
             return;
@@ -674,22 +682,40 @@ private:
         if (BAERmfEditorDocument_GetSampleCodecDescription(m_document, sampleIndex, codecBuf, sizeof(codecBuf)) == BAE_NO_ERROR) {
             codec = wxString::FromUTF8(codecBuf);
         }
-        defaultExt = (codec.Lower().Contains("ima")) ? "aif" : "wav";
+
+        {
+            wxString codecLower = codec.Lower();
+            if (codecLower.Contains("flac")) {
+                defaultExt = "flac";
+                filter = "FLAC files (*.flac)|*.flac|All files (*.*)|*.*";
+            } else if (codecLower.Contains("vorbis")) {
+                defaultExt = "ogg";
+                filter = "Ogg Vorbis files (*.ogg)|*.ogg|All files (*.*)|*.*";
+            } else if (codecLower.Contains("mpeg")) {
+                defaultExt = "mp3";
+                filter = "MP3 files (*.mp3)|*.mp3|All files (*.*)|*.*";
+            } else if (codecLower.Contains("ima")) {
+                defaultExt = "aif";
+                filter = "AIFF files (*.aif)|*.aif|WAV files (*.wav)|*.wav|All files (*.*)|*.*";
+            } else {
+                defaultExt = "wav";
+                filter = "WAV files (*.wav)|*.wav|AIFF files (*.aif)|*.aif|All files (*.*)|*.*";
+            }
+        }
+
         suggestedName = SanitizeDisplayName(m_nameText->GetValue()) + "." + defaultExt;
-        dialog.SetFilename(suggestedName);
+        wxFileDialog dialog(this,
+                            "Save Embedded Sample",
+                            wxEmptyString,
+                            suggestedName,
+                            filter,
+                            wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
 
         if (dialog.ShowModal() != wxID_OK) {
             return;
         }
         if (!m_exportCallback(sampleIndex, dialog.GetPath())) {
             wxMessageBox("Failed to save sample.", "Embedded Instruments", wxOK | wxICON_ERROR, this);
-            return;
-        }
-        if (!codec.IsEmpty()) {
-            wxMessageBox(wxString::Format("Saved sample. Source codec: %s", codec),
-                         "Embedded Instruments",
-                         wxOK | wxICON_INFORMATION,
-                         this);
         }
     }
 };
