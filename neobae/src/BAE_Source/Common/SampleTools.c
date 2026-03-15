@@ -1057,10 +1057,24 @@ XBYTE               order = X_WORD_ORDER;
         case C_MPEG_320:
             BAE_ASSERT(info->bitSize == 16);    //MOE: shouldn't it already be set thus?
             info->bitSize = 16;
-            
+
             // header's "frameCount" is garbage (was once MPEG block count) recalculate
             info->frames = (XDWORD)XGetLong(&header3->decodedBytes) / info->channels / 2;
             startFrame /= info->channels;           // header3->startFrame counts samples, not frames (for MPEG only)
+            break;
+#endif
+#if USE_FLAC_DECODER == TRUE
+        case C_FLAC:
+            /* encodedBytes = FLAC bitstream size; frameCount = decoded PCM frames */
+            info->size   = XGetLong(&header3->encodedBytes);
+            info->frames = XGetLong(&header3->frameCount);
+            break;
+#endif
+#if USE_VORBIS_DECODER == TRUE
+        case C_VORBIS:
+            /* encodedBytes = Ogg Vorbis bitstream size; frameCount = decoded PCM frames */
+            info->size   = XGetLong(&header3->encodedBytes);
+            info->frames = XGetLong(&header3->frameCount);
             break;
 #endif
         default:
@@ -1959,6 +1973,123 @@ XSoundFormat1*      header;
 
         XDisposePtr(intermediateData);
         return err;
+    }
+#endif
+
+#if USE_FLAC_ENCODER != FALSE
+    case C_FLAC:
+    {
+    XPTR        encodedData;
+    uint32_t    encodedBytes;
+    OPErr       err;
+    XSndHeader3 *snd;
+    GM_Waveform pcmSrc;
+
+        /* Ensure we have raw PCM to encode */
+        pcmSrc = src;
+        err = NO_ERR;
+        if (pcmSrc.compressionType != (XDWORD)C_NONE)
+        {
+            /* Should have been decoded above, but handle defensively */
+            XDisposePtr(intermediateData);
+            return PARAM_ERR;
+        }
+
+        err = XEncodeFLACToMemory(&pcmSrc, 8 /* level 9 = index 8 */,
+                                  &encodedData, &encodedBytes);
+        XDisposePtr(intermediateData);
+        if (err != NO_ERR || !encodedData)
+        {
+            return err != NO_ERR ? err : MEMORY_ERR;
+        }
+
+        *dst = XNewPtr((int32_t)(sizeof(XSndHeader3) + encodedBytes));
+        if (!*dst)
+        {
+            XDisposePtr(encodedData);
+            return MEMORY_ERR;
+        }
+        snd = (XSndHeader3 *)*dst;
+        XSetMemory(snd, sizeof(XSndHeader3), 0);
+        XPutShort(&snd->type, XThirdSoundFormat);
+
+        XPutLong(&snd->sndBuffer.subType,      C_FLAC);
+        XPutLong(&snd->sndBuffer.sampleRate,   src.sampledRate);
+        XPutLong(&snd->sndBuffer.frameCount,   src.waveFrames);
+        XPutLong(&snd->sndBuffer.encodedBytes, encodedBytes);
+        XPutLong(&snd->sndBuffer.decodedBytes, (uint32_t)(src.waveFrames * src.channels * (src.bitSize / 8)));
+        XPutLong(&snd->sndBuffer.blockBytes,   0);
+        XPutLong(&snd->sndBuffer.startFrame,   0);
+        XPutLong(&snd->sndBuffer.loopStart[0], src.startLoop);
+        XPutLong(&snd->sndBuffer.loopEnd[0],   src.endLoop);
+        snd->sndBuffer.baseKey    = (XBYTE)src.baseMidiPitch;
+        snd->sndBuffer.channels   = (XBYTE)src.channels;
+        snd->sndBuffer.bitSize    = (XBYTE)src.bitSize;
+        snd->sndBuffer.isEmbedded = TRUE;
+        XBlockMove(encodedData, snd->sndBuffer.sampleArea, (int32_t)encodedBytes);
+        XDisposePtr(encodedData);
+        return NO_ERR;
+    }
+#endif
+
+#if USE_VORBIS_ENCODER == TRUE
+    case C_VORBIS:
+    {
+    XPTR        encodedData;
+    uint32_t    encodedBytes;
+    OPErr       err;
+    XSndHeader3 *snd;
+    float       quality;
+    GM_Waveform pcmSrc;
+
+        pcmSrc = src;
+        if (pcmSrc.compressionType != (XDWORD)C_NONE)
+        {
+            XDisposePtr(intermediateData);
+            return PARAM_ERR;
+        }
+
+        /* Map subType to quality: CS_VORBIS_32K → -0.1, CS_VORBIS_64K → 0.0, CS_VORBIS_96K → 0.3 */
+        switch (dstCompressionSubType)
+        {
+        case CS_VORBIS_32K: quality = -0.1f; break;
+        case CS_VORBIS_96K: quality =  0.3f; break;
+        default:            quality =  0.0f; break; /* CS_VORBIS_64K / CS_DEFAULT */
+        }
+
+        err = XEncodeVorbisToMemory(&pcmSrc, quality, &encodedData, &encodedBytes);
+        XDisposePtr(intermediateData);
+        if (err != NO_ERR || !encodedData)
+        {
+            return err != NO_ERR ? err : MEMORY_ERR;
+        }
+
+        *dst = XNewPtr((int32_t)(sizeof(XSndHeader3) + encodedBytes));
+        if (!*dst)
+        {
+            XDisposePtr(encodedData);
+            return MEMORY_ERR;
+        }
+        snd = (XSndHeader3 *)*dst;
+        XSetMemory(snd, sizeof(XSndHeader3), 0);
+        XPutShort(&snd->type, XThirdSoundFormat);
+
+        XPutLong(&snd->sndBuffer.subType,      C_VORBIS);
+        XPutLong(&snd->sndBuffer.sampleRate,   src.sampledRate);
+        XPutLong(&snd->sndBuffer.frameCount,   src.waveFrames);   /* decoded frame count */
+        XPutLong(&snd->sndBuffer.encodedBytes, encodedBytes);
+        XPutLong(&snd->sndBuffer.decodedBytes, (uint32_t)(src.waveFrames * src.channels * (src.bitSize / 8)));
+        XPutLong(&snd->sndBuffer.blockBytes,   0);
+        XPutLong(&snd->sndBuffer.startFrame,   0);
+        XPutLong(&snd->sndBuffer.loopStart[0], src.startLoop);
+        XPutLong(&snd->sndBuffer.loopEnd[0],   src.endLoop);
+        snd->sndBuffer.baseKey    = (XBYTE)src.baseMidiPitch;
+        snd->sndBuffer.channels   = (XBYTE)src.channels;
+        snd->sndBuffer.bitSize    = (XBYTE)src.bitSize;
+        snd->sndBuffer.isEmbedded = TRUE;
+        XBlockMove(encodedData, snd->sndBuffer.sampleArea, (int32_t)encodedBytes);
+        XDisposePtr(encodedData);
+        return NO_ERR;
     }
 #endif
 

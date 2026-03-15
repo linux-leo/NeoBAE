@@ -1,0 +1,29 @@
+# 0.03 alpha
+- ~~sample preview is too 'hot' or 'squelchy' when in memory mode (not using temp files)~~
+- ~~MP3 encoded samples still have initial silence~~
+- MP3 encoded samples still display initial silence in waveform
+- FLAC and VORBIS do not decode correctly in RMF (preview or final)
+- Implement OPUS samples
+- Create a new format (zmf) for RMFs with OGG/FLAC/OPUS samples (IREZ -> ZREZ)
+- Replace tempfile RMF preview playback with in-memory playback
+- Piano roll should center vertical on MIDI content not just scroll to bottom
+
+# Future
+- SESSIONS! Savable and loadable workspace sessions.
+  - Session data should embed all resources (samples, midi, settings)
+  - Should not rely on original files
+  - Should be compressed before saving and decompressed when loading
+     - Use zlib since we already depend on it via dependancy chain
+  - Possible file extension: `.nbs`
+- Instrument configuration
+  - ADSR
+  - LFO
+  - envelope filters
+  - interpolation
+- Enhanced Exporting
+  - Currently we list all tracks and allow exporting a single track.
+  - We should enable channel exporting in the same manner.
+  - It should allow exporting certain channels (multiple possible, eg ch9 and ch10 only).
+  - It should also allow exporting of each selected channel to a seperate RMF files (eg `user_selected_name[chX].rmf`)
+- Instrument "stealing"
+  - Import an instrument from the loaded HSB bank into NBStudio's instrument list

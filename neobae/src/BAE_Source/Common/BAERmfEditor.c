@@ -55,6 +55,10 @@ typedef struct BAERmfEditorSample
     uint32_t sourceCompressionType;
     BAESampleInfo sampleInfo;
     GM_Waveform *waveform;
+    /* Compression control */
+    BAERmfEditorCompressionType targetCompressionType; /* desired output codec */
+    XPTR    originalSndData;   /* raw SND resource blob from RMF (for DONT_CHANGE) */
+    int32_t originalSndSize;   /* byte count of originalSndData */
 } BAERmfEditorSample;
 
 typedef struct BAERmfEditorResourceEntry
@@ -1398,6 +1402,7 @@ static BAEResult PV_AddEmbeddedSampleVariant(BAERmfEditorDocument *document,
     SampleDataInfo sdi;
     XPTR pcmData;
     XPTR pcmOwner;
+    XPTR sndCopy;
     GM_Waveform *waveform;
     BAERmfEditorSample *sample;
     BAEResult growResult;
@@ -1408,6 +1413,12 @@ static BAEResult PV_AddEmbeddedSampleVariant(BAERmfEditorDocument *document,
     if (!sndData)
     {
         return BAE_BAD_FILE;
+    }
+    /* Preserve original compressed blob so the editor can save it unchanged. */
+    sndCopy = XNewPtr(sndSize);
+    if (sndCopy)
+    {
+        XBlockMove(sndData, sndCopy, sndSize);
     }
 
     XSetMemory(&sdi, sizeof(sdi), 0);
@@ -1493,6 +1504,9 @@ static BAEResult PV_AddEmbeddedSampleVariant(BAERmfEditorDocument *document,
     sample->lowKey = lowKey;
     sample->highKey = highKey;
     sample->sourceCompressionType = sdi.compressionType;
+    sample->targetCompressionType = BAE_EDITOR_COMPRESSION_DONT_CHANGE;
+    sample->originalSndData = sndCopy;
+    sample->originalSndSize = sndCopy ? sndSize : 0;
     if (displayName && displayName[0])
     {
         sample->displayName = PV_DuplicateString(displayName);
@@ -2853,17 +2867,83 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                    (unsigned)writeWaveform.startLoop,
                    (unsigned)writeWaveform.endLoop);
         sndResource = NULL;
-        opErr = XCreateSoundObjectFromData(&sndResource,
-                                           &writeWaveform,
-                                           C_NONE,
-                                           CS_DEFAULT,
-                                           NULL,
-                                           NULL);
-        BAE_STDERR("[RMF Save] Sample[%u] XCreateSoundObjectFromData opErr=%d sndResource=%p\n",
-                   (unsigned)index, (int)opErr, (void *)sndResource);
-        if (opErr != NO_ERR || !sndResource)
+        /* DONT_CHANGE: reuse the original compressed SND blob directly. */
+        if (sample->targetCompressionType == BAE_EDITOR_COMPRESSION_DONT_CHANGE &&
+            sample->originalSndData && sample->originalSndSize > 0)
         {
-            return BAE_BAD_FILE;
+            sndResource = XNewPtr((int32_t)sample->originalSndSize);
+            if (!sndResource)
+            {
+                XDisposePtr((XPTR)sampleSndIDs);
+                XDisposePtr((XPTR)sampleInstIDs);
+                return BAE_MEMORY_ERR;
+            }
+            XBlockMove(sample->originalSndData, sndResource, (int32_t)sample->originalSndSize);
+            BAE_STDERR("[RMF Save] Sample[%u] using original compressed blob (%ld bytes)\n",
+                       (unsigned)index, (long)sample->originalSndSize);
+        }
+        else
+        {
+            /* Map BAERmfEditorCompressionType -> SndCompressionType + sub-type.
+             * MPEG bitrates each have their own SndCompressionType constant;
+             * Vorbis uses C_VORBIS with a sub-type to select the quality tier;
+             * FLAC and ADPCM use a single type constant with CS_DEFAULT sub-type. */
+            SndCompressionType compType;
+            SndCompressionSubType compSubType;
+            switch (sample->targetCompressionType)
+            {
+                case BAE_EDITOR_COMPRESSION_ADPCM:
+                    compType    = C_IMA4;
+                    compSubType = CS_DEFAULT;
+                    break;
+                case BAE_EDITOR_COMPRESSION_MP3_32K:
+                    compType    = C_MPEG_32;
+                    compSubType = CS_MPEG2;
+                    break;
+                case BAE_EDITOR_COMPRESSION_MP3_64K:
+                    compType    = C_MPEG_64;
+                    compSubType = CS_MPEG2;
+                    break;
+                case BAE_EDITOR_COMPRESSION_MP3_96K:
+                    compType    = C_MPEG_96;
+                    compSubType = CS_MPEG2;
+                    break;
+                case BAE_EDITOR_COMPRESSION_VORBIS_32K:
+                    compType    = C_VORBIS;
+                    compSubType = CS_VORBIS_32K;
+                    break;
+                case BAE_EDITOR_COMPRESSION_VORBIS_64K:
+                    compType    = C_VORBIS;
+                    compSubType = CS_VORBIS_64K;
+                    break;
+                case BAE_EDITOR_COMPRESSION_VORBIS_96K:
+                    compType    = C_VORBIS;
+                    compSubType = CS_VORBIS_96K;
+                    break;
+                case BAE_EDITOR_COMPRESSION_FLAC:
+                    compType    = C_FLAC;
+                    compSubType = CS_DEFAULT;
+                    break;
+                case BAE_EDITOR_COMPRESSION_PCM:
+                default:
+                    compType    = C_NONE;
+                    compSubType = CS_DEFAULT;
+                    break;
+            }
+            opErr = XCreateSoundObjectFromData(&sndResource,
+                                               &writeWaveform,
+                                               compType,
+                                               compSubType,
+                                               NULL,
+                                               NULL);
+            BAE_STDERR("[RMF Save] Sample[%u] XCreateSoundObjectFromData compType=%d opErr=%d sndResource=%p\n",
+                       (unsigned)index, (int)compType, (int)opErr, (void *)sndResource);
+            if (opErr != NO_ERR || !sndResource)
+            {
+                XDisposePtr((XPTR)sampleSndIDs);
+                XDisposePtr((XPTR)sampleInstIDs);
+                return BAE_BAD_FILE;
+            }
         }
         XSetSoundBaseKey(sndResource, sample->rootKey);
         XSetSoundLoopPoints(sndResource, (int32_t)writeWaveform.startLoop, (int32_t)writeWaveform.endLoop);
@@ -4212,6 +4292,9 @@ BAEResult BAERmfEditorDocument_AddSampleFromFile(BAERmfEditorDocument *document,
     sample->lowKey = setup->lowKey;
     sample->highKey = setup->highKey;
     sample->sourceCompressionType = waveform->compressionType;
+    sample->targetCompressionType = BAE_EDITOR_COMPRESSION_PCM;
+    sample->originalSndData = NULL;
+    sample->originalSndSize = 0;
     sample->displayName = PV_DuplicateString(setup->displayName ? setup->displayName : filePath);
     sample->sourcePath = PV_DuplicateString(filePath);
     if (!sample->displayName || !sample->sourcePath)
@@ -4300,6 +4383,9 @@ BAEResult BAERmfEditorDocument_AddEmptySample(BAERmfEditorDocument *document,
     sample->lowKey = setup->lowKey;
     sample->highKey = setup->highKey;
     sample->sourceCompressionType = C_NONE;
+    sample->targetCompressionType = BAE_EDITOR_COMPRESSION_PCM;
+    sample->originalSndData = NULL;
+    sample->originalSndSize = 0;
     sample->displayName = PV_DuplicateString(setup->displayName ? setup->displayName : "New Instrument");
     sample->sourcePath = NULL;
     if (!sample->displayName)
@@ -4360,6 +4446,8 @@ BAEResult BAERmfEditorDocument_GetSampleInfo(BAERmfEditorDocument const *documen
     outSampleInfo->lowKey = sample->lowKey;
     outSampleInfo->highKey = sample->highKey;
     outSampleInfo->sampleInfo = sample->sampleInfo;
+    outSampleInfo->compressionType = sample->targetCompressionType;
+    outSampleInfo->hasOriginalData = (sample->originalSndData != NULL) ? TRUE : FALSE;
     return BAE_NO_ERROR;
 }
 
@@ -4392,6 +4480,27 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
     sample->rootKey = sampleInfo->rootKey;
     sample->lowKey = sampleInfo->lowKey;
     sample->highKey = sampleInfo->highKey;
+
+    /* Validate and store compression type.
+     * DONT_CHANGE is only legal when we have the original compressed blob. */
+    if (sampleInfo->compressionType == BAE_EDITOR_COMPRESSION_DONT_CHANGE)
+    {
+        if (!sample->originalSndData)
+        {
+            /* Caller asked to keep original compression but there is no original
+             * blob (new/replaced sample).  Fall back to PCM. */
+            sample->targetCompressionType = BAE_EDITOR_COMPRESSION_PCM;
+        }
+        else
+        {
+            sample->targetCompressionType = BAE_EDITOR_COMPRESSION_DONT_CHANGE;
+        }
+    }
+    else
+    {
+        sample->targetCompressionType = sampleInfo->compressionType;
+    }
+
     PV_MarkDocumentDirty(document);
     return BAE_NO_ERROR;
 }
@@ -4412,6 +4521,12 @@ BAEResult BAERmfEditorDocument_DeleteSample(BAERmfEditorDocument *document,
     {
         GM_FreeWaveform(sample->waveform);
         sample->waveform = NULL;
+    }
+    if (sample->originalSndData)
+    {
+        XDisposePtr(sample->originalSndData);
+        sample->originalSndData = NULL;
+        sample->originalSndSize = 0;
     }
     if (sampleIndex + 1 < document->sampleCount)
     {
@@ -4477,6 +4592,14 @@ BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *docum
     sample->waveform = waveform;
     PV_FreeString(&sample->sourcePath);
     sample->sourcePath = pathCopy;
+    /* Replaced sample: clear original blob and default to RAW PCM. */
+    if (sample->originalSndData)
+    {
+        XDisposePtr(sample->originalSndData);
+        sample->originalSndData = NULL;
+        sample->originalSndSize = 0;
+    }
+    sample->targetCompressionType = BAE_EDITOR_COMPRESSION_PCM;
 
     sample->sampleInfo.bitSize = waveform->bitSize;
     sample->sampleInfo.channels = waveform->channels;
@@ -4633,7 +4756,21 @@ static BAEResult PV_CopySampleEntry(BAERmfEditorDocument *dest,
     dstSample->lowKey = srcSample->lowKey;
     dstSample->highKey = srcSample->highKey;
     dstSample->sourceCompressionType = srcSample->sourceCompressionType;
+    dstSample->targetCompressionType = srcSample->targetCompressionType;
     dstSample->sampleInfo = srcSample->sampleInfo;
+    dstSample->originalSndData = NULL;
+    dstSample->originalSndSize = 0;
+    if (srcSample->originalSndData && srcSample->originalSndSize > 0)
+    {
+        XPTR sndCopy = XNewPtr((int32_t)srcSample->originalSndSize);
+        if (!sndCopy)
+        {
+            return BAE_MEMORY_ERR;
+        }
+        XBlockMove(srcSample->originalSndData, sndCopy, (int32_t)srcSample->originalSndSize);
+        dstSample->originalSndData = sndCopy;
+        dstSample->originalSndSize = srcSample->originalSndSize;
+    }
     waveform = NULL;
     if (srcSample->waveform)
     {

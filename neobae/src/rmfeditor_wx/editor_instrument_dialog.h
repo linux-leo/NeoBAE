@@ -21,6 +21,8 @@ struct InstrumentEditorEditedSample {
     unsigned char lowKey;
     unsigned char highKey;
     BAESampleInfo sampleInfo;
+    BAERmfEditorCompressionType compressionType;
+    bool hasOriginalData;
 };
 
 bool ShowInstrumentEditorDialog(wxWindow *parent,

@@ -2870,6 +2870,25 @@ typedef struct BAERmfEditorSampleSetup
     char *displayName;
 } BAERmfEditorSampleSetup;
 
+/* Compression options for embedded RMF samples.
+ * BAE_EDITOR_COMPRESSION_DONT_CHANGE is only available for samples that were
+ * loaded from an existing RMF file (hasOriginalData == TRUE in the sample info).
+ * New samples and replaced samples default to BAE_EDITOR_COMPRESSION_PCM.
+ */
+typedef enum BAERmfEditorCompressionType
+{
+    BAE_EDITOR_COMPRESSION_DONT_CHANGE = 0,  /* Re-use original encoded data as-is */
+    BAE_EDITOR_COMPRESSION_PCM         = 1,  /* RAW PCM (lossless, largest size) */
+    BAE_EDITOR_COMPRESSION_ADPCM       = 2,  /* IMA ADPCM (4:1 ratio) */
+    BAE_EDITOR_COMPRESSION_MP3_32K     = 3,  /* MP3 at 32 kbps */
+    BAE_EDITOR_COMPRESSION_MP3_64K     = 4,  /* MP3 at 64 kbps */
+    BAE_EDITOR_COMPRESSION_MP3_96K     = 5,  /* MP3 at 96 kbps */
+    BAE_EDITOR_COMPRESSION_VORBIS_32K  = 6,  /* Ogg Vorbis at ~32 kbps */
+    BAE_EDITOR_COMPRESSION_VORBIS_64K  = 7,  /* Ogg Vorbis at ~64 kbps */
+    BAE_EDITOR_COMPRESSION_VORBIS_96K  = 8,  /* Ogg Vorbis at ~96 kbps */
+    BAE_EDITOR_COMPRESSION_FLAC        = 9   /* FLAC lossless (compression level 9) */
+} BAERmfEditorCompressionType;
+
 typedef struct BAERmfEditorSampleInfo
 {
     char const *displayName;
@@ -2879,6 +2898,8 @@ typedef struct BAERmfEditorSampleInfo
     unsigned char lowKey;
     unsigned char highKey;
     BAESampleInfo sampleInfo;
+    BAERmfEditorCompressionType compressionType; /* target compression for saving */
+    BAE_BOOL hasOriginalData;                    /* TRUE if DONT_CHANGE is available */
 } BAERmfEditorSampleInfo;
 
 BAERmfEditorDocument *BAERmfEditorDocument_New(void);

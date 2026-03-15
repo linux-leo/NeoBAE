@@ -249,6 +249,12 @@ static int mm_probe_first_frame(Minimp3Stream *s) {
                 s->frame_samples = samples;
                 s->pcm_frame_bytes = (size_t)samples * info.channels * sizeof(int16_t);
                 s->max_frames_est = info.frame_bytes ? (uint32_t)( (size - s->raw_offset) / info.frame_bytes ) : 0;
+                /* Reset decoder state so mm_decode_next decodes frame 1 with clean (zero)
+                 * overlap.  Without this, the probe updated mdct_overlap to the frame-1
+                 * overlap, and re-decoding frame 1 from the same raw_offset with that
+                 * state would produce wrong (often silent/mangled) output for the first
+                 * decoded frame. */
+                mp3dec_init(&s->dec);
                 return 0;
             }
             s->raw_offset += info.frame_bytes; /* consumed but no PCM */

@@ -394,7 +394,55 @@ XMPEGDecodedData*   stream;
                     definedBytes = decodedBytes;
                     dst->waveFrames = decodedBytes / bytesPerFrame;
                 }
-                
+
+                /* Trim leading encoder-delay silence that startFrame didn't cover.
+                 * Old RMF files often have startFrame==0 (or an insufficient value)
+                 * even though the MPEG encoder introduced leading silence and the
+                 * decoder synthesis filter needs a warmup period.  Scan up to four
+                 * MPEG decoded frames (covers any real-world encoder delay plus
+                 * synthesis warmup) for leading near-silent samples and shift the
+                 * data forward.  A small threshold catches synthesis-warmup values
+                 * that are non-zero but below audible level.  Loop points are
+                 * adjusted accordingly. */
+#define MPEG_SILENCE_THRESHOLD 8   /* ~0.024% of full-scale 16-bit; below noise floor */
+                if (definedBytes > 0 && dst->channels > 0)
+                {
+                /* Limit to four decoded MPEG frames to avoid stripping intentional
+                 * silence that happens to appear at the very start of a sample. */
+                UINT32 maxScanSamples = (stream->frameBufferSize * 4u) / (UINT32)sizeof(int16_t);
+                UINT32 maxFromDefined = definedBytes / (UINT32)sizeof(int16_t);
+                UINT32 scanLimit = (maxScanSamples < maxFromDefined) ? maxScanSamples : maxFromDefined;
+                int16_t const *pcm = (int16_t const *)decodingData;
+                UINT32 silentSamples;
+
+                    for (silentSamples = 0; silentSamples < scanLimit; silentSamples++)
+                    {
+                        int16_t s = pcm[silentSamples];
+                        if (s > MPEG_SILENCE_THRESHOLD || s < -MPEG_SILENCE_THRESHOLD) break;
+                    }
+                    if (silentSamples > 0)
+                    {
+                    /* Round down to a complete multi-channel frame boundary */
+                    UINT32 trimFrames  = silentSamples / (UINT32)dst->channels;
+                    UINT32 trimSamples = trimFrames * (UINT32)dst->channels;
+                    UINT32 trimBytes   = trimSamples * (UINT32)sizeof(int16_t);
+
+                        if (trimBytes > 0 && trimBytes < definedBytes)
+                        {
+                            XBlockMove((XPTR)((XBYTE *)decodingData + trimBytes),
+                                        decodingData,
+                                        definedBytes - trimBytes);
+                            definedBytes     -= trimBytes;
+                            dst->waveFrames  -= trimFrames;
+                            if (dst->startLoop > trimFrames) dst->startLoop -= trimFrames;
+                            else                             dst->startLoop  = 0;
+                            if (dst->endLoop   > trimFrames) dst->endLoop   -= trimFrames;
+                            else                             dst->endLoop    = 0;
+                        }
+                    }
+                }
+#undef MPEG_SILENCE_THRESHOLD
+
                 if (definedBytes < decodingBytes)
                 {
                 XPTR            trimmedData;
@@ -558,10 +606,20 @@ XMPEGEncodeData *   XOpenMPEGEncodeStreamFromMemory(GM_Waveform *pAudio,
                         encode->currentFrameBuffer = 0;
                         pPrivate->compressedAudioPosition = 0;
                         pPrivate->compressedAudioSizeInBytes = encode->maxFrameBuffers * encode->frameBufferSizeInBytes;
-                        pPrivate->pCompressedAudio = XNewPtr(pPrivate->compressedAudioSizeInBytes);
+                        BAE_PRINTF("[MPEG enc] maxFrameBuffers=%u frameBufferSizeInBytes=%u compressedAudioSizeInBytes=%u\n",
+                                   (unsigned)encode->maxFrameBuffers,
+                                   (unsigned)encode->frameBufferSizeInBytes,
+                                   (unsigned)pPrivate->compressedAudioSizeInBytes);
+                        /* Guard: ensure a non-zero, at-least-256KB initial buffer */
+                        if (pPrivate->compressedAudioSizeInBytes < (256u * 1024u))
+                        {
+                            pPrivate->compressedAudioSizeInBytes = 256u * 1024u;
+                        }
+                        pPrivate->pCompressedAudio = XNewPtr((int32_t)pPrivate->compressedAudioSizeInBytes);
                         if (pPrivate->pCompressedAudio == NULL)
                         {
-                            BAE_ASSERT(FALSE);
+                            BAE_PRINTF("[MPEG enc] XNewPtr(%u) failed\n",
+                                       (unsigned)pPrivate->compressedAudioSizeInBytes);
                             theErr = MEMORY_ERR;
                         }
                     }
@@ -629,10 +687,30 @@ OPErr XProcessMPEGEncoder(XMPEGEncodeData *stream)
             }
             if (encodedLength)
             {
-                resultBuffer = (char *)pPrivate->pCompressedAudio + pPrivate->compressedAudioPosition;
-                XBlockMove(encodedBuffer, (XPTR)(resultBuffer), encodedLength);
-                pPrivate->compressedAudioPosition += encodedLength;
-                stream->currentFrameBuffer++;
+                if (pPrivate->compressedAudioPosition + encodedLength > pPrivate->compressedAudioSizeInBytes)
+                {
+                    /* Buffer too small; grow it to fit */
+                    uint32_t newSize = pPrivate->compressedAudioSizeInBytes * 2 + encodedLength;
+                    XPTR newBuf = XNewPtr((int32_t)newSize);
+                    if (newBuf)
+                    {
+                        XBlockMove(pPrivate->pCompressedAudio, newBuf, (int32_t)pPrivate->compressedAudioPosition);
+                        XDisposePtr(pPrivate->pCompressedAudio);
+                        pPrivate->pCompressedAudio = newBuf;
+                        pPrivate->compressedAudioSizeInBytes = newSize;
+                    }
+                    else
+                    {
+                        theErr = MEMORY_ERR;
+                    }
+                }
+                if (theErr == NO_ERR || theErr == STREAM_STOP_PLAY)
+                {
+                    resultBuffer = (char *)pPrivate->pCompressedAudio + pPrivate->compressedAudioPosition;
+                    XBlockMove(encodedBuffer, (XPTR)(resultBuffer), encodedLength);
+                    pPrivate->compressedAudioPosition += encodedLength;
+                    stream->currentFrameBuffer++;
+                }
             }
             stream->pFrameBuffer = resultBuffer;
             stream->frameBufferSize = encodedLength;
@@ -766,12 +844,6 @@ GM_Waveform         hackedWave;
 XMPEGEncodeRate     hackedEncodeRate;
 OPErr               err;
 XMPEGEncodeData*    mpegEncode;
-uint32_t       originalOffset;
-
-    // capture any original silence prior to encoding
-    originalOffset = PV_ScanForAudioData((int16_t *)wave->theWaveform,
-                                        wave->waveSize,
-                                        wave->channels);
 
     hackedWave = *wave;
     XGetClosestMPEGSampleRateAndEncodeRate(wave->sampledRate, encodeRate,
@@ -788,7 +860,11 @@ uint32_t       originalOffset;
     if (mpegEncode)
     {
     OPErr               closeErr;
-        
+    uint32_t            encoderDelay;
+
+        /* Capture encoder delay BEFORE XCloseMPEGEncodeStream frees the stream */
+        encoderDelay = MPG_EncodeGetDelay(MPEG_ENCODE_PRIVATE(mpegEncode)->encoder);
+
         while (TRUE)
         {
             err = XProcessMPEGEncoder(mpegEncode);
@@ -798,7 +874,7 @@ uint32_t       originalOffset;
                 else BAE_ASSERT(FALSE);
                 break;
             }
-            
+
             if (proc && (*proc)(procData,
                                 mpegEncode->currentFrameBuffer,
                                 mpegEncode->maxFrameBuffers))
@@ -807,7 +883,7 @@ uint32_t       originalOffset;
                 break;
             }
         }
-        
+
         if (pFrameBufferBytes)
         {
             *pFrameBufferBytes = mpegEncode->frameBufferSizeInBytes;
@@ -818,26 +894,20 @@ uint32_t       originalOffset;
         }
 
         closeErr = XCloseMPEGEncodeStream(mpegEncode, pCompressedData, pCompressedBytes);
+        mpegEncode = NULL; /* freed by XCloseMPEGEncodeStream */
         if (err == NO_ERR)
         {
             err = closeErr;
         }
         if ((err == NO_ERR) && startFrame)
         {
-            // XProcessMPEGEncoder() seems to prepend some number zero samples to the waveform.
-            // Scan the first frame buffer for the first nonzero sample and
-            // set *startFrame to the offset to it.
-#if 0
-            *startFrame = 0;
-#else
-            *startFrame =
-                PV_ScanForAudioDataFromMPEG(*pCompressedData, *pCompressedBytes,
-                                            pFrameBufferCount, &err);
-            if (*startFrame > originalOffset)
-            {
-                *startFrame -= originalOffset;
-            }
-#endif
+            /* LAME prepends encoderDelay silence samples before the original PCM.
+             * Set startFrame to exactly encoderDelay so the decoder skips only the
+             * encoder-introduced silence.  The original PCM (including any original
+             * leading silence captured by originalOffset) starts at position
+             * encoderDelay in the decoded stream — do NOT subtract originalOffset,
+             * which would leave part of the encoder delay in the playback. */
+            *startFrame = encoderDelay;
         }
 
         if (err != NO_ERR)

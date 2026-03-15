@@ -40,6 +40,7 @@
 /*****************************************************************************/
 
 #include "X_API.h"
+#include "X_Formats.h"
 #include "GenSnd.h"
 #include "GenPriv.h"
 
@@ -413,7 +414,7 @@ long XEncodeVorbisData(void *encoder_handle, float **pcm_data, long samples, XFI
 void XCloseVorbisEncoder(void *encoder_handle)
 {
     XVorbisEncoder *encoder = (XVorbisEncoder*)encoder_handle;
-    
+
     if (encoder != NULL) {
         if (encoder->is_initialized) {
             ogg_stream_clear(&encoder->os);
@@ -424,6 +425,145 @@ void XCloseVorbisEncoder(void *encoder_handle)
         }
         XDisposePtr(encoder);
     }
+}
+
+/* Growing byte buffer used by XEncodeVorbisToMemory */
+typedef struct {
+    unsigned char *data;
+    uint32_t       size;
+    uint32_t       capacity;
+} VorbisMembuf;
+
+static int PV_VorbisMembufAppend(VorbisMembuf *buf, const unsigned char *bytes, long len)
+{
+    uint32_t newSize;
+    if (len <= 0) return 0;
+    newSize = buf->size + (uint32_t)len;
+    if (newSize > buf->capacity) {
+        uint32_t newCap = buf->capacity ? buf->capacity * 2 : 65536;
+        unsigned char *grown;
+        while (newCap < newSize) newCap *= 2;
+        grown = (unsigned char *)XNewPtr((int32_t)newCap);
+        if (!grown) return -1;
+        if (buf->data && buf->size) XBlockMove(buf->data, grown, (int32_t)buf->size);
+        if (buf->data) XDisposePtr((XPTR)buf->data);
+        buf->data = grown;
+        buf->capacity = newCap;
+    }
+    XBlockMove((void *)bytes, buf->data + buf->size, (int32_t)len);
+    buf->size = newSize;
+    return 0;
+}
+
+static void PV_FlushOggPages(XVorbisEncoder *enc, VorbisMembuf *buf, int eos)
+{
+    ogg_page og;
+    while (1) {
+        int result = eos ? ogg_stream_flush(&enc->os, &og)
+                         : ogg_stream_pageout(&enc->os, &og);
+        if (result == 0) break;
+        PV_VorbisMembufAppend(buf, (const unsigned char *)og.header, og.header_len);
+        PV_VorbisMembufAppend(buf, (const unsigned char *)og.body,   og.body_len);
+    }
+}
+
+/* Encode a PCM GM_Waveform to Ogg Vorbis in memory.
+ * src->compressionType must be C_NONE (raw PCM, 8- or 16-bit).
+ * On success allocates *outData and sets *outSize; caller must XDisposePtr it. */
+OPErr XEncodeVorbisToMemory(GM_Waveform const *src, float quality,
+                            XPTR *outData, uint32_t *outSize)
+{
+    XVorbisEncoder *enc;
+    VorbisMembuf    buf;
+    ogg_packet      header, header_comm, header_code;
+    uint32_t        ch, frames, f;
+    float         **pcmBuf;
+    int16_t        *src16;
+    unsigned char  *src8;
+    uint32_t        chunkFrames;
+
+    if (!src || !src->theWaveform || !outData || !outSize)
+        return PARAM_ERR;
+    if (src->compressionType != (XDWORD)C_NONE)
+        return PARAM_ERR;
+    if (src->channels < 1 || src->channels > 2)
+        return PARAM_ERR;
+
+    *outData = NULL;
+    *outSize = 0;
+    XSetMemory(&buf, sizeof(buf), 0);
+
+    enc = (XVorbisEncoder *)XInitVorbisEncoder(
+            (UINT32)(src->sampledRate >> 16),
+            (UINT32)src->channels,
+            quality);
+    if (!enc) return MEMORY_ERR;
+
+    /* Write headers */
+    vorbis_analysis_headerout(&enc->vd, &enc->vc, &header, &header_comm, &header_code);
+    ogg_stream_packetin(&enc->os, &header);
+    ogg_stream_packetin(&enc->os, &header_comm);
+    ogg_stream_packetin(&enc->os, &header_code);
+    PV_FlushOggPages(enc, &buf, 1 /* flush to force header pages */);
+
+    frames = src->waveFrames;
+    ch     = src->channels;
+    src16  = (int16_t *)src->theWaveform;
+    src8   = (unsigned char *)src->theWaveform;
+
+    /* Feed PCM in 4096-frame chunks */
+    chunkFrames = 4096;
+    f = 0;
+    while (f < frames) {
+        uint32_t count = frames - f;
+        if (count > chunkFrames) count = chunkFrames;
+        pcmBuf = vorbis_analysis_buffer(&enc->vd, (int)count);
+        if (src->bitSize == 16) {
+            uint32_t i, c;
+            for (c = 0; c < ch; c++)
+                for (i = 0; i < count; i++)
+                    pcmBuf[c][i] = (float)src16[(f + i) * ch + c] / 32768.0f;
+        } else {
+            uint32_t i, c;
+            for (c = 0; c < ch; c++)
+                for (i = 0; i < count; i++)
+                    pcmBuf[c][i] = ((float)(src8[(f + i) * ch + c]) - 128.0f) / 128.0f;
+        }
+        vorbis_analysis_wrote(&enc->vd, (int)count);
+        /* Drain blocks */
+        while (vorbis_analysis_blockout(&enc->vd, &enc->vb) == 1) {
+            vorbis_analysis(&enc->vb, NULL);
+            vorbis_bitrate_addblock(&enc->vb);
+            while (vorbis_bitrate_flushpacket(&enc->vd, &enc->op)) {
+                ogg_stream_packetin(&enc->os, &enc->op);
+                PV_FlushOggPages(enc, &buf, 0);
+            }
+        }
+        f += count;
+    }
+
+    /* Signal end of stream */
+    vorbis_analysis_wrote(&enc->vd, 0);
+    while (vorbis_analysis_blockout(&enc->vd, &enc->vb) == 1) {
+        vorbis_analysis(&enc->vb, NULL);
+        vorbis_bitrate_addblock(&enc->vb);
+        while (vorbis_bitrate_flushpacket(&enc->vd, &enc->op)) {
+            ogg_stream_packetin(&enc->os, &enc->op);
+            PV_FlushOggPages(enc, &buf, 0);
+        }
+    }
+    /* Flush remaining pages */
+    PV_FlushOggPages(enc, &buf, 1);
+
+    XCloseVorbisEncoder(enc);
+
+    if (!buf.data || buf.size == 0) {
+        if (buf.data) XDisposePtr((XPTR)buf.data);
+        return BAD_FILE;
+    }
+    *outData = (XPTR)buf.data;
+    *outSize = buf.size;
+    return NO_ERR;
 }
 
 #endif // USE_VORBIS_ENCODER

@@ -33,12 +33,15 @@ struct LAMEEncoderStream {
     uint32_t pcmFramesPerCall;
     MPEGFillBufferInternalFn refill;
     void *refillUser;
-    unsigned char bitstream[MAX_BITSTREAM_SIZE];
+    /* 2x size: last frame may produce both encode + flush output */
+    unsigned char bitstream[MAX_BITSTREAM_SIZE * 2];
     uint32_t bitstreamBytes;
     XBOOL lastFrame;
     /* leftover frames when slice doesn't align to MP3 frame size */
     int16_t *leftoverBuf;
     uint32_t leftoverFrames;
+    /* position tracking for no-refill (in-memory) mode */
+    uint32_t framesConsumed;
 };
 
 // Pick the nearest supported TOTAL kbps value LAME understands (common MPEG1/LAME CBR table)
@@ -61,7 +64,7 @@ extern "C" void * MPG_EncodeNewStream(uint32_t encodeRate /* bits/sec total */, 
     if(!s){ BAE_PRINTF("audio: MPG_EncodeNewStream allocation failed\n"); return NULL; }
     s->sampleRate = sampleRate; s->sourceSampleRate = sampleRate; s->channels = channels;
     s->pcmBuffer = (int16_t*)pSampleData16Bits; s->pcmFramesPerCall = frames;
-    s->refill = NULL; s->refillUser = NULL; s->bitstreamBytes = 0; s->lastFrame = FALSE; s->leftoverBuf = NULL; s->leftoverFrames = 0;
+    s->refill = NULL; s->refillUser = NULL; s->bitstreamBytes = 0; s->lastFrame = FALSE; s->leftoverBuf = NULL; s->leftoverFrames = 0; s->framesConsumed = 0;
 
     /* Interpret encodeRate as total bits/sec and map to total kbps for LAME */
     uint32_t providedTotalBits = encodeRate; /* assume caller supplies total bits/sec */
@@ -90,6 +93,10 @@ extern "C" void * MPG_EncodeNewStream(uint32_t encodeRate /* bits/sec total */, 
     /* Default quality / fast mode */
     lame_set_quality(gf, 5);
 
+    /* Disable the Xing/Info VBR header frame — it decodes as silence and
+     * shifts all audio forward by one extra MP3 frame (~1152 samples). */
+    lame_set_bWriteVbrTag(gf, 0);
+
     if(lame_init_params(gf) < 0){ BAE_PRINTF("audio: MPG_EncodeNewStream lame_init_params() failed\n"); lame_close(gf); delete s; return NULL; }
     s->gf = gf;
 
@@ -107,8 +114,23 @@ extern "C" void * MPG_EncodeNewStream(uint32_t encodeRate /* bits/sec total */, 
 extern "C" void MPG_EncodeSetRefillCallback(void *stream, MPEGFillBufferFn cb, void *userRef){
     LAMEEncoderStream *s = (LAMEEncoderStream*)stream; if(!s) return; s->refill = (MPEGFillBufferInternalFn)cb; s->refillUser = userRef; }
 
-extern "C" uint32_t MPG_EncodeMaxFrames(void *stream){ (void)stream; return 0; }
+extern "C" uint32_t MPG_EncodeMaxFrames(void *stream){
+    LAMEEncoderStream *s = (LAMEEncoderStream*)stream;
+    if (!s || s->pcmFramesPerCall == 0) return 16;  /* safe minimum */
+    /* Number of LAME encode calls = ceil(pcmFrames / 1152) + 2 for flush */
+    return (s->pcmFramesPerCall + 1151) / 1152 + 2;
+}
 extern "C" uint32_t MPG_EncodeMaxFrameSize(void *stream){ return MAX_BITSTREAM_SIZE; }
+
+/* Return the encoder-introduced delay in PCM samples (per channel).
+ * Callers should store this as startFrame in the SND header so the decoder
+ * knows how many leading samples to skip. */
+extern "C" uint32_t MPG_EncodeGetDelay(void *stream){
+    LAMEEncoderStream *s = (LAMEEncoderStream*)stream;
+    if(!s || !s->gf) return 576; /* MPEG1 L3 default */
+    int d = lame_get_encoder_delay(s->gf);
+    return (d > 0) ? (uint32_t)d : 576;
+}
 
 /* Process: call refill, assemble PCM frames into a buffer sized for lame_encode_buffer_interleaved,
    invoke LAME and return produced bytes. */
@@ -116,9 +138,9 @@ extern "C" int MPG_EncodeProcess(void *stream, XPTR *pReturnedBuffer, uint32_t *
     if(pLastFrame) *pLastFrame = FALSE;
     if(!stream){ if(pReturnedBuffer) *pReturnedBuffer=NULL; if(pReturnedSize) *pReturnedSize=0; return 0; }
     LAMEEncoderStream *s = (LAMEEncoderStream*)stream;
+    /* Already signaled done on a previous call */
     if(s->lastFrame){ if(pReturnedBuffer) *pReturnedBuffer=NULL; if(pReturnedSize) *pReturnedSize=0; if(pLastFrame) *pLastFrame=TRUE; return 0; }
 
-    /* Build an interleaved PCM buffer sized to at most 1152 frames (MP3 frame size) */
     const uint32_t targetFrames = 1152U;
     int16_t *workBuf = (int16_t*)XNewPtr((uint32_t)(targetFrames * s->channels * sizeof(int16_t)));
     if(!workBuf){ if(pReturnedBuffer) *pReturnedBuffer=NULL; if(pReturnedSize) *pReturnedSize=0; return 0; }
@@ -127,61 +149,97 @@ extern "C" int MPG_EncodeProcess(void *stream, XPTR *pReturnedBuffer, uint32_t *
     /* consume leftovers first */
     if(s->leftoverFrames){
         uint32_t use = s->leftoverFrames; if(use > targetFrames) use = targetFrames;
-        XBlockMove((XPTR)s->leftoverBuf, workBuf, use * s->channels * 2);
+        XBlockMove((XPTR)s->leftoverBuf, (XPTR)workBuf, use * s->channels * 2);
         filled += use;
-        if(use < s->leftoverFrames){ uint32_t rem = s->leftoverFrames - use; XBlockMove((XPTR)(s->leftoverBuf + use * s->channels), s->leftoverBuf, rem * s->channels * 2); s->leftoverFrames = rem; } else s->leftoverFrames = 0;
-    }
-
-    while(filled < targetFrames && !s->lastFrame){
-        if(s->refill){
-            BAE_PRINTF("audio: MPG_EncodeProcess calling refill (pcmFramesPerCall=%u)\n", (unsigned)s->pcmFramesPerCall);
-            XBOOL ok = s->refill(s->pcmBuffer, s->refillUser);
-            BAE_PRINTF("audio: MPG_EncodeProcess refill returned %d\n", (int)ok);
-            if(!ok){ s->lastFrame = TRUE; break; }
+        if(use < s->leftoverFrames){
+            uint32_t rem = s->leftoverFrames - use;
+            XBlockMove((XPTR)(s->leftoverBuf + use * s->channels), (XPTR)s->leftoverBuf, rem * s->channels * 2);
+            s->leftoverFrames = rem;
+        } else {
+            s->leftoverFrames = 0;
         }
-        uint32_t sliceFrames = s->pcmFramesPerCall;
+    }
+
+    if(s->refill == NULL){
+        /* In-memory mode: advance through pcmBuffer using framesConsumed */
+        uint32_t remaining = (s->framesConsumed < s->pcmFramesPerCall)
+                             ? (s->pcmFramesPerCall - s->framesConsumed) : 0;
         uint32_t need = targetFrames - filled;
-        if(sliceFrames <= need){ XBlockMove((XPTR)s->pcmBuffer, workBuf + filled * s->channels, sliceFrames * s->channels * 2); filled += sliceFrames; }
-        else { /* partial use and stash remainder */ XBlockMove((XPTR)s->pcmBuffer, workBuf + filled * s->channels, need * s->channels * 2); filled += need; if(s->leftoverBuf){ uint32_t rem = sliceFrames - need; XBlockMove((XPTR)(s->pcmBuffer + need * s->channels), s->leftoverBuf, rem * s->channels * 2); s->leftoverFrames = rem; } }
-    }
-
-    /* pad if short final frame */
-    if(filled < targetFrames) { uint32_t pad = targetFrames - filled; XSetMemory((unsigned char*)(workBuf + filled * s->channels), pad * s->channels * 2, 0); }
-
-    int bytesOut = 0;
-    if(s->channels == 2){
-        BAE_PRINTF("audio: MPG_EncodeProcess calling lame_encode_buffer_interleaved filled=%u\n", filled);
-        bytesOut = lame_encode_buffer_interleaved(s->gf, workBuf, (int)targetFrames, s->bitstream, MAX_BITSTREAM_SIZE);
+        uint32_t toRead = (remaining < need) ? remaining : need;
+        if(toRead > 0){
+            XBlockMove((XPTR)(s->pcmBuffer + s->framesConsumed * s->channels),
+                       (XPTR)(workBuf + filled * s->channels),
+                       toRead * s->channels * sizeof(int16_t));
+            filled += toRead;
+            s->framesConsumed += toRead;
+        }
+        if(s->framesConsumed >= s->pcmFramesPerCall){
+            s->lastFrame = TRUE;
+        }
     } else {
-        /* mono: pass left channel only expanding to expected API */
-        BAE_PRINTF("audio: MPG_EncodeProcess calling lame_encode_buffer mono filled=%u\n", filled);
-        bytesOut = lame_encode_buffer(s->gf, workBuf, NULL, (int)targetFrames, s->bitstream, MAX_BITSTREAM_SIZE);
+        /* Streaming/callback mode: call refill to get new PCM data each time */
+        while(filled < targetFrames && !s->lastFrame){
+            XBOOL ok = s->refill(s->pcmBuffer, s->refillUser);
+            if(!ok){ s->lastFrame = TRUE; break; }
+            uint32_t sliceFrames = s->pcmFramesPerCall;
+            uint32_t need = targetFrames - filled;
+            if(sliceFrames <= need){
+                XBlockMove((XPTR)s->pcmBuffer, (XPTR)(workBuf + filled * s->channels), sliceFrames * s->channels * 2);
+                filled += sliceFrames;
+            } else {
+                XBlockMove((XPTR)s->pcmBuffer, (XPTR)(workBuf + filled * s->channels), need * s->channels * 2);
+                filled += need;
+                if(s->leftoverBuf){
+                    uint32_t rem = sliceFrames - need;
+                    XBlockMove((XPTR)(s->pcmBuffer + need * s->channels), (XPTR)s->leftoverBuf, rem * s->channels * 2);
+                    s->leftoverFrames = rem;
+                }
+            }
+        }
     }
 
-    if (s->lastFrame) {
-        /* caller signaled no more refill data; flush final frames */
-        BAE_PRINTF("audio: MPG_EncodeProcess lastFrame set, calling lame_encode_flush\n");
-        bytesOut = lame_encode_flush(s->gf, s->bitstream, MAX_BITSTREAM_SIZE);
-        s->bitstreamBytes = (bytesOut > 0)? (uint32_t)bytesOut : 0;
-        BAE_PRINTF("audio: MPG_EncodeProcess flush produced bytes=%u lastFrame=1 leftoverFrames=%u\n", (unsigned)s->bitstreamBytes, (unsigned)s->leftoverFrames);
-    } else if (bytesOut < 0) {
-        /* LAME returned an error; flush and mark last frame */
-        BAE_PRINTF("audio: MPG_EncodeProcess lame error %d, flushing\n", bytesOut);
-        bytesOut = lame_encode_flush(s->gf, s->bitstream, MAX_BITSTREAM_SIZE);
-        s->bitstreamBytes = (bytesOut > 0)? (uint32_t)bytesOut : 0;
-        s->lastFrame = TRUE;
-        BAE_PRINTF("audio: MPG_EncodeProcess error flush produced bytes=%u lastFrame=1\n", (unsigned)s->bitstreamBytes);
-    } else {
-        /* Normal case: bytesOut may be zero (no output yet) or positive */
-        s->bitstreamBytes = (bytesOut > 0)? (uint32_t)bytesOut : 0;
-        BAE_PRINTF("audio: MPG_EncodeProcess produced bytes=%u lastFrame=0 leftoverFrames=%u\n", (unsigned)s->bitstreamBytes, (unsigned)s->leftoverFrames);
+    /* zero-pad short final frame to complete the MP3 frame */
+    if(filled < targetFrames){
+        uint32_t pad = targetFrames - filled;
+        XSetMemory((unsigned char*)(workBuf + filled * s->channels), pad * s->channels * 2, 0);
     }
-    if(pReturnedBuffer) *pReturnedBuffer = (s->bitstreamBytes? (XPTR)s->bitstream: NULL);
-    if(pReturnedSize) *pReturnedSize = s->bitstreamBytes;
-    if(pLastFrame) *pLastFrame = s->lastFrame;
+
+    /* Encode this chunk; bitstream is 2x MAX_BITSTREAM_SIZE so encode+flush fit */
+    uint32_t encBytes = 0;
+    if(filled > 0){
+        int ret;
+        if(s->channels == 2){
+            ret = lame_encode_buffer_interleaved(s->gf, workBuf, (int)targetFrames,
+                                                 s->bitstream, MAX_BITSTREAM_SIZE);
+        } else {
+            ret = lame_encode_buffer(s->gf, workBuf, NULL, (int)targetFrames,
+                                     s->bitstream, MAX_BITSTREAM_SIZE);
+        }
+        encBytes = (ret > 0) ? (uint32_t)ret : 0;
+        if(ret < 0){
+            /* LAME error; mark as done */
+            BAE_PRINTF("audio: MPG_EncodeProcess lame encode error %d\n", ret);
+            s->lastFrame = TRUE;
+        }
+    }
+
+    if(s->lastFrame){
+        /* Flush LAME's internal delay buffers; append after any encode bytes */
+        int flushRet = lame_encode_flush(s->gf, s->bitstream + encBytes,
+                                          MAX_BITSTREAM_SIZE);
+        if(flushRet > 0) encBytes += (uint32_t)flushRet;
+        BAE_PRINTF("audio: MPG_EncodeProcess last frame: encBytes=%u total=%u framesConsumed=%u\n",
+                   (unsigned)(encBytes - (flushRet > 0 ? (uint32_t)flushRet : 0)),
+                   (unsigned)encBytes, (unsigned)s->framesConsumed);
+    }
+
+    s->bitstreamBytes = encBytes;
+    if(pReturnedBuffer) *pReturnedBuffer = (encBytes ? (XPTR)s->bitstream : NULL);
+    if(pReturnedSize)   *pReturnedSize   = encBytes;
+    if(pLastFrame)      *pLastFrame       = s->lastFrame;
 
     XDisposePtr((XPTR)workBuf);
-    return (int) (s->pcmFramesPerCall); /* return consumed input frames (approx) */
+    return (int)s->framesConsumed;
 }
 
 extern "C" void MPG_EncodeFreeStream(void *stream){

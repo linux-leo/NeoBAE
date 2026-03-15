@@ -193,10 +193,21 @@ public:
         m_loopInfoLabel = new wxStaticText(this, wxID_ANY, "");
         m_playButton = new wxButton(this, wxID_ANY, "Play");
         m_stopButton = new wxButton(this, wxID_ANY, "Stop");
-        m_replaceButton = new wxButton(this, wxID_ANY, "Replace Sample...");
-        m_exportButton = new wxButton(this, wxID_ANY, "Save Sample...");
+        m_replaceButton = new wxButton(this, wxID_ANY, "Replace");
+        m_exportButton = new wxButton(this, wxID_ANY, "Save As...");
         m_rangeLabel = new wxStaticText(this, wxID_ANY, "");
         m_waveformPanel = new WaveformPanel(this);
+        m_compressionChoice = new wxChoice(this, wxID_ANY);
+        m_compressionChoice->Append("Don't Change");
+        m_compressionChoice->Append("RAW PCM");
+        m_compressionChoice->Append("ADPCM");
+        m_compressionChoice->Append("MP3 32k");
+        m_compressionChoice->Append("MP3 64k");
+        m_compressionChoice->Append("MP3 96k");
+        m_compressionChoice->Append("VORBIS 32k");
+        m_compressionChoice->Append("VORBIS 64k");
+        m_compressionChoice->Append("VORBIS 96k");
+        m_compressionChoice->Append("FLAC (level 9)");
 
         for (size_t i = 0; i < m_samples.size(); ++i) {
             m_splitChoice->Append(BuildSplitLabel(static_cast<int>(i)));
@@ -239,6 +250,12 @@ public:
         rootSizer->Add(instrumentSizer, 0, wxEXPAND | wxALL, 10);
         rootSizer->Add(grid, 0, wxEXPAND | wxALL, 10);
         rootSizer->Add(loopSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        {
+            wxBoxSizer *compressionSizer = new wxBoxSizer(wxHORIZONTAL);
+            compressionSizer->Add(new wxStaticText(this, wxID_ANY, "Compression"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+            compressionSizer->Add(m_compressionChoice, 0);
+            rootSizer->Add(compressionSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        }
         rootSizer->Add(triggerSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
         rootSizer->Add(new wxStaticText(this, wxID_ANY, "Waveform"), 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
         rootSizer->Add(m_waveformPanel, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
@@ -255,6 +272,7 @@ public:
         Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &) { OnLoopEnableChanged(); }, m_loopEnableCheck->GetId());
         Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { OnLoopPointChanged(); }, m_loopStartSpin->GetId());
         Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { OnLoopPointChanged(); }, m_loopEndSpin->GetId());
+        Bind(wxEVT_CHOICE, [this](wxCommandEvent &) { OnCompressionChanged(); }, m_compressionChoice->GetId());
         m_splitChoice->SetSelection(0);
         LoadLocalSample(0);
     }
@@ -309,6 +327,39 @@ private:
     wxButton *m_exportButton;
     wxStaticText *m_rangeLabel;
     WaveformPanel *m_waveformPanel;
+    wxChoice *m_compressionChoice;
+
+    static int CompressionTypeToChoiceIndex(BAERmfEditorCompressionType t) {
+        switch (t) {
+            case BAE_EDITOR_COMPRESSION_DONT_CHANGE:  return 0;
+            case BAE_EDITOR_COMPRESSION_PCM:          return 1;
+            case BAE_EDITOR_COMPRESSION_ADPCM:        return 2;
+            case BAE_EDITOR_COMPRESSION_MP3_32K:      return 3;
+            case BAE_EDITOR_COMPRESSION_MP3_64K:      return 4;
+            case BAE_EDITOR_COMPRESSION_MP3_96K:      return 5;
+            case BAE_EDITOR_COMPRESSION_VORBIS_32K:   return 6;
+            case BAE_EDITOR_COMPRESSION_VORBIS_64K:   return 7;
+            case BAE_EDITOR_COMPRESSION_VORBIS_96K:   return 8;
+            case BAE_EDITOR_COMPRESSION_FLAC:         return 9;
+            default:                                   return 1;
+        }
+    }
+
+    static BAERmfEditorCompressionType ChoiceIndexToCompressionType(int idx) {
+        switch (idx) {
+            case 0:  return BAE_EDITOR_COMPRESSION_DONT_CHANGE;
+            case 1:  return BAE_EDITOR_COMPRESSION_PCM;
+            case 2:  return BAE_EDITOR_COMPRESSION_ADPCM;
+            case 3:  return BAE_EDITOR_COMPRESSION_MP3_32K;
+            case 4:  return BAE_EDITOR_COMPRESSION_MP3_64K;
+            case 5:  return BAE_EDITOR_COMPRESSION_MP3_96K;
+            case 6:  return BAE_EDITOR_COMPRESSION_VORBIS_32K;
+            case 7:  return BAE_EDITOR_COMPRESSION_VORBIS_64K;
+            case 8:  return BAE_EDITOR_COMPRESSION_VORBIS_96K;
+            case 9:  return BAE_EDITOR_COMPRESSION_FLAC;
+            default: return BAE_EDITOR_COMPRESSION_PCM;
+        }
+    }
 
     void BuildSampleGroup(uint32_t primarySampleIndex) {
         uint32_t sampleCount;
@@ -334,6 +385,8 @@ private:
                 edited.lowKey = info.lowKey;
                 edited.highKey = info.highKey;
                 edited.sampleInfo = info.sampleInfo;
+                edited.compressionType = info.compressionType;
+                edited.hasOriginalData = (info.hasOriginalData == TRUE);
                 m_sampleIndices.push_back(i);
                 m_samples.push_back(edited);
             }
@@ -355,6 +408,15 @@ private:
         sample.lowKey = static_cast<unsigned char>(m_lowSpin->GetValue());
         sample.highKey = static_cast<unsigned char>(m_highSpin->GetValue());
         sample.program = static_cast<unsigned char>(m_programSpin->GetValue());
+        {
+            int idx = m_compressionChoice->GetSelection();
+            BAERmfEditorCompressionType chosen = ChoiceIndexToCompressionType(idx);
+            /* Guard: if user somehow has "Don't Change" selected without original data, fall back. */
+            if (chosen == BAE_EDITOR_COMPRESSION_DONT_CHANGE && !sample.hasOriginalData) {
+                chosen = BAE_EDITOR_COMPRESSION_PCM;
+            }
+            sample.compressionType = chosen;
+        }
         m_rangeLabel->SetLabel(wxString::Format("%d-%d", static_cast<int>(sample.lowKey), static_cast<int>(sample.highKey)));
         if (m_splitChoice && m_currentLocalIndex < static_cast<int>(m_splitChoice->GetCount())) {
             m_splitChoice->SetString(m_currentLocalIndex, BuildSplitLabel(m_currentLocalIndex));
@@ -374,6 +436,21 @@ private:
         m_highSpin->SetValue(sample.highKey);
         m_programSpin->SetValue(sample.program);
         m_triggerSpin->SetValue(sample.rootKey);
+        {
+            /* "Don't Change" (index 0) is only valid when original data is present. */
+            bool canKeep = sample.hasOriginalData;
+            m_compressionChoice->Enable(true);
+            /* wxChoice doesn't support per-item enable; keep "Don't Change" selectable
+             * only when canKeep, and if !canKeep and it was selected, bump to PCM. */
+            BAERmfEditorCompressionType effectiveComp = sample.compressionType;
+            if (!canKeep && effectiveComp == BAE_EDITOR_COMPRESSION_DONT_CHANGE) {
+                effectiveComp = BAE_EDITOR_COMPRESSION_PCM;
+            }
+            m_compressionChoice->SetSelection(CompressionTypeToChoiceIndex(effectiveComp));
+            /* Disable the "Don't Change" item text visually via choice label when unavailable.
+             * We can't grey individual items in wxChoice portably, so rename it. */
+            m_compressionChoice->SetString(0, canKeep ? "Don't Change" : "Don't Change (N/A)");
+        }
         {
             bool loopEnabled = (sample.sampleInfo.startLoop < sample.sampleInfo.endLoop);
             int maxFrame = static_cast<int>(sample.sampleInfo.waveFrames > 0 ? sample.sampleInfo.waveFrames : INT_MAX);
@@ -431,6 +508,21 @@ private:
     void OnLoopPointChanged() {
         if (m_loopEnableCheck->GetValue()) {
             ApplyLoopFromUI();
+        }
+    }
+
+    void OnCompressionChanged() {
+        if (m_currentLocalIndex < 0 || m_currentLocalIndex >= static_cast<int>(m_samples.size())) {
+            return;
+        }
+        EditedSample const &sample = m_samples[static_cast<size_t>(m_currentLocalIndex)];
+        int idx = m_compressionChoice->GetSelection();
+        if (idx == 0 && !sample.hasOriginalData) {
+            /* "Don't Change" not allowed; revert to PCM */
+            m_compressionChoice->SetSelection(CompressionTypeToChoiceIndex(BAE_EDITOR_COMPRESSION_PCM));
+            wxMessageBox("\"Don't Change\" is not available for new or replaced samples. "
+                         "Falling back to RAW PCM.",
+                         "Compression", wxOK | wxICON_INFORMATION, this);
         }
     }
 
@@ -551,6 +643,11 @@ private:
                 EditedSample &sample = m_samples[static_cast<size_t>(m_currentLocalIndex)];
                 sample.sourcePath = info.sourcePath ? wxString::FromUTF8(info.sourcePath) : wxString();
                 sample.sampleInfo = info.sampleInfo;
+                sample.compressionType = BAE_EDITOR_COMPRESSION_PCM;
+                sample.hasOriginalData = false;
+                /* Update the compression UI: "Don't Change" now unavailable */
+                m_compressionChoice->SetString(0, "Don't Change (N/A)");
+                m_compressionChoice->SetSelection(CompressionTypeToChoiceIndex(BAE_EDITOR_COMPRESSION_PCM));
             }
         }
         RefreshWaveform();

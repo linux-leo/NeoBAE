@@ -31,7 +31,7 @@ extern "C" {
 
 namespace {
 
-constexpr char const *kVersionString = "0.02 alpha";
+constexpr char const *kVersionString = "0.03 alpha";
 
 enum {
     ID_TrackAdd = wxID_HIGHEST + 200,
@@ -757,9 +757,36 @@ private:
         }
 
         stopResult = BAESound_Stop(m_previewSound, FALSE);
-        fprintf(stderr, "[nbstudio] Preview sample %u stop result=%d\n", static_cast<unsigned>(sampleIndex), static_cast<int>(stopResult));
 
         loadResult = BAE_GENERAL_ERR;
+
+        /* BAESound_LoadCustomSample expects signed 8-bit PCM input; it internally
+           applies XPhase (subtract 128) to convert to the engine's unsigned format.
+           However, waveform->theWaveform already holds unsigned 8-bit data (engine
+           internal format, 0x80 = silence) from the RMF SND resource.  Passing it
+           directly causes a double XPhase that shifts every sample by 128, producing
+           severe DC-offset distortion ("hot/squelchy" audio).
+           Pre-apply the same subtraction so the two applications cancel out. */
+        auto loadCustomSampleFromEngineData = [&](void const *data, uint32_t frames,
+                                                  uint16_t bits, uint16_t chans,
+                                                  BAE_UNSIGNED_FIXED rate,
+                                                  uint32_t loopS, uint32_t loopE) -> BAEResult {
+            if (bits == 8) {
+                /* Modify in-place: XPhase (subtract 128) converts unsigned engine format
+                   to the signed format LoadCustomSample expects.  LoadCustomSample applies
+                   XPhase again internally, and two subtractions of 128 mod 256 = identity,
+                   so the document waveform is restored after the call.  No heap allocation
+                   needed.  Safe because BAESound_Stop above released the audio thread's
+                   access to this buffer. */
+                uint8_t *data8 = const_cast<uint8_t *>(static_cast<uint8_t const *>(data));
+                uint32_t dataSize = frames * static_cast<uint32_t>(chans);
+                for (uint32_t i = 0; i < dataSize; ++i) data8[i] -= 128u;
+                BAEResult r = BAESound_LoadCustomSample(m_previewSound, data8, frames, bits, chans, rate, loopS, loopE);
+                for (uint32_t i = 0; i < dataSize; ++i) data8[i] -= 128u;  /* restore */
+                return r;
+            }
+            return BAESound_LoadCustomSample(m_previewSound, const_cast<void *>(data), frames, bits, chans, rate, loopS, loopE);
+        };
 
         /* When the caller provides live loop overrides, always use raw PCM so
            loop settings from the UI are honoured instead of stale file data. */
@@ -800,14 +827,10 @@ private:
                     loopStart = 0;
                     loopEnd   = 0;
                 }
-                loadResult = BAESound_LoadCustomSample(m_previewSound,
-                                                       const_cast<void *>(waveData),
-                                                       frameCount,
-                                                       bitSize,
-                                                       channels,
-                                                       sampleRate,
-                                                       loopStart,
-                                                       loopEnd);
+                loadResult = loadCustomSampleFromEngineData(waveData, frameCount,
+                                                           bitSize, channels,
+                                                           sampleRate,
+                                                           loopStart, loopEnd);
                 if (loadResult != BAE_NO_ERROR) {
                     loadResult = BAE_GENERAL_ERR; /* fall through to file paths */
                 }
@@ -827,12 +850,6 @@ private:
                 loadResult = BAESound_LoadFileSample(m_previewSound,
                                                      const_cast<char *>(sampleInfo.sourcePath),
                                                      sourceType);
-                fprintf(stderr,
-                        "[nbstudio] Preview sample %u source='%s' type=%d load result=%d\n",
-                        static_cast<unsigned>(sampleIndex),
-                        sampleInfo.sourcePath,
-                        static_cast<int>(sourceType),
-                        static_cast<int>(loadResult));
             } else {
                 fprintf(stderr,
                         "[nbstudio] Preview sample %u source='%s' unsupported type=%d\n",
@@ -852,11 +869,6 @@ private:
                 loadResult = BAESound_LoadFileSample(m_previewSound,
                                                      const_cast<char *>(utf8Path.data()),
                                                      BAE_WAVE_TYPE);
-                fprintf(stderr,
-                        "[nbstudio] Preview sample %u temp='%s' load result=%d\n",
-                        static_cast<unsigned>(sampleIndex),
-                        utf8Path.data(),
-                        static_cast<int>(loadResult));
             }
         }
 
@@ -917,14 +929,10 @@ private:
                 loopStart = 0;
                 loopEnd = 0;
             }
-            loadResult = BAESound_LoadCustomSample(m_previewSound,
-                                                   const_cast<void *>(waveData),
-                                                   frameCount,
-                                                   bitSize,
-                                                   channels,
-                                                   sampleRate,
-                                                   loopStart,
-                                                   loopEnd);
+            loadResult = loadCustomSampleFromEngineData(waveData, frameCount,
+                                                        bitSize, channels,
+                                                        sampleRate,
+                                                        loopStart, loopEnd);
             if (loadResult != BAE_NO_ERROR) {
                 fprintf(stderr,
                         "[nbstudio] Preview sample %u LoadCustomSample failed result=%d\n",
@@ -978,14 +986,6 @@ private:
             return false;
         }
         startResult = BAESound_Start(m_previewSound, 0, volume, 0);
-        fprintf(stderr,
-                "[nbstudio] Preview sample %u Start result=%d volume=%lu rate=%lu midiKey=%d root=%d\n",
-                static_cast<unsigned>(sampleIndex),
-                static_cast<int>(startResult),
-                static_cast<unsigned long>(volume),
-                static_cast<unsigned long>(rate),
-                midiKey,
-                previewRoot);
         if (startResult != BAE_NO_ERROR) {
             return false;
         }
@@ -2411,6 +2411,8 @@ private:
                 info.lowKey = editedSamples[i].lowKey;
                 info.highKey = editedSamples[i].highKey;
                 info.sampleInfo = editedSamples[i].sampleInfo;
+                info.compressionType = editedSamples[i].compressionType;
+                info.hasOriginalData = editedSamples[i].hasOriginalData ? TRUE : FALSE;
                 if (BAERmfEditorDocument_SetSampleInfo(m_document, indices[i], &info) != BAE_NO_ERROR) {
                     ok = false;
                     break;

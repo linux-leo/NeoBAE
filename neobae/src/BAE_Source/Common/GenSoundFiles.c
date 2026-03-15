@@ -5528,10 +5528,135 @@ OPErr PV_WriteFromMemoryFLACFile(XFILENAME *file, GM_Waveform const* pAudioData,
     // Finish encoding
     FLAC__stream_encoder_finish(encoder);
     FLAC__stream_encoder_delete(encoder);
-    
+
     return err;
 }
+
 #endif // USE_FLAC_ENCODER != FALSE
+
+#if USE_FLAC_ENCODER != FALSE
+
+/* Growing buffer for FLAC memory encoding */
+typedef struct {
+    unsigned char *data;
+    uint32_t       size;
+    uint32_t       capacity;
+} FLACMembuf;
+
+static FLAC__StreamEncoderWriteStatus PV_FLACMemWrite(
+        const FLAC__StreamEncoder *encoder,
+        const FLAC__byte           buffer[],
+        size_t                     bytes,
+        uint32_t                   samples,
+        uint32_t                   current_frame,
+        void                      *client_data)
+{
+    FLACMembuf *buf = (FLACMembuf *)client_data;
+    uint32_t newSize;
+    (void)encoder; (void)samples; (void)current_frame;
+
+    if (bytes == 0) return FLAC__STREAM_ENCODER_WRITE_STATUS_OK;
+    newSize = buf->size + (uint32_t)bytes;
+    if (newSize > buf->capacity) {
+        uint32_t newCap = buf->capacity ? buf->capacity * 2 : 65536;
+        unsigned char *grown;
+        while (newCap < newSize) newCap *= 2;
+        grown = (unsigned char *)XNewPtr((int32_t)newCap);
+        if (!grown) return FLAC__STREAM_ENCODER_WRITE_STATUS_FATAL_ERROR;
+        if (buf->data && buf->size) XBlockMove(buf->data, grown, (int32_t)buf->size);
+        if (buf->data) XDisposePtr((XPTR)buf->data);
+        buf->data = grown;
+        buf->capacity = newCap;
+    }
+    XBlockMove((void *)buffer, buf->data + buf->size, (int32_t)bytes);
+    buf->size = newSize;
+    return FLAC__STREAM_ENCODER_WRITE_STATUS_OK;
+}
+
+/* Encode a PCM GM_Waveform to a FLAC bitstream in memory.
+ * compressionLevel: 0 (fast) to 8 (maximum); use 8 for best ratio.
+ * On success allocates *outData (caller must XDisposePtr) and sets *outSize. */
+OPErr XEncodeFLACToMemory(GM_Waveform const *src, int compressionLevel,
+                          XPTR *outData, uint32_t *outSize)
+{
+    FLAC__StreamEncoder           *encoder;
+    FLACMembuf                     buf;
+    FLAC__StreamEncoderInitStatus  initStatus;
+    FLAC__int32                   *samples;
+    uint32_t                       total, i;
+    XBOOL                          ok;
+
+    if (!src || !src->theWaveform || !outData || !outSize)
+        return PARAM_ERR;
+    if (src->compressionType != (XDWORD)C_NONE)
+        return PARAM_ERR;
+    if (src->bitSize != 8 && src->bitSize != 16)
+        return PARAM_ERR;
+
+    *outData = NULL;
+    *outSize = 0;
+    XSetMemory(&buf, sizeof(buf), 0);
+
+    encoder = FLAC__stream_encoder_new();
+    if (!encoder) return MEMORY_ERR;
+
+    if (compressionLevel < 0) compressionLevel = 0;
+    if (compressionLevel > 8) compressionLevel = 8;
+
+    ok  = FLAC__stream_encoder_set_compression_level(encoder, (unsigned)compressionLevel);
+    ok &= FLAC__stream_encoder_set_channels(encoder, src->channels);
+    ok &= FLAC__stream_encoder_set_bits_per_sample(encoder, src->bitSize);
+    ok &= FLAC__stream_encoder_set_sample_rate(encoder, XFIXED_TO_UNSIGNED_LONG(src->sampledRate));
+    ok &= FLAC__stream_encoder_set_total_samples_estimate(encoder, src->waveFrames);
+    if (!ok) {
+        FLAC__stream_encoder_delete(encoder);
+        return PARAM_ERR;
+    }
+
+    initStatus = FLAC__stream_encoder_init_stream(encoder,
+                                                  PV_FLACMemWrite,
+                                                  NULL, NULL, NULL,
+                                                  &buf);
+    if (initStatus != FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
+        FLAC__stream_encoder_delete(encoder);
+        return BAD_FILE;
+    }
+
+    total = src->waveFrames * src->channels;
+    samples = (FLAC__int32 *)XNewPtr((int32_t)(total * sizeof(FLAC__int32)));
+    if (!samples) {
+        FLAC__stream_encoder_finish(encoder);
+        FLAC__stream_encoder_delete(encoder);
+        if (buf.data) XDisposePtr((XPTR)buf.data);
+        return MEMORY_ERR;
+    }
+
+    if (src->bitSize == 8) {
+        unsigned char *p = (unsigned char *)src->theWaveform;
+        for (i = 0; i < total; i++)
+            samples[i] = (FLAC__int32)(p[i] - 128);
+    } else {
+        int16_t *p = (int16_t *)src->theWaveform;
+        for (i = 0; i < total; i++)
+            samples[i] = (FLAC__int32)p[i];
+    }
+
+    ok = FLAC__stream_encoder_process_interleaved(encoder, samples, src->waveFrames);
+    XDisposePtr((XPTR)samples);
+
+    FLAC__stream_encoder_finish(encoder);
+    FLAC__stream_encoder_delete(encoder);
+
+    if (!ok || !buf.data || buf.size == 0) {
+        if (buf.data) XDisposePtr((XPTR)buf.data);
+        return BAD_FILE;
+    }
+    *outData = (XPTR)buf.data;
+    *outSize = buf.size;
+    return NO_ERR;
+}
+
+#endif // USE_FLAC_ENCODER != FALSE (second block)
 
 
 // write memory to a file

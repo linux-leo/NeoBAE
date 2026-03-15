@@ -880,12 +880,15 @@ typedef enum SndCompressionType
 
 } SndCompressionType;
 
-// This is a modifier sub type for encoding only. 
+// This is a modifier sub type for encoding only.
 typedef enum SndCompressionSubType
 {
     CS_DEFAULT          = FOUR_CHAR('d','e','f','t'),   // 'deft'   default state
     CS_MPEG1            = FOUR_CHAR('m','1','0','0'),   // MPEG 1.0 compatible streams
-    CS_MPEG2            = FOUR_CHAR('m','2','0','0')    // MPEG 2.0 compatible streams
+    CS_MPEG2            = FOUR_CHAR('m','2','0','0'),   // MPEG 2.0 compatible streams
+    CS_VORBIS_32K       = FOUR_CHAR('v','0','3','2'),   // Ogg Vorbis target ~32 kbps
+    CS_VORBIS_64K       = FOUR_CHAR('v','0','6','4'),   // Ogg Vorbis target ~64 kbps
+    CS_VORBIS_96K       = FOUR_CHAR('v','0','9','6')    // Ogg Vorbis target ~96 kbps
 } SndCompressionSubType;
 
 enum
@@ -1207,8 +1210,24 @@ OPErr XExpandMPEG(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst);
 OPErr XExpandFLAC(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst);
 #endif
 
+#if USE_FLAC_ENCODER != FALSE
+/* Encode PCM waveform to a FLAC bitstream in memory.
+ * compressionLevel 0-8 (standard); use 8 for maximum compression.
+ * On success, allocates *outData (caller must XDisposePtr) and sets *outSize. */
+OPErr XEncodeFLACToMemory(GM_Waveform const *src, int compressionLevel,
+                          XPTR *outData, uint32_t *outSize);
+#endif
+
 #if USE_VORBIS_DECODER != 0
 OPErr XExpandVorbis(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst);
+#endif
+
+#if USE_VORBIS_ENCODER == TRUE
+/* Encode a PCM GM_Waveform to an Ogg Vorbis bitstream in memory.
+ * quality: VBR quality (-0.1 to 1.0; approx -0.1=32k, 0.0=64k, 0.3=96k).
+ * On success allocates *outData (caller must XDisposePtr) and sets *outSize. */
+OPErr XEncodeVorbisToMemory(GM_Waveform const *src, float quality,
+                            XPTR *outData, uint32_t *outSize);
 #endif
 
 #if USE_OPUS_DECODER != 0
