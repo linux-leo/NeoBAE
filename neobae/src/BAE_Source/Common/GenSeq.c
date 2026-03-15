@@ -2421,6 +2421,18 @@ void PV_ProcessController(GM_Song *pSong, INT16 MIDIChannel, INT16 currentTrack,
             
         case B_BANK_LSB: // bank select LSB. This is GS.
 #if DISABLE_NOKIA_PATCH != TRUE
+            if (pSong->channelRawBank[MIDIChannel] == 120) {
+                switch (value) {
+                    case 5:
+                        pSong->channelBank[MIDIChannel] = 1;
+                        pSong->channelRawBank[MIDIChannel] = 0;
+                        BAE_PRINTF("Nokia Patch Applied: Changing Bank %i to 1 on channel %d\n", pSong->channelBank[MIDIChannel], MIDIChannel);
+                        break;
+                    default:
+                        break;
+                }
+                pSong->channelLSB[MIDIChannel] = (SBYTE)value;
+            }
             if (pSong->channelRawBank[MIDIChannel] == 121) {
                 switch (value) {
                     case 5:
