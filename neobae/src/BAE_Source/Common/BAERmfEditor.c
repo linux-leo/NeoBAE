@@ -32,6 +32,149 @@ static void PV_CopyStringBounded(char *dst, uint32_t dstSize, char const *src)
     dst[i] = 0;
 }
 
+static XBOOL PV_PathHasExtensionIgnoreCase(char const *filePath, char const *ext)
+{
+    char const *dot;
+    uint32_t i;
+
+    if (!filePath || !ext)
+    {
+        return FALSE;
+    }
+    dot = strrchr(filePath, '.');
+    if (!dot)
+    {
+        return FALSE;
+    }
+
+    i = 0;
+    while (dot[i] != 0 && ext[i] != 0)
+    {
+        char a = dot[i];
+        char b = ext[i];
+
+        if (a >= 'A' && a <= 'Z')
+        {
+            a = (char)(a + ('a' - 'A'));
+        }
+        if (b >= 'A' && b <= 'Z')
+        {
+            b = (char)(b + ('a' - 'A'));
+        }
+        if (a != b)
+        {
+            return FALSE;
+        }
+        i++;
+    }
+    return (dot[i] == 0 && ext[i] == 0) ? TRUE : FALSE;
+}
+
+static BAEFileType PV_DetectOggCodecBySignature(BAEPathName filePath)
+{
+    XFILENAME fileName;
+    XFILE file;
+    int32_t fileSize;
+    int32_t probeSize;
+    unsigned char probe[4096];
+    int32_t i;
+
+    if (!filePath)
+    {
+        return BAE_INVALID_TYPE;
+    }
+
+    XConvertPathToXFILENAME(filePath, &fileName);
+    file = XFileOpenForRead(&fileName);
+    if (!file)
+    {
+        return BAE_INVALID_TYPE;
+    }
+
+    fileSize = XFileGetLength(file);
+    if (fileSize <= 0)
+    {
+        XFileClose(file);
+        return BAE_INVALID_TYPE;
+    }
+
+    probeSize = fileSize;
+    if (probeSize > (int32_t)sizeof(probe))
+    {
+        probeSize = (int32_t)sizeof(probe);
+    }
+
+    if (XFileSetPosition(file, 0) != 0 || XFileRead(file, (XPTR)probe, probeSize) != 0)
+    {
+        XFileClose(file);
+        return BAE_INVALID_TYPE;
+    }
+    XFileClose(file);
+
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
+    for (i = 0; i + 8 <= probeSize; ++i)
+    {
+        if (memcmp(&probe[i], "OpusHead", 8) == 0)
+        {
+            return BAE_OPUS_TYPE;
+        }
+    }
+#endif
+
+#if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE
+    for (i = 0; i + 7 <= probeSize; ++i)
+    {
+        if (probe[i] == 0x01 && memcmp(&probe[i + 1], "vorbis", 6) == 0)
+        {
+            return BAE_VORBIS_TYPE;
+        }
+    }
+    for (i = 0; i + 6 <= probeSize; ++i)
+    {
+        if (memcmp(&probe[i], "vorbis", 6) == 0)
+        {
+            return BAE_VORBIS_TYPE;
+        }
+    }
+#endif
+
+    return BAE_INVALID_TYPE;
+}
+
+static BAEFileType PV_DetermineEditorImportFileType(BAEPathName filePath)
+{
+    BAEFileType fileType;
+
+    fileType = X_DetermineFileType(filePath);
+    if (fileType != BAE_INVALID_TYPE)
+    {
+        return fileType;
+    }
+
+    fileType = PV_DetermineEditorImportFileType(filePath);
+    if (fileType != BAE_INVALID_TYPE)
+    {
+        return fileType;
+    }
+
+    if (PV_PathHasExtensionIgnoreCase(filePath, ".ogg") ||
+        PV_PathHasExtensionIgnoreCase(filePath, ".oga"))
+    {
+        fileType = PV_DetectOggCodecBySignature(filePath);
+        if (fileType != BAE_INVALID_TYPE)
+        {
+            return fileType;
+        }
+#if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE
+        return BAE_VORBIS_TYPE;
+#elif USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
+        return BAE_OPUS_TYPE;
+#endif
+    }
+
+    return BAE_INVALID_TYPE;
+}
+
 static uint32_t PV_GetStoredCompressionSubTypeFromSnd(XPTR sndData,
                                                        int32_t sndSize,
                                                        uint32_t compressionType)
@@ -127,17 +270,51 @@ typedef struct BAERmfEditorNote
     uint32_t durationTicks;
     unsigned char note;
     unsigned char velocity;
+    unsigned char channel;
     uint16_t bank;
     unsigned char program;
+    unsigned char noteOffVelocity;
+    unsigned char noteOffStatus;
+    uint32_t noteOnOrder;
+    uint32_t noteOffOrder;
 } BAERmfEditorNote;
 
 typedef struct BAERmfEditorCCEvent
 {
     uint32_t tick;
+    uint32_t eventOrder;
     unsigned char cc;    /* 0-127 = CC number; 0xFF = pitch bend sentinel */
     unsigned char value; /* CC value, or pitch bend LSB when cc == 0xFF */
     unsigned char data2; /* 0 for CC events; pitch bend MSB when cc == 0xFF */
 } BAERmfEditorCCEvent;
+
+typedef struct BAERmfEditorSysExEvent
+{
+    uint32_t tick;
+    uint32_t eventOrder;
+    unsigned char status; /* 0xF0 or 0xF7 */
+    unsigned char *data;
+    uint32_t size;
+} BAERmfEditorSysExEvent;
+
+typedef struct BAERmfEditorAuxEvent
+{
+    uint32_t tick;
+    uint32_t eventOrder;
+    unsigned char status;
+    unsigned char data1;
+    unsigned char data2;
+    unsigned char dataBytes;
+} BAERmfEditorAuxEvent;
+
+typedef struct BAERmfEditorMetaEvent
+{
+    uint32_t tick;
+    uint32_t eventOrder;
+    unsigned char type;
+    unsigned char *data;
+    uint32_t size;
+} BAERmfEditorMetaEvent;
 
 typedef struct BAERmfEditorTrack
 {
@@ -154,6 +331,16 @@ typedef struct BAERmfEditorTrack
     BAERmfEditorCCEvent *ccEvents;
     uint32_t ccEventCount;
     uint32_t ccEventCapacity;
+    BAERmfEditorSysExEvent *sysexEvents;
+    uint32_t sysexEventCount;
+    uint32_t sysexEventCapacity;
+    BAERmfEditorAuxEvent *auxEvents;
+    uint32_t auxEventCount;
+    uint32_t auxEventCapacity;
+    BAERmfEditorMetaEvent *metaEvents;
+    uint32_t metaEventCount;
+    uint32_t metaEventCapacity;
+    uint32_t nextEventOrder;
 } BAERmfEditorTrack;
 
 typedef struct BAERmfEditorSample
@@ -215,6 +402,8 @@ struct BAERmfEditorDocument
     XLongResourceID originalSongID;
     XLongResourceID originalObjectResourceID;
     XResourceType originalMidiType;
+    unsigned char *debugOriginalMidiData;
+    uint32_t debugOriginalMidiDataSize;
     XBOOL loadedFromRmf;
     XBOOL isPristine;
 };
@@ -229,19 +418,52 @@ typedef struct ByteBuffer
 typedef struct MidiEventRecord
 {
     uint32_t tick;
+    uint32_t sequence;
     unsigned char order;
     unsigned char status;
     unsigned char data1;
     unsigned char data2;
+    unsigned char dataBytes;
+    unsigned char const *blob;
+    uint32_t blobSize;
     uint16_t bank;
     unsigned char program;
     unsigned char applyProgram;
 } MidiEventRecord;
 
+typedef struct BAEDebugMidiTrackStats
+{
+    uint32_t eventCount;
+    uint32_t eventHash;
+    uint32_t noteOnCount;
+    uint32_t noteOffCount;
+    uint32_t controlChangeCount;
+    uint32_t programChangeCount;
+    uint32_t channelAftertouchCount;
+    uint32_t polyAftertouchCount;
+    uint32_t pitchBendCount;
+    uint32_t sysexCount;
+    uint32_t tempoMetaCount;
+    uint32_t otherMetaCount;
+    uint32_t ccCount[128];
+    uint32_t firstCCTick[128];
+} BAEDebugMidiTrackStats;
+
+typedef struct BAEDebugMidiStats
+{
+    uint16_t trackCount;
+    BAEDebugMidiTrackStats *tracks;
+} BAEDebugMidiStats;
+
+#define BAE_EDITOR_CC_PITCH_BEND_SENTINEL        0xFF
+#define BAE_EDITOR_CC_CHANNEL_AFTERTOUCH_SENTINEL 0xFE
+#define BAE_EDITOR_CC_POLY_AFTERTOUCH_SENTINEL    0xFD
+
 typedef struct BAERmfEditorActiveNote
 {
     struct BAERmfEditorActiveNote *next;
     uint32_t startTick;
+    uint32_t noteOnOrder;
     unsigned char channel;
     unsigned char note;
     unsigned char velocity;
@@ -253,8 +475,37 @@ static BAEResult PV_CreatePascalName(char const *source, char outName[256]);
 static BAEResult PV_GrowBuffer(void **buffer, uint32_t *capacity, uint32_t elementSize, uint32_t minimumCount);
 static void PV_ClearTempoEvents(BAERmfEditorDocument *document);
 static BAEResult PV_AddTempoEvent(BAERmfEditorDocument *document, uint32_t tick, uint32_t microsecondsPerQuarter);
+static uint16_t PV_ReadBE16(unsigned char const *data);
+static uint32_t PV_ReadBE32(unsigned char const *data);
+static BAEResult PV_ReadVLQ(unsigned char const *data, uint32_t dataSize, uint32_t *ioOffset, uint32_t *outValue);
 static BAEResult PV_AddCCEventToTrack(BAERmfEditorTrack *track, uint32_t tick, unsigned char cc, unsigned char value, unsigned char data2);
+static BAEResult PV_AddSysExEventToTrack(BAERmfEditorTrack *track, uint32_t tick, unsigned char status, unsigned char const *data, uint32_t size);
+static void PV_FreeTrackSysExEvents(BAERmfEditorTrack *track);
+static BAEResult PV_AddAuxEventToTrack(BAERmfEditorTrack *track,
+                                       uint32_t tick,
+                                       unsigned char status,
+                                       unsigned char data1,
+                                       unsigned char data2,
+                                       unsigned char dataBytes);
+static void PV_FreeTrackAuxEvents(BAERmfEditorTrack *track);
+static BAEResult PV_AddMetaEventToTrack(BAERmfEditorTrack *track,
+                                        uint32_t tick,
+                                        unsigned char type,
+                                        unsigned char const *data,
+                                        uint32_t size);
+static void PV_FreeTrackMetaEvents(BAERmfEditorTrack *track);
+static BAEResult PV_SetDebugOriginalMidiData(BAERmfEditorDocument *document,
+                                             unsigned char const *midiData,
+                                             uint32_t midiDataSize);
+static void PV_FreeDebugOriginalMidiData(BAERmfEditorDocument *document);
+static void PV_DebugFreeMidiStats(BAEDebugMidiStats *stats);
+static BAEResult PV_DebugCollectMidiStats(unsigned char const *data,
+                                         uint32_t dataSize,
+                                         BAEDebugMidiStats *outStats);
+static void PV_DebugReportMidiRoundTripDiff(BAERmfEditorDocument const *document,
+                                            ByteBuffer const *generatedMidi);
 static int PV_CompareCCEvents(void const *left, void const *right);
+static XBOOL PV_TrackHasMetaType(BAERmfEditorTrack const *track, unsigned char type);
 static BAERmfEditorCCEvent *PV_FindTrackCCEvent(BAERmfEditorTrack *track, unsigned char cc, uint32_t eventIndex, uint32_t *outActualIndex);
 static BAERmfEditorCCEvent const *PV_FindTrackCCEventConst(BAERmfEditorTrack const *track, unsigned char cc, uint32_t eventIndex, uint32_t *outActualIndex);
 
@@ -291,6 +542,526 @@ static void PV_MarkDocumentDirty(BAERmfEditorDocument *document)
     {
         document->isPristine = FALSE;
     }
+}
+
+static BAEResult PV_SetDebugOriginalMidiData(BAERmfEditorDocument *document,
+                                             unsigned char const *midiData,
+                                             uint32_t midiDataSize)
+{
+    unsigned char *copy;
+
+    if (!document)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    PV_FreeDebugOriginalMidiData(document);
+
+    if (!midiData || midiDataSize == 0)
+    {
+        return BAE_NO_ERROR;
+    }
+
+    copy = (unsigned char *)XNewPtr((int32_t)midiDataSize);
+    if (!copy)
+    {
+        return BAE_MEMORY_ERR;
+    }
+    XBlockMove(midiData, copy, (int32_t)midiDataSize);
+    document->debugOriginalMidiData = copy;
+    document->debugOriginalMidiDataSize = midiDataSize;
+    return BAE_NO_ERROR;
+}
+
+static void PV_FreeDebugOriginalMidiData(BAERmfEditorDocument *document)
+{
+    if (!document)
+    {
+        return;
+    }
+    if (document->debugOriginalMidiData)
+    {
+        XDisposePtr(document->debugOriginalMidiData);
+        document->debugOriginalMidiData = NULL;
+    }
+    document->debugOriginalMidiDataSize = 0;
+}
+
+static void PV_DebugFreeMidiStats(BAEDebugMidiStats *stats)
+{
+    if (!stats)
+    {
+        return;
+    }
+    if (stats->tracks)
+    {
+        XDisposePtr(stats->tracks);
+        stats->tracks = NULL;
+    }
+    stats->trackCount = 0;
+}
+
+static void PV_DebugHashByte(uint32_t *hash, unsigned char value)
+{
+    *hash ^= (uint32_t)value;
+    *hash *= 16777619UL;
+}
+
+static void PV_DebugHashU32(uint32_t *hash, uint32_t value)
+{
+    PV_DebugHashByte(hash, (unsigned char)(value & 0xFF));
+    PV_DebugHashByte(hash, (unsigned char)((value >> 8) & 0xFF));
+    PV_DebugHashByte(hash, (unsigned char)((value >> 16) & 0xFF));
+    PV_DebugHashByte(hash, (unsigned char)((value >> 24) & 0xFF));
+}
+
+static BAEResult PV_DebugCollectMidiStats(unsigned char const *data,
+                                         uint32_t dataSize,
+                                         BAEDebugMidiStats *outStats)
+{
+    uint32_t headerLength;
+    uint16_t trackCount;
+    uint32_t offset;
+    uint16_t trackIndex;
+
+    if (!data || !outStats || dataSize < 14)
+    {
+        return BAE_BAD_FILE;
+    }
+    XSetMemory(outStats, sizeof(*outStats), 0);
+    if (memcmp(data, "MThd", 4) != 0)
+    {
+        return BAE_BAD_FILE;
+    }
+    headerLength = PV_ReadBE32(data + 4);
+    if (headerLength < 6 || dataSize < 8 + headerLength)
+    {
+        return BAE_BAD_FILE;
+    }
+    trackCount = PV_ReadBE16(data + 10);
+    if (trackCount == 0)
+    {
+        return BAE_BAD_FILE;
+    }
+    outStats->tracks = (BAEDebugMidiTrackStats *)XNewPtr((int32_t)(trackCount * sizeof(BAEDebugMidiTrackStats)));
+    if (!outStats->tracks)
+    {
+        return BAE_MEMORY_ERR;
+    }
+    outStats->trackCount = trackCount;
+    XSetMemory(outStats->tracks, (int32_t)(trackCount * sizeof(BAEDebugMidiTrackStats)), 0);
+    for (trackIndex = 0; trackIndex < trackCount; ++trackIndex)
+    {
+        uint32_t cc;
+        outStats->tracks[trackIndex].eventHash = 2166136261UL;
+        for (cc = 0; cc < 128; ++cc)
+        {
+            outStats->tracks[trackIndex].firstCCTick[cc] = 0xFFFFFFFFUL;
+        }
+    }
+
+    offset = 8 + headerLength;
+    for (trackIndex = 0; trackIndex < trackCount; ++trackIndex)
+    {
+        uint32_t trackLength;
+        uint32_t trackEnd;
+        uint32_t currentTick;
+        unsigned char runningStatus;
+        BAEDebugMidiTrackStats *stats;
+
+        if (offset + 8 > dataSize || memcmp(data + offset, "MTrk", 4) != 0)
+        {
+            PV_DebugFreeMidiStats(outStats);
+            return BAE_BAD_FILE;
+        }
+        trackLength = PV_ReadBE32(data + offset + 4);
+        offset += 8;
+        if (offset + trackLength > dataSize)
+        {
+            PV_DebugFreeMidiStats(outStats);
+            return BAE_BAD_FILE;
+        }
+        trackEnd = offset + trackLength;
+        currentTick = 0;
+        runningStatus = 0;
+        stats = &outStats->tracks[trackIndex];
+
+        while (offset < trackEnd)
+        {
+            uint32_t delta;
+            unsigned char status;
+            BAEResult result;
+
+            result = PV_ReadVLQ(data, trackEnd, &offset, &delta);
+            if (result != BAE_NO_ERROR)
+            {
+                PV_DebugFreeMidiStats(outStats);
+                return result;
+            }
+            currentTick += delta;
+            if (offset >= trackEnd)
+            {
+                break;
+            }
+
+            status = data[offset++];
+            if (status < 0x80)
+            {
+                if (runningStatus == 0)
+                {
+                    PV_DebugFreeMidiStats(outStats);
+                    return BAE_BAD_FILE;
+                }
+                offset--;
+                status = runningStatus;
+            }
+            else if (status < 0xF0)
+            {
+                runningStatus = status;
+            }
+            else
+            {
+                runningStatus = 0;
+            }
+
+            if (status == 0xFF)
+            {
+                unsigned char metaType;
+                uint32_t metaLength;
+
+                if (offset >= trackEnd)
+                {
+                    PV_DebugFreeMidiStats(outStats);
+                    return BAE_BAD_FILE;
+                }
+                metaType = data[offset++];
+                result = PV_ReadVLQ(data, trackEnd, &offset, &metaLength);
+                if (result != BAE_NO_ERROR || offset + metaLength > trackEnd)
+                {
+                    PV_DebugFreeMidiStats(outStats);
+                    return BAE_BAD_FILE;
+                }
+                if (metaType == 0x51)
+                {
+                    stats->tempoMetaCount++;
+                }
+                else if (metaType != 0x2F)
+                {
+                    stats->otherMetaCount++;
+                }
+                stats->eventCount++;
+                PV_DebugHashByte(&stats->eventHash, 0xFF);
+                PV_DebugHashByte(&stats->eventHash, metaType);
+                PV_DebugHashU32(&stats->eventHash, currentTick);
+                PV_DebugHashU32(&stats->eventHash, metaLength);
+                if (metaLength > 0)
+                {
+                    uint32_t k;
+                    for (k = 0; k < metaLength; ++k)
+                    {
+                        PV_DebugHashByte(&stats->eventHash, data[offset + k]);
+                    }
+                }
+                offset += metaLength;
+                continue;
+            }
+
+            if (status == 0xF0 || status == 0xF7)
+            {
+                uint32_t sysexLength;
+
+                result = PV_ReadVLQ(data, trackEnd, &offset, &sysexLength);
+                if (result != BAE_NO_ERROR || offset + sysexLength > trackEnd)
+                {
+                    PV_DebugFreeMidiStats(outStats);
+                    return BAE_BAD_FILE;
+                }
+                stats->sysexCount++;
+                stats->eventCount++;
+                PV_DebugHashByte(&stats->eventHash, status);
+                PV_DebugHashU32(&stats->eventHash, currentTick);
+                PV_DebugHashU32(&stats->eventHash, sysexLength);
+                if (sysexLength > 0)
+                {
+                    uint32_t k;
+                    for (k = 0; k < sysexLength; ++k)
+                    {
+                        PV_DebugHashByte(&stats->eventHash, data[offset + k]);
+                    }
+                }
+                offset += sysexLength;
+                continue;
+            }
+
+            switch (status & 0xF0)
+            {
+                case NOTE_OFF:
+                    if (offset + 2 > trackEnd)
+                    {
+                        PV_DebugFreeMidiStats(outStats);
+                        return BAE_BAD_FILE;
+                    }
+                    stats->noteOffCount++;
+                    stats->eventCount++;
+                    PV_DebugHashByte(&stats->eventHash, status);
+                    PV_DebugHashU32(&stats->eventHash, currentTick);
+                    PV_DebugHashByte(&stats->eventHash, data[offset]);
+                    PV_DebugHashByte(&stats->eventHash, data[offset + 1]);
+                    offset += 2;
+                    break;
+                case NOTE_ON:
+                {
+                    unsigned char vel;
+                    if (offset + 2 > trackEnd)
+                    {
+                        PV_DebugFreeMidiStats(outStats);
+                        return BAE_BAD_FILE;
+                    }
+                    vel = data[offset + 1];
+                    if (vel == 0)
+                    {
+                        stats->noteOffCount++;
+                    }
+                    else
+                    {
+                        stats->noteOnCount++;
+                    }
+                    stats->eventCount++;
+                    PV_DebugHashByte(&stats->eventHash, status);
+                    PV_DebugHashU32(&stats->eventHash, currentTick);
+                    PV_DebugHashByte(&stats->eventHash, data[offset]);
+                    PV_DebugHashByte(&stats->eventHash, data[offset + 1]);
+                    offset += 2;
+                    break;
+                }
+                case POLY_AFTERTOUCH:
+                    if (offset + 2 > trackEnd)
+                    {
+                        PV_DebugFreeMidiStats(outStats);
+                        return BAE_BAD_FILE;
+                    }
+                    stats->polyAftertouchCount++;
+                    stats->eventCount++;
+                    PV_DebugHashByte(&stats->eventHash, status);
+                    PV_DebugHashU32(&stats->eventHash, currentTick);
+                    PV_DebugHashByte(&stats->eventHash, data[offset]);
+                    PV_DebugHashByte(&stats->eventHash, data[offset + 1]);
+                    offset += 2;
+                    break;
+                case CONTROL_CHANGE:
+                {
+                    unsigned char cc;
+                    if (offset + 2 > trackEnd)
+                    {
+                        PV_DebugFreeMidiStats(outStats);
+                        return BAE_BAD_FILE;
+                    }
+                    cc = data[offset];
+                    if (cc < 128)
+                    {
+                        stats->ccCount[cc]++;
+                        if (currentTick < stats->firstCCTick[cc])
+                        {
+                            stats->firstCCTick[cc] = currentTick;
+                        }
+                    }
+                    stats->controlChangeCount++;
+                    stats->eventCount++;
+                    PV_DebugHashByte(&stats->eventHash, status);
+                    PV_DebugHashU32(&stats->eventHash, currentTick);
+                    PV_DebugHashByte(&stats->eventHash, data[offset]);
+                    PV_DebugHashByte(&stats->eventHash, data[offset + 1]);
+                    offset += 2;
+                    break;
+                }
+                case PROGRAM_CHANGE:
+                    if (offset + 1 > trackEnd)
+                    {
+                        PV_DebugFreeMidiStats(outStats);
+                        return BAE_BAD_FILE;
+                    }
+                    stats->programChangeCount++;
+                    stats->eventCount++;
+                    PV_DebugHashByte(&stats->eventHash, status);
+                    PV_DebugHashU32(&stats->eventHash, currentTick);
+                    PV_DebugHashByte(&stats->eventHash, data[offset]);
+                    offset += 1;
+                    break;
+                case CHANNEL_AFTERTOUCH:
+                    if (offset + 1 > trackEnd)
+                    {
+                        PV_DebugFreeMidiStats(outStats);
+                        return BAE_BAD_FILE;
+                    }
+                    stats->channelAftertouchCount++;
+                    stats->eventCount++;
+                    PV_DebugHashByte(&stats->eventHash, status);
+                    PV_DebugHashU32(&stats->eventHash, currentTick);
+                    PV_DebugHashByte(&stats->eventHash, data[offset]);
+                    offset += 1;
+                    break;
+                case PITCH_BEND:
+                    if (offset + 2 > trackEnd)
+                    {
+                        PV_DebugFreeMidiStats(outStats);
+                        return BAE_BAD_FILE;
+                    }
+                    stats->pitchBendCount++;
+                    stats->eventCount++;
+                    PV_DebugHashByte(&stats->eventHash, status);
+                    PV_DebugHashU32(&stats->eventHash, currentTick);
+                    PV_DebugHashByte(&stats->eventHash, data[offset]);
+                    PV_DebugHashByte(&stats->eventHash, data[offset + 1]);
+                    offset += 2;
+                    break;
+                default:
+                    PV_DebugFreeMidiStats(outStats);
+                    return BAE_BAD_FILE;
+            }
+        }
+    }
+
+    return BAE_NO_ERROR;
+}
+
+static void PV_DebugReportMidiRoundTripDiff(BAERmfEditorDocument const *document,
+                                            ByteBuffer const *generatedMidi)
+{
+    BAEDebugMidiStats originalStats;
+    BAEDebugMidiStats generatedStats;
+    BAEResult resultOriginal;
+    BAEResult resultGenerated;
+    uint16_t i;
+    uint16_t compareCount;
+    uint16_t genOffset;
+    uint16_t maxTracks;
+
+    if (!document || !generatedMidi || !document->debugOriginalMidiData || document->debugOriginalMidiDataSize == 0)
+    {
+        return;
+    }
+
+    XSetMemory(&originalStats, sizeof(originalStats), 0);
+    XSetMemory(&generatedStats, sizeof(generatedStats), 0);
+    resultOriginal = PV_DebugCollectMidiStats(document->debugOriginalMidiData,
+                                              document->debugOriginalMidiDataSize,
+                                              &originalStats);
+    resultGenerated = PV_DebugCollectMidiStats(generatedMidi->data,
+                                               generatedMidi->size,
+                                               &generatedStats);
+
+    if (resultOriginal != BAE_NO_ERROR || resultGenerated != BAE_NO_ERROR)
+    {
+        BAE_STDERR("[MIDI DIFF] Unable to parse original/generated MIDI for diff (orig=%d gen=%d)\n",
+                   (int)resultOriginal,
+                   (int)resultGenerated);
+        PV_DebugFreeMidiStats(&originalStats);
+        PV_DebugFreeMidiStats(&generatedStats);
+        return;
+    }
+
+    BAE_STDERR("[MIDI DIFF] Original tracks=%u Generated tracks=%u\n",
+               (unsigned)originalStats.trackCount,
+               (unsigned)generatedStats.trackCount);
+
+    genOffset = 0;
+    if (generatedStats.trackCount == (uint16_t)(originalStats.trackCount + 1))
+    {
+        BAEDebugMidiTrackStats const *t0 = &generatedStats.tracks[0];
+        if (t0->noteOnCount == 0 && t0->noteOffCount == 0 && t0->controlChangeCount == 0 &&
+            t0->programChangeCount == 0 && t0->pitchBendCount == 0 && t0->channelAftertouchCount == 0 &&
+            t0->polyAftertouchCount == 0 && t0->sysexCount == 0)
+        {
+            genOffset = 1;
+        }
+    }
+
+    compareCount = originalStats.trackCount;
+    if ((uint16_t)(generatedStats.trackCount - genOffset) < compareCount)
+    {
+        compareCount = (uint16_t)(generatedStats.trackCount - genOffset);
+    }
+
+    for (i = 0; i < compareCount; ++i)
+    {
+        BAEDebugMidiTrackStats const *orig = &originalStats.tracks[i];
+        BAEDebugMidiTrackStats const *gen = &generatedStats.tracks[(uint16_t)(i + genOffset)];
+        uint32_t cc;
+        XBOOL printedTrackHeader;
+
+        printedTrackHeader = FALSE;
+        if (orig->noteOnCount != gen->noteOnCount ||
+            orig->noteOffCount != gen->noteOffCount ||
+            orig->controlChangeCount != gen->controlChangeCount ||
+            orig->programChangeCount != gen->programChangeCount ||
+            orig->pitchBendCount != gen->pitchBendCount ||
+            orig->channelAftertouchCount != gen->channelAftertouchCount ||
+            orig->polyAftertouchCount != gen->polyAftertouchCount ||
+            orig->sysexCount != gen->sysexCount ||
+            orig->tempoMetaCount != gen->tempoMetaCount ||
+            orig->otherMetaCount != gen->otherMetaCount ||
+            orig->eventCount != gen->eventCount ||
+            orig->eventHash != gen->eventHash)
+        {
+            printedTrackHeader = TRUE;
+            BAE_STDERR("[MIDI DIFF] Track %u: ON %u->%u OFF %u->%u CC %u->%u PC %u->%u PB %u->%u CA %u->%u PA %u->%u SX %u->%u TMP %u->%u META %u->%u EVT %u->%u HASH %08lx->%08lx\n",
+                       (unsigned)i,
+                       (unsigned)orig->noteOnCount,
+                       (unsigned)gen->noteOnCount,
+                       (unsigned)orig->noteOffCount,
+                       (unsigned)gen->noteOffCount,
+                       (unsigned)orig->controlChangeCount,
+                       (unsigned)gen->controlChangeCount,
+                       (unsigned)orig->programChangeCount,
+                       (unsigned)gen->programChangeCount,
+                       (unsigned)orig->pitchBendCount,
+                       (unsigned)gen->pitchBendCount,
+                       (unsigned)orig->channelAftertouchCount,
+                       (unsigned)gen->channelAftertouchCount,
+                       (unsigned)orig->polyAftertouchCount,
+                       (unsigned)gen->polyAftertouchCount,
+                       (unsigned)orig->sysexCount,
+                       (unsigned)gen->sysexCount,
+                       (unsigned)orig->tempoMetaCount,
+                       (unsigned)gen->tempoMetaCount,
+                       (unsigned)orig->otherMetaCount,
+                       (unsigned)gen->otherMetaCount,
+                       (unsigned)orig->eventCount,
+                       (unsigned)gen->eventCount,
+                       (unsigned long)orig->eventHash,
+                       (unsigned long)gen->eventHash);
+        }
+
+        for (cc = 0; cc < 128; ++cc)
+        {
+            if (orig->ccCount[cc] != gen->ccCount[cc] || orig->firstCCTick[cc] != gen->firstCCTick[cc])
+            {
+                if (!printedTrackHeader)
+                {
+                    printedTrackHeader = TRUE;
+                    BAE_STDERR("[MIDI DIFF] Track %u controller deltas:\n", (unsigned)i);
+                }
+                BAE_STDERR("[MIDI DIFF]   CC%u count %u->%u firstTick %ld->%ld\n",
+                           (unsigned)cc,
+                           (unsigned)orig->ccCount[cc],
+                           (unsigned)gen->ccCount[cc],
+                           (long)((orig->firstCCTick[cc] == 0xFFFFFFFFUL) ? -1L : (long)orig->firstCCTick[cc]),
+                           (long)((gen->firstCCTick[cc] == 0xFFFFFFFFUL) ? -1L : (long)gen->firstCCTick[cc]));
+            }
+        }
+    }
+
+    maxTracks = originalStats.trackCount > generatedStats.trackCount ? originalStats.trackCount : generatedStats.trackCount;
+    if (compareCount < maxTracks)
+    {
+        BAE_STDERR("[MIDI DIFF] Warning: unmatched track tail (compare=%u max=%u offset=%u)\n",
+                   (unsigned)compareCount,
+                   (unsigned)maxTracks,
+                   (unsigned)genOffset);
+    }
+
+    PV_DebugFreeMidiStats(&originalStats);
+    PV_DebugFreeMidiStats(&generatedStats);
 }
 
 static void PV_FreeOriginalResources(BAERmfEditorDocument *document)
@@ -396,12 +1167,197 @@ static BAEResult PV_AddCCEventToTrack(BAERmfEditorTrack *track, uint32_t tick, u
     }
     event = &track->ccEvents[track->ccEventCount];
     event->tick = tick;
+    event->eventOrder = track->nextEventOrder++;
     event->cc = cc;
     event->value = value;
     event->data2 = data2;
     track->ccEventCount++;
-    qsort(track->ccEvents, track->ccEventCount, sizeof(BAERmfEditorCCEvent), PV_CompareCCEvents);
     return BAE_NO_ERROR;
+}
+
+static BAEResult PV_AddSysExEventToTrack(BAERmfEditorTrack *track,
+                                         uint32_t tick,
+                                         unsigned char status,
+                                         unsigned char const *data,
+                                         uint32_t size)
+{
+    BAEResult result;
+    BAERmfEditorSysExEvent *event;
+
+    if (!track || (status != 0xF0 && status != 0xF7))
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    result = PV_GrowBuffer((void **)&track->sysexEvents,
+                           &track->sysexEventCapacity,
+                           sizeof(BAERmfEditorSysExEvent),
+                           track->sysexEventCount + 1);
+    if (result != BAE_NO_ERROR)
+    {
+        return result;
+    }
+
+    event = &track->sysexEvents[track->sysexEventCount];
+    XSetMemory(event, sizeof(*event), 0);
+    event->tick = tick;
+    event->eventOrder = track->nextEventOrder++;
+    event->status = status;
+    if (size > 0)
+    {
+        event->data = (unsigned char *)XNewPtr((int32_t)size);
+        if (!event->data)
+        {
+            return BAE_MEMORY_ERR;
+        }
+        XBlockMove(data, event->data, (int32_t)size);
+        event->size = size;
+    }
+    track->sysexEventCount++;
+    return BAE_NO_ERROR;
+}
+
+static void PV_FreeTrackSysExEvents(BAERmfEditorTrack *track)
+{
+    uint32_t index;
+
+    if (!track)
+    {
+        return;
+    }
+    for (index = 0; index < track->sysexEventCount; ++index)
+    {
+        if (track->sysexEvents[index].data)
+        {
+            XDisposePtr(track->sysexEvents[index].data);
+            track->sysexEvents[index].data = NULL;
+        }
+    }
+    if (track->sysexEvents)
+    {
+        XDisposePtr(track->sysexEvents);
+        track->sysexEvents = NULL;
+    }
+    track->sysexEventCount = 0;
+    track->sysexEventCapacity = 0;
+}
+
+static BAEResult PV_AddAuxEventToTrack(BAERmfEditorTrack *track,
+                                       uint32_t tick,
+                                       unsigned char status,
+                                       unsigned char data1,
+                                       unsigned char data2,
+                                       unsigned char dataBytes)
+{
+    BAEResult result;
+    BAERmfEditorAuxEvent *event;
+
+    if (!track || dataBytes == 0 || dataBytes > 2)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    result = PV_GrowBuffer((void **)&track->auxEvents,
+                           &track->auxEventCapacity,
+                           sizeof(BAERmfEditorAuxEvent),
+                           track->auxEventCount + 1);
+    if (result != BAE_NO_ERROR)
+    {
+        return result;
+    }
+
+    event = &track->auxEvents[track->auxEventCount];
+    event->tick = tick;
+    event->eventOrder = track->nextEventOrder++;
+    event->status = status;
+    event->data1 = data1;
+    event->data2 = data2;
+    event->dataBytes = dataBytes;
+    track->auxEventCount++;
+    return BAE_NO_ERROR;
+}
+
+static void PV_FreeTrackAuxEvents(BAERmfEditorTrack *track)
+{
+    if (!track)
+    {
+        return;
+    }
+    if (track->auxEvents)
+    {
+        XDisposePtr(track->auxEvents);
+        track->auxEvents = NULL;
+    }
+    track->auxEventCount = 0;
+    track->auxEventCapacity = 0;
+}
+
+static BAEResult PV_AddMetaEventToTrack(BAERmfEditorTrack *track,
+                                        uint32_t tick,
+                                        unsigned char type,
+                                        unsigned char const *data,
+                                        uint32_t size)
+{
+    BAEResult result;
+    BAERmfEditorMetaEvent *event;
+
+    if (!track)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    result = PV_GrowBuffer((void **)&track->metaEvents,
+                           &track->metaEventCapacity,
+                           sizeof(BAERmfEditorMetaEvent),
+                           track->metaEventCount + 1);
+    if (result != BAE_NO_ERROR)
+    {
+        return result;
+    }
+
+    event = &track->metaEvents[track->metaEventCount];
+    XSetMemory(event, sizeof(*event), 0);
+    event->tick = tick;
+    event->eventOrder = track->nextEventOrder++;
+    event->type = type;
+    if (size > 0)
+    {
+        event->data = (unsigned char *)XNewPtr((int32_t)size);
+        if (!event->data)
+        {
+            return BAE_MEMORY_ERR;
+        }
+        XBlockMove(data, event->data, (int32_t)size);
+        event->size = size;
+    }
+    track->metaEventCount++;
+    return BAE_NO_ERROR;
+}
+
+static void PV_FreeTrackMetaEvents(BAERmfEditorTrack *track)
+{
+    uint32_t index;
+
+    if (!track)
+    {
+        return;
+    }
+
+    for (index = 0; index < track->metaEventCount; ++index)
+    {
+        if (track->metaEvents[index].data)
+        {
+            XDisposePtr(track->metaEvents[index].data);
+            track->metaEvents[index].data = NULL;
+        }
+    }
+    if (track->metaEvents)
+    {
+        XDisposePtr(track->metaEvents);
+        track->metaEvents = NULL;
+    }
+    track->metaEventCount = 0;
+    track->metaEventCapacity = 0;
 }
 
 static int PV_CompareCCEvents(void const *left, void const *right)
@@ -723,9 +1679,337 @@ static AudioFileType PV_TranslateEditorFileType(BAEFileType fileType)
             return FILE_WAVE_TYPE;
         case BAE_AIFF_TYPE:
             return FILE_AIFF_TYPE;
+#if USE_MPEG_DECODER == TRUE || USE_MPEG_ENCODER == TRUE
+        case BAE_MPEG_TYPE:
+            return FILE_MPEG_TYPE;
+#endif
+#if USE_FLAC_DECODER == TRUE || USE_FLAC_ENCODER == TRUE
+        case BAE_FLAC_TYPE:
+            return FILE_FLAC_TYPE;
+#endif
+#if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE
+        case BAE_VORBIS_TYPE:
+            return FILE_VORBIS_TYPE;
+#endif
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
+        case BAE_OPUS_TYPE:
+            return FILE_OPUS_TYPE;
+#endif
         default:
             return FILE_INVALID_TYPE;
     }
+}
+
+static XBOOL PV_IsEditorCompressedImportType(BAEFileType fileType)
+{
+    switch (fileType)
+    {
+#if USE_MPEG_DECODER == TRUE || USE_MPEG_ENCODER == TRUE
+        case BAE_MPEG_TYPE:
+            return TRUE;
+#endif
+#if USE_FLAC_DECODER == TRUE || USE_FLAC_ENCODER == TRUE
+        case BAE_FLAC_TYPE:
+            return TRUE;
+#endif
+#if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE
+        case BAE_VORBIS_TYPE:
+            return TRUE;
+#endif
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
+        case BAE_OPUS_TYPE:
+            return TRUE;
+#endif
+        default:
+            return FALSE;
+    }
+}
+
+static XBOOL PV_IsSupportedPassthroughCompression(SndCompressionType compressionType)
+{
+    switch (compressionType)
+    {
+#if USE_MPEG_DECODER == TRUE || USE_MPEG_ENCODER == TRUE
+        case C_MPEG_32:
+        case C_MPEG_40:
+        case C_MPEG_48:
+        case C_MPEG_56:
+        case C_MPEG_64:
+        case C_MPEG_80:
+        case C_MPEG_96:
+        case C_MPEG_112:
+        case C_MPEG_128:
+        case C_MPEG_160:
+        case C_MPEG_192:
+        case C_MPEG_224:
+        case C_MPEG_256:
+        case C_MPEG_320:
+            return TRUE;
+#endif
+#if USE_FLAC_DECODER == TRUE || USE_FLAC_ENCODER == TRUE
+        case C_FLAC:
+            return TRUE;
+#endif
+#if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE
+        case C_VORBIS:
+            return TRUE;
+#endif
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
+        case C_OPUS:
+            return TRUE;
+#endif
+        default:
+            return FALSE;
+    }
+}
+
+static BAEResult PV_CompressionTypeFromEditorFileType(BAEFileType fileType,
+                                                      SndCompressionType *outCompressionType)
+{
+    if (!outCompressionType)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    switch (fileType)
+    {
+#if USE_MPEG_DECODER == TRUE || USE_MPEG_ENCODER == TRUE
+        case BAE_MPEG_TYPE:
+            *outCompressionType = C_MPEG_128;
+            return BAE_NO_ERROR;
+#endif
+#if USE_FLAC_DECODER == TRUE || USE_FLAC_ENCODER == TRUE
+        case BAE_FLAC_TYPE:
+            *outCompressionType = C_FLAC;
+            return BAE_NO_ERROR;
+#endif
+#if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE
+        case BAE_VORBIS_TYPE:
+            *outCompressionType = C_VORBIS;
+            return BAE_NO_ERROR;
+#endif
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
+        case BAE_OPUS_TYPE:
+            *outCompressionType = C_OPUS;
+            return BAE_NO_ERROR;
+#endif
+        default:
+            break;
+    }
+
+    return BAE_BAD_FILE_TYPE;
+}
+
+static BAEResult PV_ReadFileIntoMemory(XFILENAME const *fileName,
+                                       XPTR *outData,
+                                       int32_t *outSize)
+{
+    XFILE file;
+    int32_t fileSize;
+    XPTR fileData;
+
+    if (!fileName || !outData || !outSize)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    *outData = NULL;
+    *outSize = 0;
+
+    file = XFileOpenForRead((XFILENAME *)fileName);
+    if (!file)
+    {
+        return BAE_FILE_NOT_FOUND;
+    }
+
+    fileSize = XFileGetLength(file);
+    if (fileSize <= 0)
+    {
+        XFileClose(file);
+        return BAE_BAD_FILE;
+    }
+
+    fileData = XNewPtr(fileSize);
+    if (!fileData)
+    {
+        XFileClose(file);
+        return BAE_MEMORY_ERR;
+    }
+
+    if (XFileSetPosition(file, 0) != 0 || XFileRead(file, fileData, fileSize) != 0)
+    {
+        XFileClose(file);
+        XDisposePtr(fileData);
+        return BAE_BAD_FILE;
+    }
+
+    XFileClose(file);
+    *outData = fileData;
+    *outSize = fileSize;
+    return BAE_NO_ERROR;
+}
+
+static BAEResult PV_CreatePassthroughSndFromEncodedData(GM_Waveform const *decodedWaveform,
+                                                        XPTR encodedData,
+                                                        int32_t encodedSize,
+                                                        SndCompressionType compressionType,
+                                                        SndCompressionSubType compressionSubType,
+                                                        XPTR *outSndData,
+                                                        int32_t *outSndSize)
+{
+    XPTR sndData;
+    int32_t sndSize;
+
+    if (!decodedWaveform || !encodedData || encodedSize <= 0 || !outSndData || !outSndSize)
+    {
+        return BAE_PARAM_ERR;
+    }
+    if (!PV_IsSupportedPassthroughCompression(compressionType))
+    {
+        return BAE_BAD_FILE_TYPE;
+    }
+
+    *outSndData = NULL;
+    *outSndSize = 0;
+
+    sndSize = (int32_t)(sizeof(XSndHeader3) + encodedSize);
+    sndData = XNewPtr(sndSize);
+    if (!sndData)
+    {
+        return BAE_MEMORY_ERR;
+    }
+
+    {
+        XSndHeader3 *snd = (XSndHeader3 *)sndData;
+        uint32_t decodedBytes;
+
+        XSetMemory(snd, sizeof(XSndHeader3), 0);
+        XPutShort(&snd->type, XThirdSoundFormat);
+        XPutLong(&snd->sndBuffer.subType, (uint32_t)compressionType);
+        XPutLong(&snd->sndBuffer.sampleRate, (uint32_t)decodedWaveform->sampledRate);
+        XPutLong(&snd->sndBuffer.frameCount, decodedWaveform->waveFrames);
+        XPutLong(&snd->sndBuffer.encodedBytes, (uint32_t)encodedSize);
+
+        decodedBytes = (uint32_t)(decodedWaveform->waveFrames * decodedWaveform->channels * (decodedWaveform->bitSize / 8));
+        if (decodedBytes == 0 && decodedWaveform->waveSize > 0)
+        {
+            decodedBytes = (uint32_t)decodedWaveform->waveSize;
+        }
+        XPutLong(&snd->sndBuffer.decodedBytes, decodedBytes);
+        XPutLong(&snd->sndBuffer.blockBytes, 0);
+        XPutLong(&snd->sndBuffer.startFrame, 0);
+        XPutLong(&snd->sndBuffer.loopStart[0], decodedWaveform->startLoop);
+        XPutLong(&snd->sndBuffer.loopEnd[0], decodedWaveform->endLoop);
+        snd->sndBuffer.baseKey = (XBYTE)decodedWaveform->baseMidiPitch;
+        snd->sndBuffer.channels = (XBYTE)decodedWaveform->channels;
+        snd->sndBuffer.bitSize = (XBYTE)decodedWaveform->bitSize;
+        snd->sndBuffer.isEmbedded = TRUE;
+        XBlockMove(encodedData, snd->sndBuffer.sampleArea, encodedSize);
+    }
+
+    PV_StoreCompressionSubTypeInSnd(sndData,
+                                    sndSize,
+                                    compressionType,
+                                    compressionSubType);
+
+    *outSndData = sndData;
+    *outSndSize = sndSize;
+    return BAE_NO_ERROR;
+}
+
+static BAEResult PV_CreatePassthroughSndFromCompressedWaveform(GM_Waveform const *decodedWaveform,
+                                                               GM_Waveform const *compressedWaveform,
+                                                               SndCompressionSubType compressionSubType,
+                                                               XPTR *outSndData,
+                                                               int32_t *outSndSize)
+{
+    SndCompressionType compressionType;
+    XPTR sndData;
+    int32_t sndSize;
+
+    if (!decodedWaveform || !compressedWaveform || !compressedWaveform->theWaveform ||
+        compressedWaveform->waveSize <= 0 || !outSndData || !outSndSize)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    *outSndData = NULL;
+    *outSndSize = 0;
+
+    compressionType = (SndCompressionType)compressedWaveform->compressionType;
+    if (!PV_IsSupportedPassthroughCompression(compressionType))
+    {
+        return BAE_BAD_FILE_TYPE;
+    }
+
+#if USE_MPEG_DECODER == TRUE || USE_MPEG_ENCODER == TRUE
+    if (compressionType == C_MPEG_32 || compressionType == C_MPEG_40 || compressionType == C_MPEG_48 ||
+        compressionType == C_MPEG_56 || compressionType == C_MPEG_64 || compressionType == C_MPEG_80 ||
+        compressionType == C_MPEG_96 || compressionType == C_MPEG_112 || compressionType == C_MPEG_128 ||
+        compressionType == C_MPEG_160 || compressionType == C_MPEG_192 || compressionType == C_MPEG_224 ||
+        compressionType == C_MPEG_256 || compressionType == C_MPEG_320)
+    {
+        OPErr opErr;
+
+        opErr = XCreateSoundObjectFromData(outSndData,
+                                           compressedWaveform,
+                                           compressionType,
+                                           compressionSubType,
+                                           NULL,
+                                           NULL);
+        if (opErr != NO_ERR || !*outSndData)
+        {
+            return BAE_BAD_FILE;
+        }
+        *outSndSize = XGetPtrSize(*outSndData);
+        return BAE_NO_ERROR;
+    }
+#endif
+
+    sndSize = (int32_t)(sizeof(XSndHeader3) + compressedWaveform->waveSize);
+    sndData = XNewPtr(sndSize);
+    if (!sndData)
+    {
+        return BAE_MEMORY_ERR;
+    }
+
+    {
+        XSndHeader3 *snd = (XSndHeader3 *)sndData;
+        uint32_t decodedBytes;
+
+        XSetMemory(snd, sizeof(XSndHeader3), 0);
+        XPutShort(&snd->type, XThirdSoundFormat);
+        XPutLong(&snd->sndBuffer.subType, (uint32_t)compressionType);
+        XPutLong(&snd->sndBuffer.sampleRate, (uint32_t)decodedWaveform->sampledRate);
+        XPutLong(&snd->sndBuffer.frameCount, decodedWaveform->waveFrames);
+        XPutLong(&snd->sndBuffer.encodedBytes, (uint32_t)compressedWaveform->waveSize);
+
+        decodedBytes = (uint32_t)(decodedWaveform->waveFrames * decodedWaveform->channels * (decodedWaveform->bitSize / 8));
+        if (decodedBytes == 0 && decodedWaveform->waveSize > 0)
+        {
+            decodedBytes = (uint32_t)decodedWaveform->waveSize;
+        }
+        XPutLong(&snd->sndBuffer.decodedBytes, decodedBytes);
+
+        XPutLong(&snd->sndBuffer.blockBytes, 0);
+        XPutLong(&snd->sndBuffer.startFrame, 0);
+        XPutLong(&snd->sndBuffer.loopStart[0], decodedWaveform->startLoop);
+        XPutLong(&snd->sndBuffer.loopEnd[0], decodedWaveform->endLoop);
+        snd->sndBuffer.baseKey = (XBYTE)decodedWaveform->baseMidiPitch;
+        snd->sndBuffer.channels = (XBYTE)decodedWaveform->channels;
+        snd->sndBuffer.bitSize = (XBYTE)decodedWaveform->bitSize;
+        snd->sndBuffer.isEmbedded = TRUE;
+        XBlockMove(compressedWaveform->theWaveform, snd->sndBuffer.sampleArea, compressedWaveform->waveSize);
+    }
+
+    PV_StoreCompressionSubTypeInSnd(sndData,
+                                    sndSize,
+                                    compressionType,
+                                    compressionSubType);
+
+    *outSndData = sndData;
+    *outSndSize = sndSize;
+    return BAE_NO_ERROR;
 }
 
 static BAEResult PV_AssignSongInfoString(SongResource_Info *songInfo, BAEInfoType infoType, char const *value)
@@ -904,8 +2188,13 @@ static BAEResult PV_AddNoteToTrack(BAERmfEditorTrack *track,
                                    uint32_t durationTicks,
                                    unsigned char note,
                                    unsigned char velocity,
+                                   unsigned char channel,
                                    uint16_t bank,
-                                   unsigned char program)
+                                   unsigned char program,
+                                   unsigned char noteOffStatus,
+                                   unsigned char noteOffVelocity,
+                                   uint32_t noteOnOrder,
+                                   uint32_t noteOffOrder)
 {
     BAEResult result;
 
@@ -925,8 +2214,13 @@ static BAEResult PV_AddNoteToTrack(BAERmfEditorTrack *track,
     track->notes[track->noteCount].durationTicks = durationTicks;
     track->notes[track->noteCount].note = note;
     track->notes[track->noteCount].velocity = velocity ? velocity : 96;
+    track->notes[track->noteCount].channel = channel;
     track->notes[track->noteCount].bank = bank;
     track->notes[track->noteCount].program = program;
+    track->notes[track->noteCount].noteOffStatus = noteOffStatus;
+    track->notes[track->noteCount].noteOffVelocity = noteOffVelocity;
+    track->notes[track->noteCount].noteOnOrder = noteOnOrder;
+    track->notes[track->noteCount].noteOffOrder = noteOffOrder;
     track->noteCount++;
     return BAE_NO_ERROR;
 }
@@ -985,6 +2279,7 @@ static BAEResult PV_ReadWholeFile(BAEPathName filePath, unsigned char **outData,
 
 static BAERmfEditorActiveNote *PV_PushActiveNote(BAERmfEditorActiveNote **head,
                                                  uint32_t startTick,
+                                                 uint32_t noteOnOrder,
                                                  unsigned char channel,
                                                  unsigned char note,
                                                  unsigned char velocity,
@@ -1000,6 +2295,7 @@ static BAERmfEditorActiveNote *PV_PushActiveNote(BAERmfEditorActiveNote **head,
     }
     XSetMemory(activeNote, sizeof(*activeNote), 0);
     activeNote->startTick = startTick;
+    activeNote->noteOnOrder = noteOnOrder;
     activeNote->channel = channel;
     activeNote->note = note;
     activeNote->velocity = velocity;
@@ -1086,8 +2382,13 @@ static BAEResult PV_FinalizeActiveNotes(BAERmfEditorTrack *track,
                                        durationTicks,
                                        activeNote->note,
                                        activeNote->velocity,
+                                       activeNote->channel,
                                        activeNote->bank,
-                                       activeNote->program);
+                                       activeNote->program,
+                                       (unsigned char)(NOTE_OFF | (activeNote->channel & 0x0F)),
+                                       0,
+                                       activeNote->noteOnOrder,
+                                       track->nextEventOrder++);
         }
         XDisposePtr(activeNote);
     }
@@ -1208,6 +2509,13 @@ static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
                 nameCopy[metaLength] = 0;
                 PV_FreeString(&track->name);
                 track->name = nameCopy;
+
+                result = PV_AddMetaEventToTrack(track, currentTick, metaType, trackData + offset, metaLength);
+                if (result != BAE_NO_ERROR)
+                {
+                    PV_DisposeActiveNotes(&activeNotes);
+                    return result;
+                }
             }
             else if (metaType == 0x51 && metaLength == 3)
             {
@@ -1229,6 +2537,22 @@ static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
                         document->tempoBPM = 60000000UL / microsecondsPerQuarter;
                     }
                 }
+
+                result = PV_AddMetaEventToTrack(track, currentTick, metaType, trackData + offset, metaLength);
+                if (result != BAE_NO_ERROR)
+                {
+                    PV_DisposeActiveNotes(&activeNotes);
+                    return result;
+                }
+            }
+            else if (metaType != 0x2F)
+            {
+                result = PV_AddMetaEventToTrack(track, currentTick, metaType, trackData + offset, metaLength);
+                if (result != BAE_NO_ERROR)
+                {
+                    PV_DisposeActiveNotes(&activeNotes);
+                    return result;
+                }
             }
             else if (metaType == 0x2F)
             {
@@ -1247,6 +2571,12 @@ static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
             {
                 PV_DisposeActiveNotes(&activeNotes);
                 return BAE_BAD_FILE;
+            }
+            result = PV_AddSysExEventToTrack(track, currentTick, status, trackData + offset, sysexLength);
+            if (result != BAE_NO_ERROR)
+            {
+                PV_DisposeActiveNotes(&activeNotes);
+                return result;
             }
             offset += sysexLength;
             continue;
@@ -1278,8 +2608,12 @@ static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
                 velocity = trackData[offset++];
                 if (eventType == NOTE_ON && velocity > 0)
                 {
+                    uint32_t noteOnOrder;
+
+                    noteOnOrder = track->nextEventOrder++;
                     activeNote = PV_PushActiveNote(&activeNotes,
                                                    currentTick,
+                                                   noteOnOrder,
                                                    channel,
                                                    noteValue,
                                                    velocity,
@@ -1293,6 +2627,9 @@ static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
                 }
                 else
                 {
+                    uint32_t noteOffOrder;
+
+                    noteOffOrder = track->nextEventOrder++;
                     activeNote = PV_PopActiveNote(&activeNotes, channel, noteValue);
                     if (activeNote)
                     {
@@ -1305,8 +2642,13 @@ static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
                                                    durationTicks,
                                                    activeNote->note,
                                                    activeNote->velocity,
+                                                   activeNote->channel,
                                                    activeNote->bank,
-                                                   activeNote->program);
+                                                   activeNote->program,
+                                                   status,
+                                                   velocity,
+                                                   activeNote->noteOnOrder,
+                                                   noteOffOrder);
                         XDisposePtr(activeNote);
                         if (result != BAE_NO_ERROR)
                         {
@@ -1336,6 +2678,17 @@ static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
                     if (data1 == BANK_MSB)
                     {
                         channelBank[channel] = (uint16_t)(((uint16_t)data2 << 7) | (channelBank[channel] & 0x7F));
+                        result = PV_AddAuxEventToTrack(track,
+                                                       currentTick,
+                                                       status,
+                                                       data1,
+                                                       data2,
+                                                       2);
+                        if (result != BAE_NO_ERROR)
+                        {
+                            PV_DisposeActiveNotes(&activeNotes);
+                            return result;
+                        }
                         if (channel == track->channel)
                         {
                             track->bank = (uint16_t)(((uint16_t)data2 << 7) | (track->bank & 0x7F));
@@ -1344,6 +2697,17 @@ static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
                     else if (data1 == BANK_LSB)
                     {
                         channelBank[channel] = (uint16_t)((channelBank[channel] & 0x3F80) | (uint16_t)(data2 & 0x7F));
+                        result = PV_AddAuxEventToTrack(track,
+                                                       currentTick,
+                                                       status,
+                                                       data1,
+                                                       data2,
+                                                       2);
+                        if (result != BAE_NO_ERROR)
+                        {
+                            PV_DisposeActiveNotes(&activeNotes);
+                            return result;
+                        }
                         if (channel == track->channel)
                         {
                             track->bank = (uint16_t)((track->bank & 0x3F80) | (uint16_t)(data2 & 0x7F));
@@ -1367,11 +2731,70 @@ static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
                             return result;
                         }
                     }
+                    else if (channel != track->channel)
+                    {
+                        result = PV_AddAuxEventToTrack(track,
+                                                       currentTick,
+                                                       status,
+                                                       data1,
+                                                       data2,
+                                                       2);
+                        if (result != BAE_NO_ERROR)
+                        {
+                            PV_DisposeActiveNotes(&activeNotes);
+                            return result;
+                        }
+                    }
                 }
                 else if (eventType == PITCH_BEND && channel == track->channel)
                 {
-                    /* Pitch bend: data1=LSB, data2=MSB. Stored with cc sentinel 0xFF. */
-                    result = PV_AddCCEventToTrack(track, currentTick, 0xFF, data1, data2);
+                    /* Pitch bend: data1=LSB, data2=MSB. */
+                    result = PV_AddCCEventToTrack(track,
+                                                  currentTick,
+                                                  BAE_EDITOR_CC_PITCH_BEND_SENTINEL,
+                                                  data1,
+                                                  data2);
+                    if (result != BAE_NO_ERROR)
+                    {
+                        PV_DisposeActiveNotes(&activeNotes);
+                        return result;
+                    }
+                }
+                else if (eventType == PITCH_BEND)
+                {
+                    result = PV_AddAuxEventToTrack(track,
+                                                   currentTick,
+                                                   status,
+                                                   data1,
+                                                   data2,
+                                                   2);
+                    if (result != BAE_NO_ERROR)
+                    {
+                        PV_DisposeActiveNotes(&activeNotes);
+                        return result;
+                    }
+                }
+                else if (eventType == POLY_AFTERTOUCH && channel == track->channel)
+                {
+                    result = PV_AddCCEventToTrack(track,
+                                                  currentTick,
+                                                  BAE_EDITOR_CC_POLY_AFTERTOUCH_SENTINEL,
+                                                  data1,
+                                                  data2);
+                    if (result != BAE_NO_ERROR)
+                    {
+                        PV_DisposeActiveNotes(&activeNotes);
+                        return result;
+                    }
+                }
+                else if (eventType == POLY_AFTERTOUCH)
+                {
+                    result = PV_AddAuxEventToTrack(track,
+                                                   currentTick,
+                                                   status,
+                                                   data1,
+                                                   data2,
+                                                   2);
                     if (result != BAE_NO_ERROR)
                     {
                         PV_DisposeActiveNotes(&activeNotes);
@@ -1394,9 +2817,47 @@ static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
                 if (eventType == PROGRAM_CHANGE)
                 {
                     channelProgram[channel] = data1;
+                    result = PV_AddAuxEventToTrack(track,
+                                                   currentTick,
+                                                   status,
+                                                   data1,
+                                                   0,
+                                                   1);
+                    if (result != BAE_NO_ERROR)
+                    {
+                        PV_DisposeActiveNotes(&activeNotes);
+                        return result;
+                    }
                     if (channel == track->channel)
                     {
                         track->program = data1;
+                    }
+                }
+                else if (eventType == CHANNEL_AFTERTOUCH && channel == track->channel)
+                {
+                    result = PV_AddCCEventToTrack(track,
+                                                  currentTick,
+                                                  BAE_EDITOR_CC_CHANNEL_AFTERTOUCH_SENTINEL,
+                                                  data1,
+                                                  0);
+                    if (result != BAE_NO_ERROR)
+                    {
+                        PV_DisposeActiveNotes(&activeNotes);
+                        return result;
+                    }
+                }
+                else if (eventType == CHANNEL_AFTERTOUCH)
+                {
+                    result = PV_AddAuxEventToTrack(track,
+                                                   currentTick,
+                                                   status,
+                                                   data1,
+                                                   0,
+                                                   1);
+                    if (result != BAE_NO_ERROR)
+                    {
+                        PV_DisposeActiveNotes(&activeNotes);
+                        return result;
                     }
                 }
                 break;
@@ -1951,6 +3412,22 @@ static BAEResult PV_LoadRmfFileIntoDocument(BAERmfEditorDocument *document, BAEP
         BAE_STDERR("[RMF] Got MIDI data, size=%ld\n", (long)midiSize);
         result = PV_LoadMidiBytesIntoDocument(document, (unsigned char const *)midiData, (uint32_t)midiSize);
         BAE_STDERR("[RMF] PV_LoadMidiBytesIntoDocument result=%d, trackCount=%u\n", (int)result, document->trackCount);
+        if (result == BAE_NO_ERROR)
+        {
+            BAEResult copyResult;
+
+            copyResult = PV_SetDebugOriginalMidiData(document,
+                                                     (unsigned char const *)midiData,
+                                                     (uint32_t)midiSize);
+            if (copyResult != BAE_NO_ERROR)
+            {
+                XDisposeSongResourceInfo(songInfo);
+                XDisposePtr(songResource);
+                XDisposePtr(midiData);
+                XFileClose(fileRef);
+                return copyResult;
+            }
+        }
     }
     else
     {
@@ -2366,6 +3843,14 @@ static int PV_CompareMidiEvents(void const *left, void const *right)
     {
         return 1;
     }
+    if (a->sequence < b->sequence)
+    {
+        return -1;
+    }
+    if (a->sequence > b->sequence)
+    {
+        return 1;
+    }
     if (a->order < b->order)
     {
         return -1;
@@ -2454,20 +3939,22 @@ static BAEResult PV_BuildTempoTrack(BAERmfEditorDocument *document, ByteBuffer *
     return PV_AppendMetaEvent(trackData, 0, 0x2F, NULL, 0);
 }
 
-static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track, ByteBuffer *trackData)
+static BAEResult PV_BuildConductorTrack(BAERmfEditorDocument *document,
+                                        BAERmfEditorTrack const *track,
+                                        ByteBuffer *trackData)
 {
-    MidiEventRecord *events;
-    uint32_t eventCount;
     uint32_t eventIndex;
-    uint32_t noteIndex;
+    uint32_t metaIndex;
     uint32_t previousTick;
-    uint16_t currentBank;
-    unsigned char currentProgram;
     BAEResult result;
 
-    events = NULL;
-    eventCount = (track->noteCount * 2) + track->ccEventCount;
-    if (track->name && track->name[0])
+    if (!document || !track || !trackData)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    previousTick = 0;
+    if (track->name && track->name[0] && !PV_TrackHasMetaType(track, 0x03))
     {
         result = PV_AppendMetaEvent(trackData, 0, 0x03, track->name, (uint32_t)strlen(track->name));
         if (result != BAE_NO_ERROR)
@@ -2475,103 +3962,179 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track, ByteBuffer *t
             return result;
         }
     }
-    result = PV_ByteBufferAppendVLQ(trackData, 0);
-    if (result != BAE_NO_ERROR)
+
+    if (PV_TrackHasMetaType(track, 0x51))
     {
-        return result;
+        for (metaIndex = 0; metaIndex < track->metaEventCount; ++metaIndex)
+        {
+            BAERmfEditorMetaEvent const *metaEvent;
+            uint32_t delta;
+
+            metaEvent = &track->metaEvents[metaIndex];
+            delta = (metaEvent->tick >= previousTick) ? (metaEvent->tick - previousTick) : 0;
+            result = PV_AppendMetaEvent(trackData, delta, metaEvent->type, metaEvent->data, metaEvent->size);
+            if (result != BAE_NO_ERROR)
+            {
+                return result;
+            }
+            previousTick = metaEvent->tick;
+        }
     }
-    result = PV_ByteBufferAppendByte(trackData, (unsigned char)(CONTROL_CHANGE | (track->channel & 0x0F)));
-    if (result != BAE_NO_ERROR)
+    else if (document->tempoEventCount > 0)
     {
-        return result;
+        for (eventIndex = 0; eventIndex < document->tempoEventCount; ++eventIndex)
+        {
+            unsigned char tempoBytes[3];
+            BAERmfEditorTempoEvent const *tempoEvent;
+            uint32_t delta;
+
+            tempoEvent = &document->tempoEvents[eventIndex];
+            if (tempoEvent->microsecondsPerQuarter == 0)
+            {
+                continue;
+            }
+            delta = tempoEvent->tick - previousTick;
+            tempoBytes[0] = (unsigned char)((tempoEvent->microsecondsPerQuarter >> 16) & 0xFF);
+            tempoBytes[1] = (unsigned char)((tempoEvent->microsecondsPerQuarter >> 8) & 0xFF);
+            tempoBytes[2] = (unsigned char)(tempoEvent->microsecondsPerQuarter & 0xFF);
+            result = PV_AppendMetaEvent(trackData, delta, 0x51, tempoBytes, 3);
+            if (result != BAE_NO_ERROR)
+            {
+                return result;
+            }
+            previousTick = tempoEvent->tick;
+        }
     }
-    result = PV_ByteBufferAppendByte(trackData, BANK_MSB);
-    if (result != BAE_NO_ERROR)
+    else
     {
-        return result;
+        unsigned char tempoBytes[3];
+        uint32_t microsecondsPerQuarter;
+
+        microsecondsPerQuarter = 60000000UL / document->tempoBPM;
+        tempoBytes[0] = (unsigned char)((microsecondsPerQuarter >> 16) & 0xFF);
+        tempoBytes[1] = (unsigned char)((microsecondsPerQuarter >> 8) & 0xFF);
+        tempoBytes[2] = (unsigned char)(microsecondsPerQuarter & 0xFF);
+        result = PV_AppendMetaEvent(trackData, 0, 0x51, tempoBytes, 3);
+        if (result != BAE_NO_ERROR)
+        {
+            return result;
+        }
     }
-    result = PV_ByteBufferAppendByte(trackData, (unsigned char)((track->bank >> 7) & 0x7F));
-    if (result != BAE_NO_ERROR)
+
+    if (!PV_TrackHasMetaType(track, 0x51))
     {
-        return result;
+        for (metaIndex = 0; metaIndex < track->metaEventCount; ++metaIndex)
+        {
+            BAERmfEditorMetaEvent const *metaEvent;
+            uint32_t delta;
+
+            metaEvent = &track->metaEvents[metaIndex];
+            if (metaEvent->type == 0x51)
+            {
+                continue;
+            }
+            delta = (metaEvent->tick >= previousTick) ? (metaEvent->tick - previousTick) : 0;
+            result = PV_AppendMetaEvent(trackData, delta, metaEvent->type, metaEvent->data, metaEvent->size);
+            if (result != BAE_NO_ERROR)
+            {
+                return result;
+            }
+            previousTick = metaEvent->tick;
+        }
     }
-    result = PV_ByteBufferAppendVLQ(trackData, 0);
-    if (result != BAE_NO_ERROR)
+
+    return PV_AppendMetaEvent(trackData, 0, 0x2F, NULL, 0);
+}
+
+static XBOOL PV_IsMetaOnlyConductorTrack(BAERmfEditorTrack const *track)
+{
+    if (!track)
     {
-        return result;
+        return FALSE;
     }
-    result = PV_ByteBufferAppendByte(trackData, (unsigned char)(CONTROL_CHANGE | (track->channel & 0x0F)));
-    if (result != BAE_NO_ERROR)
+    return (track->noteCount == 0 &&
+            track->ccEventCount == 0 &&
+            track->sysexEventCount == 0 &&
+            track->auxEventCount == 0) ? TRUE : FALSE;
+}
+
+static XBOOL PV_TrackHasMetaType(BAERmfEditorTrack const *track, unsigned char type)
+{
+    uint32_t index;
+
+    if (!track)
     {
-        return result;
+        return FALSE;
     }
-    result = PV_ByteBufferAppendByte(trackData, BANK_LSB);
-    if (result != BAE_NO_ERROR)
+    for (index = 0; index < track->metaEventCount; ++index)
     {
-        return result;
+        if (track->metaEvents[index].type == type)
+        {
+            return TRUE;
+        }
     }
-    result = PV_ByteBufferAppendByte(trackData, (unsigned char)(track->bank & 0x7F));
-    if (result != BAE_NO_ERROR)
+    return FALSE;
+}
+
+static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track,
+                                   ByteBuffer *trackData)
+{
+    MidiEventRecord *events;
+    uint32_t eventCount;
+    uint32_t eventIndex;
+    uint32_t noteIndex;
+    uint32_t previousTick;
+    uint16_t currentBank[BAE_MAX_MIDI_CHANNELS];
+    unsigned char currentProgram[BAE_MAX_MIDI_CHANNELS];
+    unsigned char explicitBankMsb[BAE_MAX_MIDI_CHANNELS];
+    unsigned char explicitBankLsb[BAE_MAX_MIDI_CHANNELS];
+    unsigned char explicitProgram[BAE_MAX_MIDI_CHANNELS];
+    uint16_t initChannel;
+    BAEResult result;
+
+    events = NULL;
+    eventCount = (track->noteCount * 2) + track->ccEventCount + track->sysexEventCount + track->auxEventCount + track->metaEventCount;
+    if (track->name && track->name[0] && !PV_TrackHasMetaType(track, 0x03))
     {
-        return result;
+        result = PV_AppendMetaEvent(trackData, 0, 0x03, track->name, (uint32_t)strlen(track->name));
+        if (result != BAE_NO_ERROR)
+        {
+            return result;
+        }
     }
-    result = PV_ByteBufferAppendVLQ(trackData, 0);
-    if (result != BAE_NO_ERROR)
+    for (initChannel = 0; initChannel < BAE_MAX_MIDI_CHANNELS; ++initChannel)
     {
-        return result;
+        currentBank[initChannel] = 0;
+        currentProgram[initChannel] = 0;
+        explicitBankMsb[initChannel] = 0;
+        explicitBankLsb[initChannel] = 0;
+        explicitProgram[initChannel] = 0;
     }
-    result = PV_ByteBufferAppendByte(trackData, (unsigned char)(CONTROL_CHANGE | (track->channel & 0x0F)));
-    if (result != BAE_NO_ERROR)
+    for (eventIndex = 0; eventIndex < track->auxEventCount; ++eventIndex)
     {
-        return result;
+        BAERmfEditorAuxEvent const *aux;
+        unsigned char channel;
+        unsigned char eventType;
+
+        aux = &track->auxEvents[eventIndex];
+        channel = (unsigned char)(aux->status & 0x0F);
+        eventType = (unsigned char)(aux->status & 0xF0);
+        if (eventType == CONTROL_CHANGE && aux->dataBytes >= 2)
+        {
+            if (aux->data1 == BANK_MSB)
+            {
+                explicitBankMsb[channel] = 1;
+            }
+            else if (aux->data1 == BANK_LSB)
+            {
+                explicitBankLsb[channel] = 1;
+            }
+        }
+        else if (eventType == PROGRAM_CHANGE && aux->dataBytes >= 1)
+        {
+            explicitProgram[channel] = 1;
+        }
     }
-    result = PV_ByteBufferAppendByte(trackData, 7);
-    if (result != BAE_NO_ERROR)
-    {
-        return result;
-    }
-    result = PV_ByteBufferAppendByte(trackData, track->volume);
-    if (result != BAE_NO_ERROR)
-    {
-        return result;
-    }
-    result = PV_ByteBufferAppendVLQ(trackData, 0);
-    if (result != BAE_NO_ERROR)
-    {
-        return result;
-    }
-    result = PV_ByteBufferAppendByte(trackData, (unsigned char)(CONTROL_CHANGE | (track->channel & 0x0F)));
-    if (result != BAE_NO_ERROR)
-    {
-        return result;
-    }
-    result = PV_ByteBufferAppendByte(trackData, 10);
-    if (result != BAE_NO_ERROR)
-    {
-        return result;
-    }
-    result = PV_ByteBufferAppendByte(trackData, track->pan);
-    if (result != BAE_NO_ERROR)
-    {
-        return result;
-    }
-    result = PV_ByteBufferAppendVLQ(trackData, 0);
-    if (result != BAE_NO_ERROR)
-    {
-        return result;
-    }
-    result = PV_ByteBufferAppendByte(trackData, (unsigned char)(PROGRAM_CHANGE | (track->channel & 0x0F)));
-    if (result != BAE_NO_ERROR)
-    {
-        return result;
-    }
-    result = PV_ByteBufferAppendByte(trackData, track->program);
-    if (result != BAE_NO_ERROR)
-    {
-        return result;
-    }
-    currentBank = track->bank;
-    currentProgram = track->program;
 
     if (eventCount)
     {
@@ -2593,19 +4156,36 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track, ByteBuffer *t
             transposedNote = PV_ClampMidi7Bit((int32_t)note->note + (int32_t)track->transpose);
 
             noteOn->tick = note->startTick;
+            noteOn->sequence = note->noteOnOrder;
             noteOn->order = 2;
-            noteOn->status = (unsigned char)(NOTE_ON | (track->channel & 0x0F));
+            noteOn->status = (unsigned char)(NOTE_ON | (note->channel & 0x0F));
             noteOn->data1 = transposedNote;
             noteOn->data2 = note->velocity;
+            noteOn->dataBytes = 2;
+            noteOn->blob = NULL;
+            noteOn->blobSize = 0;
             noteOn->bank = note->bank;
             noteOn->program = note->program;
-            noteOn->applyProgram = 1;
+            noteOn->applyProgram = (unsigned char)((explicitBankMsb[note->channel] ||
+                                                    explicitBankLsb[note->channel] ||
+                                                    explicitProgram[note->channel]) ? 0 : 1);
 
             noteOff->tick = note->startTick + note->durationTicks;
+            noteOff->sequence = note->noteOffOrder;
             noteOff->order = 0;
-            noteOff->status = (unsigned char)(NOTE_OFF | (track->channel & 0x0F));
+            if ((note->noteOffStatus & 0xF0) == NOTE_ON || (note->noteOffStatus & 0xF0) == NOTE_OFF)
+            {
+                noteOff->status = note->noteOffStatus;
+            }
+            else
+            {
+                noteOff->status = (unsigned char)(NOTE_OFF | (note->channel & 0x0F));
+            }
             noteOff->data1 = transposedNote;
-            noteOff->data2 = 0;
+            noteOff->data2 = note->noteOffVelocity;
+            noteOff->dataBytes = 2;
+            noteOff->blob = NULL;
+            noteOff->blobSize = 0;
             noteOff->bank = note->bank;
             noteOff->program = note->program;
             noteOff->applyProgram = 0;
@@ -2616,23 +4196,96 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track, ByteBuffer *t
 
             ccEvent = &events[(track->noteCount * 2) + eventIndex];
             ccEvent->tick = track->ccEvents[eventIndex].tick;
+            ccEvent->sequence = track->ccEvents[eventIndex].eventOrder;
             ccEvent->order = 1;
-            if (track->ccEvents[eventIndex].cc == 0xFF)
+            if (track->ccEvents[eventIndex].cc == BAE_EDITOR_CC_PITCH_BEND_SENTINEL)
             {
                 /* Pitch bend: sentinel cc=0xFF, value=LSB, data2=MSB */
                 ccEvent->status = (unsigned char)(PITCH_BEND | (track->channel & 0x0F));
                 ccEvent->data1 = track->ccEvents[eventIndex].value;
                 ccEvent->data2 = track->ccEvents[eventIndex].data2;
+                ccEvent->dataBytes = 2;
+            }
+            else if (track->ccEvents[eventIndex].cc == BAE_EDITOR_CC_CHANNEL_AFTERTOUCH_SENTINEL)
+            {
+                ccEvent->status = (unsigned char)(CHANNEL_AFTERTOUCH | (track->channel & 0x0F));
+                ccEvent->data1 = track->ccEvents[eventIndex].value;
+                ccEvent->data2 = 0;
+                ccEvent->dataBytes = 1;
+            }
+            else if (track->ccEvents[eventIndex].cc == BAE_EDITOR_CC_POLY_AFTERTOUCH_SENTINEL)
+            {
+                ccEvent->status = (unsigned char)(POLY_AFTERTOUCH | (track->channel & 0x0F));
+                ccEvent->data1 = track->ccEvents[eventIndex].value;
+                ccEvent->data2 = track->ccEvents[eventIndex].data2;
+                ccEvent->dataBytes = 2;
             }
             else
             {
                 ccEvent->status = (unsigned char)(CONTROL_CHANGE | (track->channel & 0x0F));
                 ccEvent->data1 = track->ccEvents[eventIndex].cc;
                 ccEvent->data2 = track->ccEvents[eventIndex].value;
+                ccEvent->dataBytes = 2;
             }
+            ccEvent->blob = NULL;
+            ccEvent->blobSize = 0;
             ccEvent->bank = track->bank;
             ccEvent->program = track->program;
             ccEvent->applyProgram = 0;
+        }
+        for (eventIndex = 0; eventIndex < track->sysexEventCount; ++eventIndex)
+        {
+            MidiEventRecord *sysEvent;
+
+            sysEvent = &events[(track->noteCount * 2) + track->ccEventCount + eventIndex];
+            sysEvent->tick = track->sysexEvents[eventIndex].tick;
+            sysEvent->sequence = track->sysexEvents[eventIndex].eventOrder;
+            sysEvent->order = 1;
+            sysEvent->status = track->sysexEvents[eventIndex].status;
+            sysEvent->data1 = 0;
+            sysEvent->data2 = 0;
+            sysEvent->dataBytes = 0;
+            sysEvent->blob = track->sysexEvents[eventIndex].data;
+            sysEvent->blobSize = track->sysexEvents[eventIndex].size;
+            sysEvent->bank = track->bank;
+            sysEvent->program = track->program;
+            sysEvent->applyProgram = 0;
+        }
+        for (eventIndex = 0; eventIndex < track->auxEventCount; ++eventIndex)
+        {
+            MidiEventRecord *auxEvent;
+
+            auxEvent = &events[(track->noteCount * 2) + track->ccEventCount + track->sysexEventCount + eventIndex];
+            auxEvent->tick = track->auxEvents[eventIndex].tick;
+            auxEvent->sequence = track->auxEvents[eventIndex].eventOrder;
+            auxEvent->order = 1;
+            auxEvent->status = track->auxEvents[eventIndex].status;
+            auxEvent->data1 = track->auxEvents[eventIndex].data1;
+            auxEvent->data2 = track->auxEvents[eventIndex].data2;
+            auxEvent->dataBytes = track->auxEvents[eventIndex].dataBytes;
+            auxEvent->blob = NULL;
+            auxEvent->blobSize = 0;
+            auxEvent->bank = track->bank;
+            auxEvent->program = track->program;
+            auxEvent->applyProgram = 0;
+        }
+        for (eventIndex = 0; eventIndex < track->metaEventCount; ++eventIndex)
+        {
+            MidiEventRecord *metaEvent;
+
+            metaEvent = &events[(track->noteCount * 2) + track->ccEventCount + track->sysexEventCount + track->auxEventCount + eventIndex];
+            metaEvent->tick = track->metaEvents[eventIndex].tick;
+            metaEvent->sequence = track->metaEvents[eventIndex].eventOrder;
+            metaEvent->order = 1;
+            metaEvent->status = 0xFF;
+            metaEvent->data1 = track->metaEvents[eventIndex].type;
+            metaEvent->data2 = 0;
+            metaEvent->dataBytes = 0;
+            metaEvent->blob = track->metaEvents[eventIndex].data;
+            metaEvent->blobSize = track->metaEvents[eventIndex].size;
+            metaEvent->bank = track->bank;
+            metaEvent->program = track->program;
+            metaEvent->applyProgram = 0;
         }
         qsort(events, eventCount, sizeof(MidiEventRecord), PV_CompareMidiEvents);
         previousTick = 0;
@@ -2645,7 +4298,10 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track, ByteBuffer *t
             delta = event->tick - previousTick;
             if (event->applyProgram)
             {
-                if (event->bank != currentBank)
+                unsigned char eventChannel;
+
+                eventChannel = (unsigned char)(event->status & 0x0F);
+                if (event->bank != currentBank[eventChannel])
                 {
                     result = PV_ByteBufferAppendVLQ(trackData, delta);
                     if (result != BAE_NO_ERROR)
@@ -2653,7 +4309,7 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track, ByteBuffer *t
                         XDisposePtr(events);
                         return result;
                     }
-                    result = PV_ByteBufferAppendByte(trackData, (unsigned char)(CONTROL_CHANGE | (track->channel & 0x0F)));
+                    result = PV_ByteBufferAppendByte(trackData, (unsigned char)(CONTROL_CHANGE | eventChannel));
                     if (result != BAE_NO_ERROR)
                     {
                         XDisposePtr(events);
@@ -2677,7 +4333,7 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track, ByteBuffer *t
                         XDisposePtr(events);
                         return result;
                     }
-                    result = PV_ByteBufferAppendByte(trackData, (unsigned char)(CONTROL_CHANGE | (track->channel & 0x0F)));
+                    result = PV_ByteBufferAppendByte(trackData, (unsigned char)(CONTROL_CHANGE | eventChannel));
                     if (result != BAE_NO_ERROR)
                     {
                         XDisposePtr(events);
@@ -2696,9 +4352,9 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track, ByteBuffer *t
                         return result;
                     }
                     delta = 0;
-                    currentBank = event->bank;
+                    currentBank[eventChannel] = event->bank;
                 }
-                if (event->program != currentProgram)
+                if (event->program != currentProgram[eventChannel])
                 {
                     result = PV_ByteBufferAppendVLQ(trackData, delta);
                     if (result != BAE_NO_ERROR)
@@ -2706,7 +4362,7 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track, ByteBuffer *t
                         XDisposePtr(events);
                         return result;
                     }
-                    result = PV_ByteBufferAppendByte(trackData, (unsigned char)(PROGRAM_CHANGE | (track->channel & 0x0F)));
+                    result = PV_ByteBufferAppendByte(trackData, (unsigned char)(PROGRAM_CHANGE | eventChannel));
                     if (result != BAE_NO_ERROR)
                     {
                         XDisposePtr(events);
@@ -2719,7 +4375,7 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track, ByteBuffer *t
                         return result;
                     }
                     delta = 0;
-                    currentProgram = event->program;
+                    currentProgram[eventChannel] = event->program;
                 }
             }
             result = PV_ByteBufferAppendVLQ(trackData, delta);
@@ -2734,17 +4390,65 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track, ByteBuffer *t
                 XDisposePtr(events);
                 return result;
             }
-            result = PV_ByteBufferAppendByte(trackData, event->data1);
-            if (result != BAE_NO_ERROR)
+            if (event->status == 0xFF)
             {
-                XDisposePtr(events);
-                return result;
+                result = PV_ByteBufferAppendByte(trackData, event->data1);
+                if (result != BAE_NO_ERROR)
+                {
+                    XDisposePtr(events);
+                    return result;
+                }
+                result = PV_ByteBufferAppendVLQ(trackData, event->blobSize);
+                if (result != BAE_NO_ERROR)
+                {
+                    XDisposePtr(events);
+                    return result;
+                }
+                if (event->blobSize > 0)
+                {
+                    result = PV_ByteBufferAppend(trackData, event->blob, event->blobSize);
+                    if (result != BAE_NO_ERROR)
+                    {
+                        XDisposePtr(events);
+                        return result;
+                    }
+                }
             }
-            result = PV_ByteBufferAppendByte(trackData, event->data2);
-            if (result != BAE_NO_ERROR)
+            else if (event->status == 0xF0 || event->status == 0xF7)
             {
-                XDisposePtr(events);
-                return result;
+                result = PV_ByteBufferAppendVLQ(trackData, event->blobSize);
+                if (result != BAE_NO_ERROR)
+                {
+                    XDisposePtr(events);
+                    return result;
+                }
+                if (event->blobSize > 0)
+                {
+                    result = PV_ByteBufferAppend(trackData, event->blob, event->blobSize);
+                    if (result != BAE_NO_ERROR)
+                    {
+                        XDisposePtr(events);
+                        return result;
+                    }
+                }
+            }
+            else
+            {
+                result = PV_ByteBufferAppendByte(trackData, event->data1);
+                if (result != BAE_NO_ERROR)
+                {
+                    XDisposePtr(events);
+                    return result;
+                }
+                if (event->dataBytes > 1)
+                {
+                    result = PV_ByteBufferAppendByte(trackData, event->data2);
+                    if (result != BAE_NO_ERROR)
+                    {
+                        XDisposePtr(events);
+                        return result;
+                    }
+                }
             }
             previousTick = event->tick;
         }
@@ -2761,9 +4465,11 @@ static BAEResult PV_BuildMidiFile(BAERmfEditorDocument *document, ByteBuffer *ou
     BAEResult result;
     uint32_t trackIndex;
     uint16_t trackCount;
+    XBOOL useTrack0AsConductor;
 
     XSetMemory(&tempoTrack, sizeof(tempoTrack), 0);
     XSetMemory(&trackData, sizeof(trackData), 0);
+    useTrack0AsConductor = (document->trackCount > 0 && PV_IsMetaOnlyConductorTrack(&document->tracks[0])) ? TRUE : FALSE;
     result = PV_ByteBufferAppend(output, "MThd", 4);
     if (result != BAE_NO_ERROR)
     {
@@ -2779,7 +4485,7 @@ static BAEResult PV_BuildMidiFile(BAERmfEditorDocument *document, ByteBuffer *ou
     {
         return result;
     }
-    trackCount = (uint16_t)(document->trackCount + 1);
+    trackCount = (uint16_t)(document->trackCount + (useTrack0AsConductor ? 0 : 1));
     result = PV_ByteBufferAppendBE16(output, trackCount);
     if (result != BAE_NO_ERROR)
     {
@@ -2790,30 +4496,40 @@ static BAEResult PV_BuildMidiFile(BAERmfEditorDocument *document, ByteBuffer *ou
     {
         return result;
     }
-    result = PV_BuildTempoTrack(document, &tempoTrack);
-    if (result != BAE_NO_ERROR)
+    if (!useTrack0AsConductor)
     {
+        result = PV_BuildTempoTrack(document, &tempoTrack);
+        if (result != BAE_NO_ERROR)
+        {
+            PV_ByteBufferDispose(&tempoTrack);
+            return result;
+        }
+        result = PV_ByteBufferAppend(output, "MTrk", 4);
+        if (result == BAE_NO_ERROR)
+        {
+            result = PV_ByteBufferAppendBE32(output, tempoTrack.size);
+        }
+        if (result == BAE_NO_ERROR)
+        {
+            result = PV_ByteBufferAppend(output, tempoTrack.data, tempoTrack.size);
+        }
         PV_ByteBufferDispose(&tempoTrack);
-        return result;
-    }
-    result = PV_ByteBufferAppend(output, "MTrk", 4);
-    if (result == BAE_NO_ERROR)
-    {
-        result = PV_ByteBufferAppendBE32(output, tempoTrack.size);
-    }
-    if (result == BAE_NO_ERROR)
-    {
-        result = PV_ByteBufferAppend(output, tempoTrack.data, tempoTrack.size);
-    }
-    PV_ByteBufferDispose(&tempoTrack);
-    if (result != BAE_NO_ERROR)
-    {
-        return result;
+        if (result != BAE_NO_ERROR)
+        {
+            return result;
+        }
     }
     for (trackIndex = 0; trackIndex < document->trackCount; ++trackIndex)
     {
         XSetMemory(&trackData, sizeof(trackData), 0);
-        result = PV_BuildTrackData(&document->tracks[trackIndex], &trackData);
+        if (useTrack0AsConductor && trackIndex == 0)
+        {
+            result = PV_BuildConductorTrack(document, &document->tracks[trackIndex], &trackData);
+        }
+        else
+        {
+            result = PV_BuildTrackData(&document->tracks[trackIndex], &trackData);
+        }
         if (result != BAE_NO_ERROR)
         {
             PV_ByteBufferDispose(&trackData);
@@ -3507,7 +5223,7 @@ BAERmfEditorDocument *BAERmfEditorDocument_LoadFromFile(BAEPathName filePath)
     {
         return NULL;
     }
-    fileType = X_DetermineFileTypeByPath(filePath);
+    fileType = PV_DetermineEditorImportFileType(filePath);
     document = BAERmfEditorDocument_New();
     if (!document)
     {
@@ -3522,7 +5238,15 @@ BAERmfEditorDocument *BAERmfEditorDocument_LoadFromFile(BAEPathName filePath)
         if (result == BAE_NO_ERROR)
         {
             result = PV_LoadMidiBytesIntoDocument(document, data, dataSize);
+            if (result == BAE_NO_ERROR)
+            {
+                result = PV_SetDebugOriginalMidiData(document, data, dataSize);
+            }
             XDisposePtr(data);
+            if (result == BAE_NO_ERROR)
+            {
+                document->isPristine = TRUE;
+            }
         }
     }
     else if (fileType == BAE_RMF)
@@ -3564,6 +5288,9 @@ BAEResult BAERmfEditorDocument_Delete(BAERmfEditorDocument *document)
         {
             XDisposePtr(document->tracks[index].ccEvents);
         }
+        PV_FreeTrackSysExEvents(&document->tracks[index]);
+        PV_FreeTrackAuxEvents(&document->tracks[index]);
+        PV_FreeTrackMetaEvents(&document->tracks[index]);
     }
     if (document->tracks)
     {
@@ -3584,6 +5311,7 @@ BAEResult BAERmfEditorDocument_Delete(BAERmfEditorDocument *document)
     }
     PV_ClearTempoEvents(document);
     PV_FreeOriginalResources(document);
+    PV_FreeDebugOriginalMidiData(document);
     XDisposePtr(document);
     return BAE_NO_ERROR;
 }
@@ -3934,7 +5662,10 @@ BAEResult BAERmfEditorDocument_GetTrackPitchBendEventCount(BAERmfEditorDocument 
                                                            uint16_t trackIndex,
                                                            uint32_t *outCount)
 {
-    return BAERmfEditorDocument_GetTrackCCEventCount(document, trackIndex, 0xFF, outCount);
+    return BAERmfEditorDocument_GetTrackCCEventCount(document,
+                                                     trackIndex,
+                                                     BAE_EDITOR_CC_PITCH_BEND_SENTINEL,
+                                                     outCount);
 }
 
 BAEResult BAERmfEditorDocument_GetTrackPitchBendEvent(BAERmfEditorDocument const *document,
@@ -3955,7 +5686,10 @@ BAEResult BAERmfEditorDocument_GetTrackPitchBendEvent(BAERmfEditorDocument const
     {
         return BAE_PARAM_ERR;
     }
-    event = PV_FindTrackCCEventConst(track, 0xFF, eventIndex, NULL);
+    event = PV_FindTrackCCEventConst(track,
+                                     BAE_EDITOR_CC_PITCH_BEND_SENTINEL,
+                                     eventIndex,
+                                     NULL);
     if (!event)
     {
         return BAE_PARAM_ERR;
@@ -3984,7 +5718,7 @@ BAEResult BAERmfEditorDocument_AddTrackPitchBendEvent(BAERmfEditorDocument *docu
     }
     result = PV_AddCCEventToTrack(track,
                                   tick,
-                                  0xFF,
+                                  BAE_EDITOR_CC_PITCH_BEND_SENTINEL,
                                   (unsigned char)(value & 0x7F),
                                   (unsigned char)((value >> 7) & 0x7F));
     if (result == BAE_NO_ERROR)
@@ -4012,7 +5746,10 @@ BAEResult BAERmfEditorDocument_SetTrackPitchBendEvent(BAERmfEditorDocument *docu
     {
         return BAE_PARAM_ERR;
     }
-    event = PV_FindTrackCCEvent(track, 0xFF, eventIndex, NULL);
+    event = PV_FindTrackCCEvent(track,
+                                BAE_EDITOR_CC_PITCH_BEND_SENTINEL,
+                                eventIndex,
+                                NULL);
     if (!event)
     {
         return BAE_PARAM_ERR;
@@ -4029,7 +5766,10 @@ BAEResult BAERmfEditorDocument_DeleteTrackPitchBendEvent(BAERmfEditorDocument *d
                                                          uint16_t trackIndex,
                                                          uint32_t eventIndex)
 {
-    return BAERmfEditorDocument_DeleteTrackCCEvent(document, trackIndex, 0xFF, eventIndex);
+    return BAERmfEditorDocument_DeleteTrackCCEvent(document,
+                                                   trackIndex,
+                                                   BAE_EDITOR_CC_PITCH_BEND_SENTINEL,
+                                                   eventIndex);
 }
 
 BAEResult BAERmfEditorDocument_GetTempoBPM(BAERmfEditorDocument const *document, uint32_t *outBpm)
@@ -4186,6 +5926,7 @@ BAEResult BAERmfEditorDocument_SetTrackInfo(BAERmfEditorDocument *document,
                                             BAERmfEditorTrackInfo const *trackInfo)
 {
     BAERmfEditorTrack *track;
+    BAERmfEditorCCEvent *ccEvent;
     BAEResult result;
 
     if (!trackInfo)
@@ -4218,6 +5959,21 @@ BAEResult BAERmfEditorDocument_SetTrackInfo(BAERmfEditorDocument *document,
     track->pan = trackInfo->pan;
     track->volume = trackInfo->volume;
     track->transpose = trackInfo->transpose;
+
+    /* Preserve original CC timing when editing track volume/pan. If the track already
+       has CC7/CC10 events, update the first event value in place instead of forcing a
+       new startup controller on export. */
+    ccEvent = PV_FindTrackCCEvent(track, 7, 0, NULL);
+    if (ccEvent)
+    {
+        ccEvent->value = trackInfo->volume;
+    }
+    ccEvent = PV_FindTrackCCEvent(track, 10, 0, NULL);
+    if (ccEvent)
+    {
+        ccEvent->value = trackInfo->pan;
+    }
+
     PV_MarkDocumentDirty(document);
     return BAE_NO_ERROR;
 }
@@ -4243,6 +5999,9 @@ BAEResult BAERmfEditorDocument_DeleteTrack(BAERmfEditorDocument *document,
         XDisposePtr(track->ccEvents);
         track->ccEvents = NULL;
     }
+    PV_FreeTrackSysExEvents(track);
+    PV_FreeTrackAuxEvents(track);
+    PV_FreeTrackMetaEvents(track);
     if (trackIndex + 1 < document->trackCount)
     {
         XBlockMove(&document->tracks[trackIndex + 1],
@@ -4279,7 +6038,18 @@ BAEResult BAERmfEditorDocument_AddNote(BAERmfEditorDocument *document,
     {
         BAEResult result;
 
-        result = PV_AddNoteToTrack(track, startTick, durationTicks, note, velocity, track->bank, track->program);
+        result = PV_AddNoteToTrack(track,
+                       startTick,
+                       durationTicks,
+                       note,
+                       velocity,
+                       track->channel,
+                       track->bank,
+                                   track->program,
+                                   (unsigned char)(NOTE_OFF | (track->channel & 0x0F)),
+                                   0,
+                                   track->nextEventOrder++,
+                                   track->nextEventOrder++);
         if (result == BAE_NO_ERROR)
         {
             PV_MarkDocumentDirty(document);
@@ -4392,6 +6162,13 @@ BAEResult BAERmfEditorDocument_AddSampleFromFile(BAERmfEditorDocument *document,
     AudioFileType audioFileType;
     XFILENAME fileName;
     GM_Waveform *waveform;
+    GM_Waveform *compressedWaveform;
+    XBOOL isCompressedImport;
+    SndCompressionType sourceCompressionType;
+    XPTR encodedData;
+    int32_t encodedSize;
+    XPTR passthroughSndData;
+    int32_t passthroughSndSize;
     OPErr opErr;
     BAEResult result;
     uint32_t index;
@@ -4411,8 +6188,8 @@ BAEResult BAERmfEditorDocument_AddSampleFromFile(BAERmfEditorDocument *document,
             return BAE_ALREADY_EXISTS;
         }
     }
-    fileType = X_DetermineFileTypeByPath(filePath);
-    if (fileType != BAE_WAVE_TYPE && fileType != BAE_AIFF_TYPE)
+    fileType = PV_DetermineEditorImportFileType(filePath);
+    if (PV_TranslateEditorFileType(fileType) == FILE_INVALID_TYPE)
     {
         return BAE_BAD_FILE_TYPE;
     }
@@ -4431,12 +6208,80 @@ BAEResult BAERmfEditorDocument_AddSampleFromFile(BAERmfEditorDocument *document,
         }
         return BAE_BAD_FILE;
     }
+    waveform->baseMidiPitch = setup->rootKey;
+
+    compressedWaveform = NULL;
+    isCompressedImport = PV_IsEditorCompressedImportType(fileType);
+    sourceCompressionType = C_NONE;
+    encodedData = NULL;
+    encodedSize = 0;
+    passthroughSndData = NULL;
+    passthroughSndSize = 0;
+    if (isCompressedImport)
+    {
+        if (PV_CompressionTypeFromEditorFileType(fileType, &sourceCompressionType) != BAE_NO_ERROR)
+        {
+            GM_FreeWaveform(waveform);
+            return BAE_BAD_FILE_TYPE;
+        }
+
+#if USE_MPEG_DECODER == TRUE || USE_MPEG_ENCODER == TRUE
+        if (fileType == BAE_MPEG_TYPE)
+        {
+            compressedWaveform = GM_ReadFileIntoMemory(&fileName, audioFileType, FALSE, &opErr);
+            if (!compressedWaveform || opErr != NO_ERR)
+            {
+                if (compressedWaveform)
+                {
+                    GM_FreeWaveform(compressedWaveform);
+                }
+                GM_FreeWaveform(waveform);
+                return BAE_BAD_FILE;
+            }
+            result = PV_CreatePassthroughSndFromCompressedWaveform(waveform,
+                                                                    compressedWaveform,
+                                                                    CS_DEFAULT,
+                                                                    &passthroughSndData,
+                                                                    &passthroughSndSize);
+            GM_FreeWaveform(compressedWaveform);
+        }
+        else
+#endif
+        {
+            result = PV_ReadFileIntoMemory(&fileName, &encodedData, &encodedSize);
+            if (result == BAE_NO_ERROR)
+            {
+                result = PV_CreatePassthroughSndFromEncodedData(waveform,
+                                                                encodedData,
+                                                                encodedSize,
+                                                                sourceCompressionType,
+                                                                CS_DEFAULT,
+                                                                &passthroughSndData,
+                                                                &passthroughSndSize);
+            }
+            if (encodedData)
+            {
+                XDisposePtr(encodedData);
+                encodedData = NULL;
+            }
+        }
+        if (result != BAE_NO_ERROR)
+        {
+            GM_FreeWaveform(waveform);
+            return result;
+        }
+    }
+
     result = PV_GrowBuffer((void **)&document->samples,
                            &document->sampleCapacity,
                            sizeof(BAERmfEditorSample),
                            document->sampleCount + 1);
     if (result != BAE_NO_ERROR)
     {
+        if (passthroughSndData)
+        {
+            XDisposePtr(passthroughSndData);
+        }
         GM_FreeWaveform(waveform);
         return result;
     }
@@ -4447,15 +6292,22 @@ BAEResult BAERmfEditorDocument_AddSampleFromFile(BAERmfEditorDocument *document,
     sample->rootKey = setup->rootKey;
     sample->lowKey = setup->lowKey;
     sample->highKey = setup->highKey;
-    sample->sourceCompressionType = waveform->compressionType;
+    sample->sourceCompressionType = isCompressedImport ? (uint32_t)sourceCompressionType
+                                                       : waveform->compressionType;
     sample->sourceCompressionSubType = CS_DEFAULT;
-    sample->targetCompressionType = BAE_EDITOR_COMPRESSION_PCM;
-    sample->originalSndData = NULL;
-    sample->originalSndSize = 0;
+    sample->targetCompressionType = isCompressedImport ? BAE_EDITOR_COMPRESSION_DONT_CHANGE : BAE_EDITOR_COMPRESSION_PCM;
+    sample->originalSndData = passthroughSndData;
+    sample->originalSndSize = passthroughSndSize;
     sample->displayName = PV_DuplicateString(setup->displayName ? setup->displayName : filePath);
     sample->sourcePath = PV_DuplicateString(filePath);
     if (!sample->displayName || !sample->sourcePath)
     {
+        if (sample->originalSndData)
+        {
+            XDisposePtr(sample->originalSndData);
+            sample->originalSndData = NULL;
+            sample->originalSndSize = 0;
+        }
         PV_FreeString(&sample->displayName);
         PV_FreeString(&sample->sourcePath);
         GM_FreeWaveform(waveform);
@@ -4719,15 +6571,23 @@ BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *docum
     AudioFileType audioFileType;
     XFILENAME fileName;
     GM_Waveform *waveform;
+    GM_Waveform *compressedWaveform;
+    XBOOL isCompressedImport;
+    SndCompressionType sourceCompressionType;
+    XPTR encodedData;
+    int32_t encodedSize;
+    XPTR passthroughSndData;
+    int32_t passthroughSndSize;
     OPErr opErr;
+    BAEResult result;
     char *pathCopy;
 
     if (!document || !filePath || sampleIndex >= document->sampleCount)
     {
         return BAE_PARAM_ERR;
     }
-    fileType = X_DetermineFileTypeByPath(filePath);
-    if (fileType != BAE_WAVE_TYPE && fileType != BAE_AIFF_TYPE)
+    fileType = PV_DetermineEditorImportFileType(filePath);
+    if (PV_TranslateEditorFileType(fileType) == FILE_INVALID_TYPE)
     {
         return BAE_BAD_FILE_TYPE;
     }
@@ -4747,9 +6607,75 @@ BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *docum
         return BAE_BAD_FILE;
     }
 
+    compressedWaveform = NULL;
+    isCompressedImport = PV_IsEditorCompressedImportType(fileType);
+    sourceCompressionType = C_NONE;
+    encodedData = NULL;
+    encodedSize = 0;
+    passthroughSndData = NULL;
+    passthroughSndSize = 0;
+    if (isCompressedImport)
+    {
+        if (PV_CompressionTypeFromEditorFileType(fileType, &sourceCompressionType) != BAE_NO_ERROR)
+        {
+            GM_FreeWaveform(waveform);
+            return BAE_BAD_FILE_TYPE;
+        }
+
+#if USE_MPEG_DECODER == TRUE || USE_MPEG_ENCODER == TRUE
+        if (fileType == BAE_MPEG_TYPE)
+        {
+            compressedWaveform = GM_ReadFileIntoMemory(&fileName, audioFileType, FALSE, &opErr);
+            if (!compressedWaveform || opErr != NO_ERR)
+            {
+                if (compressedWaveform)
+                {
+                    GM_FreeWaveform(compressedWaveform);
+                }
+                GM_FreeWaveform(waveform);
+                return BAE_BAD_FILE;
+            }
+            result = PV_CreatePassthroughSndFromCompressedWaveform(waveform,
+                                                                    compressedWaveform,
+                                                                    CS_DEFAULT,
+                                                                    &passthroughSndData,
+                                                                    &passthroughSndSize);
+            GM_FreeWaveform(compressedWaveform);
+        }
+        else
+#endif
+        {
+            result = PV_ReadFileIntoMemory(&fileName, &encodedData, &encodedSize);
+            if (result == BAE_NO_ERROR)
+            {
+                result = PV_CreatePassthroughSndFromEncodedData(waveform,
+                                                                encodedData,
+                                                                encodedSize,
+                                                                sourceCompressionType,
+                                                                CS_DEFAULT,
+                                                                &passthroughSndData,
+                                                                &passthroughSndSize);
+            }
+            if (encodedData)
+            {
+                XDisposePtr(encodedData);
+                encodedData = NULL;
+            }
+        }
+        if (result != BAE_NO_ERROR)
+        {
+            GM_FreeWaveform(waveform);
+            return result;
+        }
+    }
+
     pathCopy = PV_DuplicateString(filePath);
     if (!pathCopy)
     {
+        if (passthroughSndData)
+        {
+            XDisposePtr(passthroughSndData);
+        }
         GM_FreeWaveform(waveform);
         return BAE_MEMORY_ERR;
     }
@@ -4773,7 +6699,9 @@ BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *docum
         sample->originalSndData = NULL;
         sample->originalSndSize = 0;
     }
-    sample->targetCompressionType = BAE_EDITOR_COMPRESSION_PCM;
+    sample->targetCompressionType = isCompressedImport ? BAE_EDITOR_COMPRESSION_DONT_CHANGE : BAE_EDITOR_COMPRESSION_PCM;
+    sample->originalSndData = passthroughSndData;
+    sample->originalSndSize = passthroughSndSize;
 
     sample->sampleInfo.bitSize = waveform->bitSize;
     sample->sampleInfo.channels = waveform->channels;
@@ -4783,7 +6711,8 @@ BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *docum
     sample->sampleInfo.startLoop = waveform->startLoop;
     sample->sampleInfo.endLoop = waveform->endLoop;
     sample->sampleInfo.sampledRate = (BAE_UNSIGNED_FIXED)waveform->sampledRate;
-    sample->sourceCompressionType = waveform->compressionType;
+    sample->sourceCompressionType = isCompressedImport ? (uint32_t)sourceCompressionType
+                                                       : waveform->compressionType;
     sample->sourceCompressionSubType = CS_DEFAULT;
     if (outSampleInfo)
     {
@@ -5249,6 +7178,7 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
         PV_ByteBufferDispose(&midiData);
         return result;
     }
+    PV_DebugReportMidiRoundTripDiff(document, &midiData);
     XConvertPathToXFILENAME(filePath, &name);
     result = PV_PrepareResourceFilePath(&name, resourceID);
     BAE_STDERR("[RMF Save] PrepareResourceFilePath result=%d\n", (int)result);
@@ -5450,6 +7380,7 @@ BAEResult BAERmfEditorDocument_SaveAsMidi(BAERmfEditorDocument *document,
         PV_ByteBufferDispose(&midiData);
         return result;
     }
+    PV_DebugReportMidiRoundTripDiff(document, &midiData);
     XConvertPathToXFILENAME(filePath, &name);
     fileRef = XFileOpenForWrite(&name, TRUE);
     if (!fileRef)

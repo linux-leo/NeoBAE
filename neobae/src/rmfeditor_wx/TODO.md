@@ -13,9 +13,14 @@
 - ~~Store and show exact quality setting (eg VORBIS 32kbps, 64kbps, etc)~~
 - ~~Implement OPUS samples, and OPUS also triggers ZMF format~~
 - ~~Add OPUS 16k and 32k options to engine and sample editor~~
-- Allow import of supported compressed samples (mp3, ogg, flac, vorbis, opus).
-  - Custom samples will change the meaning of "Don't Change" for the compression.
-  - We won't know the exact quality setting but thats OK, so long as we know the codec.
+- ~~Allow import of supported compressed samples (mp3, ogg, flac, vorbis, opus)~~
+- ~~MIDI event timing is not preserved properly~~
+- ~~MIDI data is incorrectly stored and exported~~
+- Instrument configuration
+  - ADSR
+  - LFO
+  - envelope filters
+  - interpolation
 - Replace tempfile RMF preview playback with in-memory ZMF playback
 - Piano roll should center vertical on MIDI content not just scroll to bottom
 - Metadata Editor
@@ -27,11 +32,11 @@
   - Should be compressed before saving and decompressed when loading
      - Use zlib since we already depend on it via dependancy chain
   - Possible file extension: `.nbs`
-- Instrument configuration
-  - ADSR
-  - LFO
-  - envelope filters
-  - interpolation
+- Resizable tracks
+- Advanced note editor (channel, filters, etc)
+- Add 'duration' to note/event edit dialogs
+- Allow configuration of SysEx and 'non-standard' CC commands
+- Start from nothing (currently the editor requires you to load a file)
 - Enhanced Exporting
   - Currently we list all tracks and allow exporting a single track.
   - We should enable channel exporting in the same manner.

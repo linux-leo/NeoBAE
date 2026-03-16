@@ -1011,6 +1011,7 @@ private:
     }
 
     bool ReplaceSampleFromPath(uint32_t sampleIndex, wxString const &path) {
+        BAEResult result;
         BAESampleInfo sampleInfo;
         wxScopedCharBuffer utf8Path;
 
@@ -1018,10 +1019,22 @@ private:
             return false;
         }
         utf8Path = path.utf8_str();
-        return BAERmfEditorDocument_ReplaceSampleFromFile(m_document,
-                                                          sampleIndex,
-                                                          const_cast<char *>(utf8Path.data()),
-                                                          &sampleInfo) == BAE_NO_ERROR;
+        result = BAERmfEditorDocument_ReplaceSampleFromFile(m_document,
+                                                            sampleIndex,
+                                                            const_cast<char *>(utf8Path.data()),
+                                                            &sampleInfo);
+        if (result == BAE_BAD_FILE_TYPE) {
+            wxMessageBox("Unsupported sample codec. Supported imports are PCM WAV/AIFF, MP3, Ogg Vorbis, FLAC, and Opus.",
+                         "Embedded Instruments",
+                         wxOK | wxICON_ERROR,
+                         this);
+            return false;
+        }
+        if (result != BAE_NO_ERROR) {
+            wxMessageBox("Failed to replace sample.", "Embedded Instruments", wxOK | wxICON_ERROR, this);
+            return false;
+        }
+        return true;
     }
 
     static uint16_t DisplayBankFromInternal(uint16_t internalBank) {
@@ -2161,10 +2174,11 @@ private:
                     "Add Embedded Instrument Sample",
                             wxEmptyString,
                             wxEmptyString,
-                            "Audio files (*.wav;*.aif;*.aiff)|*.wav;*.aif;*.aiff|All files (*.*)|*.*",
+                            "Supported audio (*.wav;*.aif;*.aiff;*.mp3;*.ogg;*.flac;*.opus)|*.wav;*.aif;*.aiff;*.mp3;*.ogg;*.flac;*.opus|All files (*.*)|*.*",
                             wxFD_OPEN | wxFD_FILE_MUST_EXIST);
         BAERmfEditorSampleSetup setup;
         BAESampleInfo info;
+        BAEResult addResult;
         long program;
         long root;
 
@@ -2190,10 +2204,18 @@ private:
         setup.lowKey = 0;
         setup.highKey = 127;
         setup.displayName = const_cast<char *>(utf8Name.data());
-        if (BAERmfEditorDocument_AddSampleFromFile(m_document,
-                                                   const_cast<char *>(utf8Path.data()),
-                                                   &setup,
-                                                   &info) != BAE_NO_ERROR) {
+        addResult = BAERmfEditorDocument_AddSampleFromFile(m_document,
+                                                            const_cast<char *>(utf8Path.data()),
+                                                            &setup,
+                                                            &info);
+        if (addResult != BAE_NO_ERROR) {
+            if (addResult == BAE_BAD_FILE_TYPE) {
+                wxMessageBox("Unsupported sample codec. Supported imports are PCM WAV/AIFF, MP3, Ogg Vorbis, FLAC, and Opus.",
+                             "Embedded Instruments",
+                             wxOK | wxICON_ERROR,
+                             this);
+                return;
+            }
             wxMessageBox("Failed to add sample.", "Embedded Instruments", wxOK | wxICON_ERROR, this);
             return;
         }

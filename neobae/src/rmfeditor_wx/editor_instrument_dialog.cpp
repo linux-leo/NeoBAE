@@ -654,7 +654,7 @@ private:
                             "Replace Embedded Sample",
                             wxEmptyString,
                             wxEmptyString,
-                            "Audio files (*.wav;*.aif;*.aiff)|*.wav;*.aif;*.aiff|All files (*.*)|*.*",
+                            "Supported audio (*.wav;*.aif;*.aiff;*.mp3;*.ogg;*.flac;*.opus)|*.wav;*.aif;*.aiff;*.mp3;*.ogg;*.flac;*.opus|All files (*.*)|*.*",
                             wxFD_OPEN | wxFD_FILE_MUST_EXIST);
         if (!m_replaceCallback || m_currentLocalIndex < 0 || m_currentLocalIndex >= static_cast<int>(m_sampleIndices.size())) {
             return;
@@ -664,7 +664,6 @@ private:
         }
         sampleIndex = m_sampleIndices[static_cast<size_t>(m_currentLocalIndex)];
         if (!m_replaceCallback(sampleIndex, dialog.GetPath())) {
-            wxMessageBox("Failed to replace sample.", "Embedded Instruments", wxOK | wxICON_ERROR, this);
             return;
         }
         {
@@ -673,14 +672,11 @@ private:
                 EditedSample &sample = m_samples[static_cast<size_t>(m_currentLocalIndex)];
                 sample.sourcePath = info.sourcePath ? wxString::FromUTF8(info.sourcePath) : wxString();
                 sample.sampleInfo = info.sampleInfo;
-                sample.compressionType = BAE_EDITOR_COMPRESSION_PCM;
-                sample.hasOriginalData = false;
-                /* Update the compression UI: "Don't Change" now unavailable */
-                m_compressionChoice->SetString(0, "Don't Change (N/A)");
-                m_compressionChoice->SetSelection(CompressionTypeToChoiceIndex(BAE_EDITOR_COMPRESSION_PCM));
-                m_codecLabel->SetLabel("(source: no compression)");
+                sample.compressionType = info.compressionType;
+                sample.hasOriginalData = (info.hasOriginalData == TRUE);
             }
         }
+        LoadLocalSample(m_currentLocalIndex);
         RefreshWaveform();
     }
 
