@@ -194,6 +194,7 @@ public:
         m_pauseButton = new wxButton(editorPanel, wxID_ANY, "Pause/Resume");
         m_stopButton = new wxButton(editorPanel, wxID_ANY, "Stop");
         m_playScopeChoice = new wxChoice(editorPanel, wxID_ANY);
+        m_previewVolumeSlider = new wxSlider(editorPanel, wxID_ANY, 100, 0, 100, wxDefaultPosition, wxSize(120, -1), wxSL_HORIZONTAL);
         m_playScopeChoice->Append("All Tracks");
         m_playScopeChoice->Append("Current Track");
         m_playScopeChoice->SetSelection(0);
@@ -216,7 +217,9 @@ public:
         transportSizer->Add(m_pauseButton, 0, wxRIGHT, 8);
         transportSizer->Add(m_stopButton, 0, wxRIGHT, 8);
         transportSizer->Add(new wxStaticText(editorPanel, wxID_ANY, "Playback"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
-        transportSizer->Add(m_playScopeChoice, 0, wxALIGN_CENTER_VERTICAL, 0);
+        transportSizer->Add(m_playScopeChoice, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
+        transportSizer->Add(new wxStaticText(editorPanel, wxID_ANY, "Preview Vol"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        transportSizer->Add(m_previewVolumeSlider, 0, wxALIGN_CENTER_VERTICAL, 0);
 
         m_positionSlider = new wxSlider(editorPanel, wxID_ANY, 0, 0, 1000, wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL);
         m_positionLabel = new wxStaticText(editorPanel, wxID_ANY, "0:00.0 / 0:00.0");
@@ -270,6 +273,7 @@ public:
         m_playButton->Bind(wxEVT_BUTTON, &MainFrame::OnPlay, this);
         m_pauseButton->Bind(wxEVT_BUTTON, &MainFrame::OnPauseResume, this);
         m_stopButton->Bind(wxEVT_BUTTON, &MainFrame::OnStop, this);
+        m_previewVolumeSlider->Bind(wxEVT_SLIDER, &MainFrame::OnPreviewVolumeChanged, this);
         m_positionSlider->Bind(wxEVT_SLIDER, &MainFrame::OnSeekSlider, this);
         Bind(wxEVT_MENU, &MainFrame::OnTrackAdd, this, ID_TrackAdd);
         Bind(wxEVT_MENU, &MainFrame::OnTrackDelete, this, ID_TrackDelete);
@@ -317,6 +321,7 @@ private:
     wxButton *m_pauseButton;
     wxButton *m_stopButton;
     wxChoice *m_playScopeChoice;
+    wxSlider *m_previewVolumeSlider;
     wxSlider *m_positionSlider;
     wxStaticText *m_positionLabel;
     wxListBox *m_sampleList;
@@ -339,6 +344,23 @@ private:
     wxString m_pendingUndoLabel;
     bool m_hasPendingUndo;
     bool m_restoringUndo;
+
+    BAE_UNSIGNED_FIXED GetPreviewVolumeFixed() const {
+        int percent = 100;
+        if (m_previewVolumeSlider) {
+            percent = m_previewVolumeSlider->GetValue();
+        }
+        percent = std::clamp(percent, 0, 100);
+        return static_cast<BAE_UNSIGNED_FIXED>((static_cast<double>(percent) / 100.0) * 65536.0);
+    }
+
+    double GetPreviewVolumeScale() const {
+        int percent = 100;
+        if (m_previewVolumeSlider) {
+            percent = m_previewVolumeSlider->GetValue();
+        }
+        return static_cast<double>(std::clamp(percent, 0, 100)) / 100.0;
+    }
 
     void ClearUndoHistory() {
         m_undoStack.clear();
@@ -1013,6 +1035,7 @@ private:
             splitVolume = 100;
         }
         double volumeScale = static_cast<double>(splitVolume) / 100.0;
+        volumeScale *= GetPreviewVolumeScale();
         BAE_UNSIGNED_FIXED volume = static_cast<BAE_UNSIGNED_FIXED>(std::clamp(0.7 * volumeScale,
                                              0.0,
                                              4.0) * 65536.0);
@@ -2057,6 +2080,7 @@ private:
             wxMessageBox("Failed to start playback.", "Playback Error", wxOK | wxICON_ERROR, this);
             return;
         }
+        BAESong_SetVolume(m_playbackSong, GetPreviewVolumeFixed());
         {
             BAE_UNSIGNED_FIXED tempoFactor;
             BAEResult tempoSetResult;
@@ -2099,6 +2123,12 @@ private:
         } else {
             BAESong_Pause(m_playbackSong);
             SetStatusText("Paused", 0);
+        }
+    }
+
+    void OnPreviewVolumeChanged(wxCommandEvent &) {
+        if (m_playbackSong) {
+            BAESong_SetVolume(m_playbackSong, GetPreviewVolumeFixed());
         }
     }
 
@@ -2326,6 +2356,9 @@ private:
         BAERmfEditorSampleSetup setup;
         BAESampleInfo info;
         uint32_t newSampleIndex;
+        uint32_t sampleCount;
+        bool usedPrograms[128];
+        long defaultProgram;
         long program;
         long root;
 
@@ -2333,10 +2366,28 @@ private:
             return;
         }
 
+        sampleCount = 0;
+        memset(usedPrograms, 0, sizeof(usedPrograms));
+        BAERmfEditorDocument_GetSampleCount(m_document, &sampleCount);
+        for (uint32_t i = 0; i < sampleCount; ++i) {
+            BAERmfEditorSampleInfo sampleInfo;
+            if (BAERmfEditorDocument_GetSampleInfo(m_document, i, &sampleInfo) == BAE_NO_ERROR &&
+                sampleInfo.program < 128) {
+                usedPrograms[sampleInfo.program] = true;
+            }
+        }
+        defaultProgram = 0;
+        for (int i = 0; i < 128; ++i) {
+            if (!usedPrograms[i]) {
+                defaultProgram = i;
+                break;
+            }
+        }
+
         program = wxGetNumberFromUser("MIDI program for new instrument (0-127)",
                                       "Program",
                                       "New Instrument",
-                                      0,
+                                      defaultProgram,
                                       0,
                                       127,
                                       this);
@@ -2460,6 +2511,7 @@ private:
         uint32_t primarySampleIndex;
         uint32_t instID;
         BAERmfEditorInstrumentExtInfo extInfo;
+        std::vector<uint32_t> deletedSampleIndices;
         std::vector<uint32_t> sampleIndices;
         std::vector<InstrumentEditorEditedSample> editedSamples;
         bool accepted;
@@ -2499,6 +2551,7 @@ private:
             [this](uint32_t sampleIndex, wxString const &path) {
                 return ExportSampleToPath(sampleIndex, path);
             },
+            &deletedSampleIndices,
             &sampleIndices,
             &editedSamples);
 
@@ -2551,6 +2604,14 @@ private:
             if (!ok) {
                 wxMessageBox("Failed to apply instrument sample edits.",
                              "Edit Instrument", wxOK | wxICON_ERROR, this);
+            }
+        }
+
+        if (!deletedSampleIndices.empty()) {
+            std::sort(deletedSampleIndices.begin(), deletedSampleIndices.end());
+            deletedSampleIndices.erase(std::unique(deletedSampleIndices.begin(), deletedSampleIndices.end()), deletedSampleIndices.end());
+            for (auto it = deletedSampleIndices.rbegin(); it != deletedSampleIndices.rend(); ++it) {
+                BAERmfEditorDocument_DeleteSample(m_document, *it);
             }
         }
 

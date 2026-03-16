@@ -34,6 +34,7 @@ bool ShowInstrumentExtEditorDialog(
     std::function<bool(uint32_t, wxString const &)> replaceCallback,
     std::function<bool(uint32_t, wxString const &)> exportCallback,
     /* Output: sample edits (same as existing dialog) */
+    std::vector<uint32_t> *outDeletedSampleIndices,
     std::vector<uint32_t> *outSampleIndices,
     std::vector<struct InstrumentEditorEditedSample> *outEditedSamples);
 

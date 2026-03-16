@@ -565,6 +565,8 @@ public:
         return m_extInfo;
     }
 
+    std::vector<uint32_t> const &GetDeletedSampleIndices() const { return m_deletedSampleIndices; }
+
     std::vector<uint32_t> const &GetSampleIndices() const { return m_sampleIndices; }
 
     std::vector<EditedSample> const &GetEditedSamples() {
@@ -577,6 +579,7 @@ private:
     uint32_t m_instID;
     BAERmfEditorInstrumentExtInfo m_extInfo;
     bool m_extInfoModified;
+    std::vector<uint32_t> m_deletedSampleIndices;
     std::vector<uint32_t> m_sampleIndices;
     std::vector<EditedSample> m_samples;
     int m_currentLocalIndex;
@@ -630,6 +633,7 @@ private:
     wxChoice *m_compressionChoice;
     wxStaticText *m_codecLabel;
     WaveformPanelExt *m_waveformPanel;
+    wxButton *m_deleteSampleButton;
 
     /* ---- Instrument Tab ---- */
     void BuildInstrumentTab() {
@@ -994,12 +998,16 @@ private:
             wxBoxSizer *row = new wxBoxSizer(wxHORIZONTAL);
             wxButton *replaceBtn = new wxButton(page, wxID_ANY, "Replace");
             wxButton *exportBtn = new wxButton(page, wxID_ANY, "Save As...");
+            m_deleteSampleButton = new wxButton(page, wxID_ANY, "Delete Sample");
             row->Add(replaceBtn, 0, wxRIGHT, 8);
             row->Add(exportBtn, 0);
+            row->AddStretchSpacer();
+            row->Add(m_deleteSampleButton, 0, wxLEFT, 8);
             sizer->Add(row, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
             replaceBtn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { OnReplaceSample(); });
             exportBtn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { OnExportSample(); });
+            m_deleteSampleButton->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { OnDeleteSample(); });
         }
 
         /* Waveform */
@@ -1021,6 +1029,7 @@ private:
         m_loopEndSpin->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { OnLoopPointChanged(); });
         m_lowSpin->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { ClampRange(); });
         m_highSpin->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { ClampRange(); });
+        UpdateSampleButtonState();
     }
 
     void OnNewSample() {
@@ -1051,6 +1060,49 @@ private:
         m_splitChoice->Append(BuildSplitLabel(newIdx));
         m_splitChoice->SetSelection(newIdx);
         LoadLocalSample(newIdx);
+        UpdateSampleButtonState();
+    }
+
+    void OnDeleteSample() {
+        int localIndex;
+        uint32_t sampleIndex;
+        wxString confirmMessage;
+
+        if (m_samples.size() <= 1) {
+            wxMessageBox("Cannot delete the last sample from this editor. Use Delete Instrument instead.",
+                         "Delete Sample",
+                         wxOK | wxICON_INFORMATION,
+                         this);
+            return;
+        }
+        if (m_currentLocalIndex < 0 || m_currentLocalIndex >= (int)m_samples.size()) {
+            return;
+        }
+
+        SaveCurrentSampleFromUI();
+        localIndex = m_currentLocalIndex;
+        sampleIndex = m_sampleIndices[(size_t)localIndex];
+        confirmMessage = wxString::Format("Delete sample '%s' (%d-%d)?",
+                                          m_samples[(size_t)localIndex].displayName,
+                                          (int)m_samples[(size_t)localIndex].lowKey,
+                                          (int)m_samples[(size_t)localIndex].highKey);
+        if (wxMessageBox(confirmMessage, "Delete Sample", wxYES_NO | wxICON_WARNING, this) != wxYES) {
+            return;
+        }
+
+        if (sampleIndex != static_cast<uint32_t>(-1)) {
+            m_deletedSampleIndices.push_back(sampleIndex);
+        }
+        m_samples.erase(m_samples.begin() + localIndex);
+        m_sampleIndices.erase(m_sampleIndices.begin() + localIndex);
+        m_splitChoice->Delete(localIndex);
+
+        if (localIndex >= (int)m_samples.size()) {
+            localIndex = (int)m_samples.size() - 1;
+        }
+        m_splitChoice->SetSelection(localIndex);
+        LoadLocalSample(localIndex);
+        UpdateSampleButtonState();
     }
 
     /* ---- Sample data management (mirrors existing dialog logic) ---- */
@@ -1061,6 +1113,14 @@ private:
             if (ch >= 32 && ch != 127) clean.Append(ch);
         }
         return clean.IsEmpty() ? wxString("Embedded Sample") : clean;
+    }
+
+    void UpdateSampleButtonState() {
+        if (m_deleteSampleButton) {
+            m_deleteSampleButton->Enable(m_samples.size() > 1 &&
+                                         m_currentLocalIndex >= 0 &&
+                                         m_currentLocalIndex < (int)m_samples.size());
+        }
     }
 
     void BuildSampleGroup(uint32_t primarySampleIndex) {
@@ -1202,6 +1262,7 @@ private:
             UpdateLoopInfoLabel(s);
         }
         RefreshWaveform();
+        UpdateSampleButtonState();
     }
 
     void ClampRange() {
@@ -1375,6 +1436,7 @@ bool ShowInstrumentExtEditorDialog(
     std::function<void()> stopCallback,
     std::function<bool(uint32_t, wxString const &)> replaceCallback,
     std::function<bool(uint32_t, wxString const &)> exportCallback,
+    std::vector<uint32_t> *outDeletedSampleIndices,
     std::vector<uint32_t> *outSampleIndices,
     std::vector<InstrumentEditorEditedSample> *outEditedSamples) {
 
@@ -1390,6 +1452,7 @@ bool ShowInstrumentExtEditorDialog(
         return false;
     }
 
+    if (outDeletedSampleIndices) *outDeletedSampleIndices = dialog.GetDeletedSampleIndices();
     if (outSampleIndices) *outSampleIndices = dialog.GetSampleIndices();
     if (outEditedSamples) *outEditedSamples = dialog.GetEditedSamples();
     return true;

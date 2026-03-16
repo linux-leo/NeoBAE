@@ -124,6 +124,17 @@ static std::vector<AutomationLaneDescriptor> const &GetAutomationLanes() {
     return lanes;
 }
 
+static uint16_t DisplayBankFromInternal(uint16_t internalBank) {
+    if (internalBank >= 128) {
+        return static_cast<uint16_t>((internalBank >> 7) & 0x7F);
+    }
+    return internalBank;
+}
+
+static uint16_t InternalBankFromDisplay(uint16_t displayBank) {
+    return static_cast<uint16_t>((displayBank & 0x7F) << 7);
+}
+
 class NoteEditDialog final : public wxDialog {
 public:
     explicit NoteEditDialog(wxWindow *parent, BAERmfEditorNoteInfo const &noteInfo)
@@ -135,7 +146,7 @@ public:
         m_durationText = new wxTextCtrl(this, wxID_ANY, wxString::Format("%u", static_cast<unsigned>(noteInfo.durationTicks)));
         m_noteSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, noteInfo.note);
         m_velocitySpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, noteInfo.velocity);
-        m_bankSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 16383, noteInfo.bank);
+        m_bankSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, DisplayBankFromInternal(noteInfo.bank));
         m_programSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, noteInfo.program);
 
         gridSizer->Add(new wxStaticText(this, wxID_ANY, "Start Tick"), 0, wxALIGN_CENTER_VERTICAL);
@@ -171,7 +182,7 @@ public:
         outNoteInfo->durationTicks = static_cast<uint32_t>(durationTicks);
         outNoteInfo->note = static_cast<unsigned char>(m_noteSpin->GetValue());
         outNoteInfo->velocity = static_cast<unsigned char>(m_velocitySpin->GetValue());
-        outNoteInfo->bank = static_cast<uint16_t>(m_bankSpin->GetValue());
+        outNoteInfo->bank = InternalBankFromDisplay(static_cast<uint16_t>(m_bankSpin->GetValue()));
         outNoteInfo->program = static_cast<unsigned char>(m_programSpin->GetValue());
         return true;
     }
@@ -187,18 +198,29 @@ private:
 
 class AutomationEditDialog final : public wxDialog {
 public:
-    AutomationEditDialog(wxWindow *parent, wxString const &title, wxString const &valueLabel, uint32_t tick, int value, int maxValue)
+    AutomationEditDialog(wxWindow *parent,
+                         wxString const &title,
+                         wxString const &valueLabel,
+                         uint32_t tick,
+                         int value,
+                         int maxValue,
+                         uint32_t durationTicks,
+                         bool allowDurationEdit)
         : wxDialog(parent, wxID_ANY, title, wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {
         wxBoxSizer *rootSizer = new wxBoxSizer(wxVERTICAL);
-        wxFlexGridSizer *gridSizer = new wxFlexGridSizer(2, 4, 8, 8);
+        wxFlexGridSizer *gridSizer = new wxFlexGridSizer(2, 6, 8, 8);
 
         m_tickText = new wxTextCtrl(this, wxID_ANY, wxString::Format("%u", static_cast<unsigned>(tick)));
         m_valueSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, maxValue, value);
+        m_durationText = new wxTextCtrl(this, wxID_ANY, wxString::Format("%u", static_cast<unsigned>(durationTicks)));
+        m_durationText->Enable(allowDurationEdit);
 
         gridSizer->Add(new wxStaticText(this, wxID_ANY, "Tick"), 0, wxALIGN_CENTER_VERTICAL);
         gridSizer->Add(m_tickText, 1, wxEXPAND);
         gridSizer->Add(new wxStaticText(this, wxID_ANY, valueLabel), 0, wxALIGN_CENTER_VERTICAL);
         gridSizer->Add(m_valueSpin, 1, wxEXPAND);
+        gridSizer->Add(new wxStaticText(this, wxID_ANY, "Duration"), 0, wxALIGN_CENTER_VERTICAL);
+        gridSizer->Add(m_durationText, 1, wxEXPAND);
         gridSizer->AddGrowableCol(1, 1);
 
         rootSizer->Add(gridSizer, 1, wxEXPAND | wxALL, 12);
@@ -206,23 +228,28 @@ public:
         SetSizerAndFit(rootSizer);
     }
 
-    bool GetValues(uint32_t *outTick, int *outValue) const {
+    bool GetValues(uint32_t *outTick, int *outValue, uint32_t *outDurationTicks) const {
         unsigned long long tick;
+        unsigned long long durationTicks;
 
-        if (!outTick || !outValue) {
+        if (!outTick || !outValue || !outDurationTicks) {
             return false;
         }
-        if (!m_tickText->GetValue().ToULongLong(&tick)) {
+        if (!m_tickText->GetValue().ToULongLong(&tick) ||
+            !m_durationText->GetValue().ToULongLong(&durationTicks) ||
+            durationTicks == 0) {
             return false;
         }
         *outTick = static_cast<uint32_t>(tick);
         *outValue = m_valueSpin->GetValue();
+        *outDurationTicks = static_cast<uint32_t>(durationTicks);
         return true;
     }
 
 private:
     wxTextCtrl *m_tickText;
     wxSpinCtrl *m_valueSpin;
+    wxTextCtrl *m_durationText;
 };
 
 class PianoRollPanel final : public wxScrolledWindow {
@@ -273,7 +300,7 @@ public:
         m_dragging = false;
         m_dragMode = DragMode::None;
         UpdateVirtualSize();
-        ScrollToBottom();
+        ScrollToMidiContentCenter();
         Refresh();
     }
 
@@ -287,7 +314,7 @@ public:
         m_dragging = false;
         m_dragMode = DragMode::None;
         UpdateVirtualSize();
-        ScrollToBottom();
+        ScrollToMidiContentCenter();
         Refresh();
     }
 
@@ -1017,6 +1044,9 @@ private:
     bool EditAutomationEvent(int laneIndex, uint32_t eventIndex) {
         std::vector<AutomationLaneDescriptor> const &lanes = GetAutomationLanes();
         AutomationLaneDescriptor const &lane = lanes[laneIndex];
+        uint32_t eventCount;
+        uint32_t durationTicks;
+        bool hasFollowingEvent;
         uint32_t tick;
         int value;
         wxString valueLabel;
@@ -1025,6 +1055,10 @@ private:
         if (!m_document || !IsAutomationLaneVisible(laneIndex)) {
             return false;
         }
+        eventCount = 0;
+        durationTicks = kSnapTicks;
+        hasFollowingEvent = false;
+        GetAutomationEventCount(laneIndex, &eventCount);
         if (lane.kind == AutomationLaneKind::Tempo) {
             uint32_t microsecondsPerQuarter;
 
@@ -1062,11 +1096,20 @@ private:
             valueLabel = "Value";
             title = "Edit Pitch Bend Event";
         }
-        AutomationEditDialog dialog(this, title, valueLabel, tick, value, lane.maxValue);
+        if (eventIndex + 1 < eventCount) {
+            uint32_t nextTick;
+            int nextValue;
+
+            if (GetAutomationEvent(laneIndex, eventIndex + 1, &nextTick, &nextValue) && nextTick > tick) {
+                durationTicks = nextTick - tick;
+                hasFollowingEvent = true;
+            }
+        }
+        AutomationEditDialog dialog(this, title, valueLabel, tick, value, lane.maxValue, durationTicks, hasFollowingEvent);
         if (dialog.ShowModal() != wxID_OK) {
             return false;
         }
-        if (!dialog.GetValues(&tick, &value)) {
+        if (!dialog.GetValues(&tick, &value, &durationTicks)) {
             wxMessageBox("Invalid automation values.", title, wxOK | wxICON_ERROR, this);
             return false;
         }
@@ -1099,6 +1142,40 @@ private:
                                                             static_cast<uint16_t>(value)) != BAE_NO_ERROR) {
                 CancelUndoAction();
                 wxMessageBox("Failed to update pitch bend event.", title, wxOK | wxICON_ERROR, this);
+                return false;
+            }
+        }
+        if (hasFollowingEvent) {
+            uint32_t nextTickCurrent;
+            uint32_t nextNextTick;
+            uint32_t minNextTick;
+            uint32_t maxNextTick;
+            uint32_t requestedNextTick;
+            int nextValueCurrent;
+
+            if (!GetAutomationEvent(laneIndex, eventIndex + 1, &nextTickCurrent, &nextValueCurrent)) {
+                CancelUndoAction();
+                wxMessageBox("Failed to read following event.", title, wxOK | wxICON_ERROR, this);
+                return false;
+            }
+
+            nextNextTick = GetDocumentEndTick();
+            if (eventIndex + 2 < eventCount) {
+                int nextNextValue;
+                GetAutomationEvent(laneIndex, eventIndex + 2, &nextNextTick, &nextNextValue);
+            }
+
+            minNextTick = tick + kSnapTicks;
+            maxNextTick = minNextTick;
+            if (nextNextTick > kSnapTicks) {
+                maxNextTick = std::max(minNextTick, nextNextTick - kSnapTicks);
+            }
+            requestedNextTick = tick + std::max<uint32_t>(kSnapTicks, durationTicks);
+            requestedNextTick = std::clamp(requestedNextTick, minNextTick, maxNextTick);
+
+            if (!SetAutomationEvent(laneIndex, eventIndex + 1, requestedNextTick, nextValueCurrent)) {
+                CancelUndoAction();
+                wxMessageBox("Failed to update event duration.", title, wxOK | wxICON_ERROR, this);
                 return false;
             }
         }
@@ -1185,6 +1262,62 @@ private:
         virtualSize = GetVirtualSize();
         targetTop = std::max(0, virtualSize.GetHeight() - clientHeight);
         Scroll(0, targetTop / scrollPixelsY);
+    }
+
+    void ScrollToMidiContentCenter() {
+        uint32_t noteCount;
+        int minNote;
+        int maxNote;
+        int scrollPixelsX;
+        int scrollPixelsY;
+        int viewUnitsX;
+        int viewUnitsY;
+        int clientHeight;
+        int contentTop;
+        int contentBottom;
+        int contentCenter;
+        int targetTop;
+        wxSize virtualSize;
+
+        if (!HasTrack()) {
+            ScrollToBottom();
+            return;
+        }
+
+        noteCount = 0;
+        if (BAERmfEditorDocument_GetNoteCount(m_document, static_cast<uint16_t>(m_selectedTrack), &noteCount) != BAE_NO_ERROR || noteCount == 0) {
+            ScrollToBottom();
+            return;
+        }
+
+        minNote = 127;
+        maxNote = 0;
+        for (uint32_t i = 0; i < noteCount; ++i) {
+            BAERmfEditorNoteInfo noteInfo;
+            if (GetNoteInfo(i, &noteInfo)) {
+                minNote = std::min(minNote, static_cast<int>(noteInfo.note));
+                maxNote = std::max(maxNote, static_cast<int>(noteInfo.note));
+            }
+        }
+
+        GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
+        if (scrollPixelsY <= 0) {
+            return;
+        }
+        GetViewStart(&viewUnitsX, &viewUnitsY);
+        clientHeight = GetClientSize().GetHeight();
+        if (clientHeight <= 0) {
+            return;
+        }
+
+        contentTop = NoteToY(maxNote);
+        contentBottom = NoteToY(minNote) + kNoteHeight;
+        contentCenter = (contentTop + contentBottom) / 2;
+        targetTop = contentCenter - (clientHeight / 2);
+
+        virtualSize = GetVirtualSize();
+        targetTop = std::clamp(targetTop, 0, std::max(0, virtualSize.GetHeight() - clientHeight));
+        Scroll(viewUnitsX, targetTop / scrollPixelsY);
     }
 
     uint32_t GetDocumentEndTick() const {
