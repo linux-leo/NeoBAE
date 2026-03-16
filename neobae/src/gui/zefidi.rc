@@ -15,6 +15,7 @@
 112 ICON "../icons/BAEFileType_OGG.ico"
 113 ICON "../icons/BAEFileType_MP2.ico"
 114 ICON "../icons/BAEFileType_MP3.ico"
+115 ICON "../icons/BAEFileType_ZMF.ico"
 
 
 // Version information
