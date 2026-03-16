@@ -42,6 +42,12 @@
 - ~~Metadata editor, and loss of metadata~~
 - ~~Replicate `Linn Groove 900.rmf` in preview player and export~~
 
+# 0.04 alpha
+- Start from nothing (currently the editor requires you to load a file)
+- Resizable tracks
+- Allow configuration of SysEx and 'non-standard' CC commands
+- Allow choosing encryption/compression options for MIDI data (cmid, ecmi, emid, midi)
+
 # Future
 - SESSIONS! Savable and loadable workspace sessions.
   - Session data should embed all resources (instruments, samples, midi, settings)
@@ -49,10 +55,7 @@
   - Should be compressed before saving and decompressed when loading
      - Use zlib since we already depend on it via dependancy chain
   - Possible file extension: `.nbs`
-- Resizable tracks
 - Advanced note editor (channel, filters, etc)
-- Allow configuration of SysEx and 'non-standard' CC commands
-- Start from nothing (currently the editor requires you to load a file)
 - Enhanced Exporting
   - Currently we list all tracks and allow exporting a single track.
   - We should enable channel exporting in the same manner.
