@@ -9,10 +9,10 @@
 - ~~We are embedding samples twice~~
 - ~~Create a new format (zmf) for RMFs with OGG/FLAC/OPUS samples (IREZ -> ZREZ)~~
 - ~~Editor should be able to save in both RMF and ZMF formats~~
-- Force editor to ZMF format if using FLAC/Vorbis samples
-- Allow import of supported compressed samples (mp3, ogg, flac, vorbis)
-- Implement OPUS samples
-
+- ~~Force editor to ZMF format if using FLAC/Vorbis samples~~
+- ~~Store and show exact quality setting (eg VORBIS 32kbps, 64kbps, etc)~~
+- Implement OPUS samples, and OPUS also triggers ZMF format
+- Allow import of supported compressed samples (mp3, ogg, flac, vorbis, opus)
 - Replace tempfile RMF preview playback with in-memory playback
 - Piano roll should center vertical on MIDI content not just scroll to bottom
 - Metadata Editor

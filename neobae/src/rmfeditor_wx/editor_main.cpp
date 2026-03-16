@@ -1631,15 +1631,10 @@ private:
     }
 
     void OnSaveAs(wxCommandEvent &) {
-        wxFileDialog dialog(this,
-                            "Save As RMF",
-                            wxEmptyString,
-                            wxEmptyString,
-                            "RMF files (*.rmf;*.zmf)|*.rmf;*.zmf",
-                            wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
         BAERmfEditorDocument *saveDoc;
         bool saveCurrentTrack;
         int selectedTrack;
+        bool requiresZmf;
 
         if (!m_document) {
             wxMessageBox("Nothing is loaded.", "Save As RMF", wxOK | wxICON_INFORMATION, this);
@@ -1658,6 +1653,17 @@ private:
                     "[nbstudio] SaveAs using single-track document selectedTrack=%d\n",
                     selectedTrack);
         }
+
+        requiresZmf = BAERmfEditorDocument_RequiresZmf(saveDoc) != 0;
+
+        wxFileDialog dialog(this,
+                            requiresZmf ? "Save As ZMF (required by FLAC/Vorbis samples)"
+                                        : "Save As RMF",
+                            wxEmptyString,
+                            wxEmptyString,
+                            requiresZmf ? "ZMF files (*.zmf)|*.zmf"
+                                        : "RMF files (*.rmf;*.zmf)|*.rmf;*.zmf",
+                            wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
         if (dialog.ShowModal() != wxID_OK) {
             if (saveDoc != m_document) {
                 BAERmfEditorDocument_Delete(saveDoc);
@@ -1666,6 +1672,14 @@ private:
         }
         {
             wxString targetPath = dialog.GetPath();
+            /* Enforce .zmf extension when document contains FLAC/Vorbis samples */
+            if (requiresZmf) {
+                wxFileName fn(targetPath);
+                if (fn.GetExt().Lower() != "zmf") {
+                    fn.SetExt("zmf");
+                    targetPath = fn.GetFullPath();
+                }
+            }
             wxScopedCharBuffer utf8TargetPath = targetPath.utf8_str();
             BAEResult saveResult;
             bool wroteTarget;

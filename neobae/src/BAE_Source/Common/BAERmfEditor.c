@@ -8,6 +8,105 @@
 #include "X_Formats.h"
 #include "X_Assert.h"
 
+#define BAE_RMF_EDITOR_SUBTYPE_TAG FOUR_CHAR('b','q','s','t')
+
+static void PV_CopyStringBounded(char *dst, uint32_t dstSize, char const *src)
+{
+    uint32_t i;
+
+    if (!dst || dstSize == 0)
+    {
+        return;
+    }
+    if (!src)
+    {
+        dst[0] = 0;
+        return;
+    }
+    i = 0;
+    while (i + 1 < dstSize && src[i] != 0)
+    {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = 0;
+}
+
+static uint32_t PV_GetStoredCompressionSubTypeFromSnd(XPTR sndData,
+                                                       int32_t sndSize,
+                                                       uint32_t compressionType)
+{
+    XSndHeader3 const *header3;
+    uint32_t marker;
+    uint32_t subType;
+
+    if (!sndData || sndSize < (int32_t)sizeof(XSndHeader3))
+    {
+        return (uint32_t)CS_DEFAULT;
+    }
+    if (compressionType != (uint32_t)C_VORBIS)
+    {
+        return (uint32_t)CS_DEFAULT;
+    }
+    header3 = (XSndHeader3 const *)sndData;
+    if (XGetShort(&header3->type) != XThirdSoundFormat)
+    {
+        return (uint32_t)CS_DEFAULT;
+    }
+    if ((uint32_t)XGetLong(&header3->sndBuffer.subType) != (uint32_t)C_VORBIS)
+    {
+        return (uint32_t)CS_DEFAULT;
+    }
+
+    marker = (uint32_t)XGetLong(&header3->sndBuffer.reserved3[0]);
+    if (marker != (uint32_t)BAE_RMF_EDITOR_SUBTYPE_TAG)
+    {
+        return (uint32_t)CS_DEFAULT;
+    }
+
+    subType = (uint32_t)XGetLong(&header3->sndBuffer.reserved3[1]);
+    switch ((SndCompressionSubType)subType)
+    {
+        case CS_VORBIS_32K:
+        case CS_VORBIS_64K:
+        case CS_VORBIS_96K:
+            return subType;
+        default:
+            break;
+    }
+    return (uint32_t)CS_DEFAULT;
+}
+
+static void PV_StoreCompressionSubTypeInSnd(XPTR sndData,
+                                            int32_t sndSize,
+                                            SndCompressionType compressionType,
+                                            SndCompressionSubType compressionSubType)
+{
+    XSndHeader3 *header3;
+
+    if (!sndData || sndSize < (int32_t)sizeof(XSndHeader3))
+    {
+        return;
+    }
+    if (compressionType != C_VORBIS)
+    {
+        return;
+    }
+
+    header3 = (XSndHeader3 *)sndData;
+    if (XGetShort(&header3->type) != XThirdSoundFormat)
+    {
+        return;
+    }
+    if ((uint32_t)XGetLong(&header3->sndBuffer.subType) != (uint32_t)C_VORBIS)
+    {
+        return;
+    }
+
+    XPutLong(&header3->sndBuffer.reserved3[0], (uint32_t)BAE_RMF_EDITOR_SUBTYPE_TAG);
+    XPutLong(&header3->sndBuffer.reserved3[1], (uint32_t)compressionSubType);
+}
+
 typedef struct BAERmfEditorNote
 {
     uint32_t startTick;
@@ -53,6 +152,7 @@ typedef struct BAERmfEditorSample
     unsigned char lowKey;
     unsigned char highKey;
     uint32_t sourceCompressionType;
+    uint32_t sourceCompressionSubType;
     BAESampleInfo sampleInfo;
     GM_Waveform *waveform;
     /* Compression control */
@@ -1504,6 +1604,9 @@ static BAEResult PV_AddEmbeddedSampleVariant(BAERmfEditorDocument *document,
     sample->lowKey = lowKey;
     sample->highKey = highKey;
     sample->sourceCompressionType = sdi.compressionType;
+    sample->sourceCompressionSubType = PV_GetStoredCompressionSubTypeFromSnd(sndCopy ? sndCopy : sndData,
+                                                                              sndSize,
+                                                                              sample->sourceCompressionType);
     sample->targetCompressionType = BAE_EDITOR_COMPRESSION_DONT_CHANGE;
     sample->originalSndData = sndCopy;
     sample->originalSndSize = sndCopy ? sndSize : 0;
@@ -2948,6 +3051,10 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 XDisposePtr((XPTR)sampleInstIDs);
                 return BAE_BAD_FILE;
             }
+            PV_StoreCompressionSubTypeInSnd(sndResource,
+                                            XGetPtrSize(sndResource),
+                                            compType,
+                                            compSubType);
         }
         XSetSoundBaseKey(sndResource, sample->rootKey);
         XSetSoundLoopPoints(sndResource, (int32_t)writeWaveform.startLoop, (int32_t)writeWaveform.endLoop);
@@ -4301,6 +4408,7 @@ BAEResult BAERmfEditorDocument_AddSampleFromFile(BAERmfEditorDocument *document,
     sample->lowKey = setup->lowKey;
     sample->highKey = setup->highKey;
     sample->sourceCompressionType = waveform->compressionType;
+    sample->sourceCompressionSubType = CS_DEFAULT;
     sample->targetCompressionType = BAE_EDITOR_COMPRESSION_PCM;
     sample->originalSndData = NULL;
     sample->originalSndSize = 0;
@@ -4392,6 +4500,7 @@ BAEResult BAERmfEditorDocument_AddEmptySample(BAERmfEditorDocument *document,
     sample->lowKey = setup->lowKey;
     sample->highKey = setup->highKey;
     sample->sourceCompressionType = C_NONE;
+    sample->sourceCompressionSubType = CS_DEFAULT;
     sample->targetCompressionType = BAE_EDITOR_COMPRESSION_PCM;
     sample->originalSndData = NULL;
     sample->originalSndSize = 0;
@@ -4635,6 +4744,7 @@ BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *docum
     sample->sampleInfo.endLoop = waveform->endLoop;
     sample->sampleInfo.sampledRate = (BAE_UNSIGNED_FIXED)waveform->sampledRate;
     sample->sourceCompressionType = waveform->compressionType;
+    sample->sourceCompressionSubType = CS_DEFAULT;
     if (outSampleInfo)
     {
         *outSampleInfo = sample->sampleInfo;
@@ -4700,10 +4810,31 @@ BAEResult BAERmfEditorDocument_GetSampleCodecDescription(BAERmfEditorDocument co
     }
     sample = &document->samples[sampleIndex];
     outCodec[0] = 0;
-    XGetCompressionName((int32_t)sample->sourceCompressionType, outCodec);
+    if (sample->sourceCompressionType == (uint32_t)C_VORBIS)
+    {
+        switch ((SndCompressionSubType)sample->sourceCompressionSubType)
+        {
+            case CS_VORBIS_32K:
+                PV_CopyStringBounded(outCodec, outCodecSize, "Ogg Vorbis 32k");
+                break;
+            case CS_VORBIS_64K:
+                PV_CopyStringBounded(outCodec, outCodecSize, "Ogg Vorbis 64k");
+                break;
+            case CS_VORBIS_96K:
+                PV_CopyStringBounded(outCodec, outCodecSize, "Ogg Vorbis 96k");
+                break;
+            default:
+                PV_CopyStringBounded(outCodec, outCodecSize, "Ogg Vorbis");
+                break;
+        }
+    }
+    else
+    {
+        XGetCompressionName((int32_t)sample->sourceCompressionType, outCodec);
+    }
     if (outCodec[0] == 0)
     {
-        XStrCpy(outCodec, "Unknown");
+        PV_CopyStringBounded(outCodec, outCodecSize, "Unknown");
     }
     if (XStrLen(outCodec) >= (int32_t)outCodecSize)
     {
@@ -4839,6 +4970,7 @@ static BAEResult PV_CopySampleEntry(BAERmfEditorDocument *dest,
     dstSample->lowKey = srcSample->lowKey;
     dstSample->highKey = srcSample->highKey;
     dstSample->sourceCompressionType = srcSample->sourceCompressionType;
+    dstSample->sourceCompressionSubType = srcSample->sourceCompressionSubType;
     dstSample->targetCompressionType = srcSample->targetCompressionType;
     dstSample->sampleInfo = srcSample->sampleInfo;
     dstSample->originalSndData = NULL;
@@ -4955,6 +5087,40 @@ BAEResult BAERmfEditorDocument_Validate(BAERmfEditorDocument *document)
         }
     }
     return BAE_NO_ERROR;
+}
+
+BAE_BOOL BAERmfEditorDocument_RequiresZmf(BAERmfEditorDocument const *document)
+{
+    uint32_t i;
+
+    if (!document)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < document->sampleCount; ++i)
+    {
+        BAERmfEditorSample const *sample = &document->samples[i];
+
+        switch (sample->targetCompressionType)
+        {
+            case BAE_EDITOR_COMPRESSION_VORBIS_32K:
+            case BAE_EDITOR_COMPRESSION_VORBIS_64K:
+            case BAE_EDITOR_COMPRESSION_VORBIS_96K:
+            case BAE_EDITOR_COMPRESSION_FLAC:
+                return TRUE;
+            case BAE_EDITOR_COMPRESSION_DONT_CHANGE:
+                /* Original data may contain a modern codec */
+                if (sample->sourceCompressionType == (uint32_t)C_FLAC ||
+                    sample->sourceCompressionType == (uint32_t)C_VORBIS)
+                {
+                    return TRUE;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    return FALSE;
 }
 
 BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,

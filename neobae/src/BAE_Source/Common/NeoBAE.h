@@ -3053,6 +3053,7 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
 BAEResult BAERmfEditorDocument_SaveAsMidi(BAERmfEditorDocument *document,
                                           BAEPathName filePath);
 BAEResult BAERmfEditorDocument_Validate(BAERmfEditorDocument *document);
+BAE_BOOL BAERmfEditorDocument_RequiresZmf(BAERmfEditorDocument const *document);
 
 /* Wrapper that accepts a BAEMixer (opaque) and returns whether the audio tail is active.
  * Implemented in NeoBAE.c so callers without access to sBAEMixer internals can use it. */
