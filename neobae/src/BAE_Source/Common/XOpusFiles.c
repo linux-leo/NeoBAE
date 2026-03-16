@@ -166,6 +166,8 @@ OPErr XGetOpusFileInfo(void *decoder_handle, UINT32 *samples, UINT32 *sample_rat
 long XDecodeOpusFile(void *decoder_handle, void *buffer, long buffer_size)
 {
     XOpusDecoder *decoder = (XOpusDecoder *)decoder_handle;
+    const OpusHead *head;
+    int channels;
     int samples_read;
     long bytes_read;
 
@@ -173,15 +175,18 @@ long XDecodeOpusFile(void *decoder_handle, void *buffer, long buffer_size)
         return 0;
     }
 
+    head = op_head(decoder->of, -1);
+    channels = (head && head->channel_count >= 1) ? head->channel_count : 1;
+
     // op_read returns number of samples read per channel
-    // We need to convert to bytes (16-bit samples)
+    // Convert to total bytes using current channel count.
     samples_read = op_read(decoder->of, (opus_int16 *)buffer, buffer_size / 2, NULL);
 
     if (samples_read < 0) {
         return 0;  // Error
     }
 
-    bytes_read = samples_read * 2;  // 16-bit samples
+    bytes_read = (long)samples_read * (long)channels * 2;  // 16-bit samples, all channels
     return bytes_read;
 }
 

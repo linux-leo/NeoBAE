@@ -1862,6 +1862,9 @@ XSoundFormat1*      header;
     UINT32          startFrame;
     UINT32          blockBytes;
     UINT32          blockCount;
+    UINT32          desiredDecodedFrames;
+    UINT32          sourceFramesForDuration;
+    UINT32          sourceRateHzForDuration;
     OPErr           err;
     XSndHeader3*    snd;
 
@@ -1869,6 +1872,14 @@ XSoundFormat1*      header;
         {
         XPTR            encodedData;
         UINT32          encodedBytes;
+
+            sourceFramesForDuration = src.waveFrames;
+            sourceRateHzForDuration = XFIXED_TO_UNSIGNED_LONG(src.sampledRate);
+            if (sourceRateHzForDuration == 0)
+            {
+                sourceRateHzForDuration = 44100;
+            }
+            desiredDecodedFrames = sourceFramesForDuration;
 
             if ((src.bitSize != 16) && (src.compressionType == C_NONE))
             {
@@ -1899,8 +1910,43 @@ XSoundFormat1*      header;
             }
             intermediateData = encodedData;
             src.theWaveform = encodedData;
-            decodedBytes = src.waveSize;
+            decodedBytes = desiredDecodedFrames * src.channels * sizeof(int16_t);
             src.waveSize = encodedBytes;
+
+            /* Sync metadata to the encoded MPEG stream. The encoder may change
+             * sample rate to the closest legal MPEG value. */
+            {
+                XMPEGDecodedData *encodedStream;
+                UINT32 encodedRateHz;
+
+                encodedStream = XOpenMPEGStreamFromMemory(src.theWaveform, src.waveSize, &err);
+                if (!encodedStream)
+                {
+                    XDisposePtr(intermediateData);
+                    return err;
+                }
+                src.sampledRate = encodedStream->sampleRate;
+                src.channels = (XBYTE)encodedStream->channels;
+                src.waveFrames = encodedStream->lengthInSamples;
+
+                encodedRateHz = XFIXED_TO_UNSIGNED_LONG(src.sampledRate);
+                if (encodedRateHz > 0 && sourceRateHzForDuration > 0 &&
+                    encodedRateHz != sourceRateHzForDuration)
+                {
+                    desiredDecodedFrames = (UINT32)((((uint64_t)sourceFramesForDuration * (uint64_t)encodedRateHz) +
+                                                     ((uint64_t)sourceRateHzForDuration / 2ULL)) /
+                                                    (uint64_t)sourceRateHzForDuration);
+                    if (desiredDecodedFrames == 0 && sourceFramesForDuration > 0)
+                    {
+                        desiredDecodedFrames = 1;
+                    }
+                }
+                /* Keep decodedBytes tied to source PCM duration so decode path
+                 * trims encoder tail padding instead of preserving it. */
+                decodedBytes = desiredDecodedFrames * src.channels * sizeof(int16_t);
+                XCloseMPEGStream(encodedStream);
+            }
+
             blockCount += 2;                        // the plus 2 compensates for BAE 1.5
                                                     // needing an extra buffer.
                                                     // What's important is that the decodedBytes
@@ -1944,6 +1990,9 @@ XSoundFormat1*      header;
             {
                 return err;
             }
+            src.sampledRate = stream->sampleRate;
+            src.channels = (XBYTE)stream->channels;
+            src.waveFrames = stream->lengthInSamples;
             blockBytes = stream->frameBufferSize;
             blockCount = stream->maxFrameBuffers + 2;
                                                     // the plus 2 compensates for BAE 1.5
@@ -2059,9 +2108,15 @@ XSoundFormat1*      header;
         /* Map subType to quality: CS_VORBIS_32K → -0.1, CS_VORBIS_64K → 0.0, CS_VORBIS_96K → 0.3 */
         switch (dstCompressionSubType)
         {
-        case CS_VORBIS_32K: quality = -0.1f; break;
-        case CS_VORBIS_96K: quality =  0.3f; break;
-        default:            quality =  0.0f; break; /* CS_VORBIS_64K / CS_DEFAULT */
+        case CS_VORBIS_32K:  quality = -0.10f; break;
+        case CS_VORBIS_48K:  quality = -0.05f; break;
+        case CS_VORBIS_80K:  quality =  0.15f; break;
+        case CS_VORBIS_96K:  quality =  0.30f; break;
+        case CS_VORBIS_128K: quality =  0.40f; break;
+        case CS_VORBIS_160K: quality =  0.55f; break;
+        case CS_VORBIS_192K: quality =  0.65f; break;
+        case CS_VORBIS_256K: quality =  0.80f; break;
+        default:             quality =  0.00f; break; /* CS_VORBIS_64K / CS_DEFAULT */
         }
 
         err = XEncodeVorbisToMemory(&pcmSrc, quality, &encodedData, &encodedBytes);
@@ -2119,8 +2174,11 @@ XSoundFormat1*      header;
 
         switch (dstCompressionSubType)
         {
+        case CS_OPUS_12K:  bitrate =  12000; break;
         case CS_OPUS_16K:  bitrate =  16000; break;
+        case CS_OPUS_24K:  bitrate =  24000; break;
         case CS_OPUS_32K:  bitrate =  32000; break;
+        case CS_OPUS_48K:  bitrate =  48000; break;
         case CS_OPUS_64K:  bitrate =  64000; break;
         case CS_OPUS_96K:  bitrate =  96000; break;
         case CS_OPUS_256K: bitrate = 256000; break;

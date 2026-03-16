@@ -21,6 +21,7 @@
 #include <wx/spinctrl.h>
 #include <wx/splitter.h>
 #include <wx/timer.h>
+#include <wx/treectrl.h>
 #include <wx/wx.h>
 
 extern "C" {
@@ -33,7 +34,7 @@ extern "C" {
 
 namespace {
 
-constexpr char const *kVersionString = "0.03 alpha";
+constexpr char const *kVersionString = "0.04 alpha";
 
 enum {
     ID_TrackAdd = wxID_HIGHEST + 200,
@@ -44,6 +45,8 @@ enum {
     ID_SampleDelete,
     ID_LoadBank,
     ID_UnloadBanks,
+    ID_PlaybackTimer,
+    ID_NotePreviewTimer,
 };
 
 struct UndoTempoEventState {
@@ -66,6 +69,7 @@ struct UndoDocumentState {
     uint32_t tempoBpm;
     std::vector<UndoTempoEventState> tempoEvents;
     std::vector<UndoTrackState> tracks;
+    std::vector<unsigned char> serializedDocument;
 };
 
 struct UndoEntry {
@@ -73,6 +77,32 @@ struct UndoEntry {
     UndoDocumentState before;
     UndoDocumentState after;
 };
+
+class SampleTreeItemData final : public wxTreeItemData {
+public:
+    SampleTreeItemData(uint32_t assetID, uint32_t sampleIndex, bool isAssetNode)
+        : m_assetID(assetID),
+          m_sampleIndex(sampleIndex),
+          m_isAssetNode(isAssetNode) {}
+
+    uint32_t GetAssetID() const { return m_assetID; }
+    uint32_t GetSampleIndex() const { return m_sampleIndex; }
+    bool IsAssetNode() const { return m_isAssetNode; }
+
+private:
+    uint32_t m_assetID;
+    uint32_t m_sampleIndex;
+    bool m_isAssetNode;
+};
+
+static unsigned char NormalizeRootKeyForSingleKeySplit(unsigned char rootKey,
+                                                        unsigned char lowKey,
+                                                        unsigned char highKey) {
+    if (rootKey == 0 && lowKey <= 127 && highKey <= 127 && lowKey == highKey) {
+        return lowKey;
+    }
+    return rootKey;
+}
 
 static bool NoteInfoEquals(BAERmfEditorNoteInfo const &left, BAERmfEditorNoteInfo const &right) {
     return left.startTick == right.startTick &&
@@ -84,6 +114,14 @@ static bool NoteInfoEquals(BAERmfEditorNoteInfo const &left, BAERmfEditorNoteInf
 }
 
 static bool UndoSnapshotsEqual(UndoDocumentState const &left, UndoDocumentState const &right) {
+    if (!left.serializedDocument.empty() && !right.serializedDocument.empty()) {
+        if (left.serializedDocument.size() != right.serializedDocument.size()) {
+            return false;
+        }
+        return std::equal(left.serializedDocument.begin(),
+                          left.serializedDocument.end(),
+                          right.serializedDocument.begin());
+    }
     if (left.tempoBpm != right.tempoBpm || left.tempoEvents.size() != right.tempoEvents.size() || left.tracks.size() != right.tracks.size()) {
         return false;
     }
@@ -127,14 +165,21 @@ public:
                     m_updatingControls(false),
                     m_playbackMixer(nullptr),
                     m_playbackSong(nullptr),
+                    m_notePreviewSong(nullptr),
                     m_previewSound(nullptr),
-                    m_playbackTimer(this),
+                    m_playbackTimer(this, ID_PlaybackTimer),
+                    m_notePreviewTimer(this, ID_NotePreviewTimer),
+                    m_notePreviewActive(false),
+                    m_notePreviewChannel(0),
+                    m_notePreviewNote(0),
                     m_ignoreSeekEvent(false),
                     m_autoFollowPlayhead(true),
                     m_bankToken(nullptr),
                     m_bankLoaded(false),
                     m_hasPendingUndo(false),
                     m_restoringUndo(false) {
+                SetMinSize(wxSize(1180, 720));
+
         wxMenu *fileMenu;
                 wxMenu *editMenu;
         wxMenuBar *menuBar;
@@ -170,12 +215,13 @@ public:
         editorSizer = new wxBoxSizer(wxVERTICAL);
 
         m_trackList = new wxListBox(sidebar, wxID_ANY);
-        m_sampleList = new wxListBox(sidebar, wxID_ANY);
+        m_sampleTree = new wxTreeCtrl(sidebar, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                          wxTR_HAS_BUTTONS | wxTR_LINES_AT_ROOT | wxTR_SINGLE);
         m_sampleAddButton = new wxButton(sidebar, ID_SampleNewInstrument, "Add Instrument");
         sidebarSizer->Add(new wxStaticText(sidebar, wxID_ANY, "Tracks"), 0, wxALL, 8);
         sidebarSizer->Add(m_trackList, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
-        sidebarSizer->Add(new wxStaticText(sidebar, wxID_ANY, "Embedded Instruments"), 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
-        sidebarSizer->Add(m_sampleList, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
+        sidebarSizer->Add(new wxStaticText(sidebar, wxID_ANY, "Sample Tree"), 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+        sidebarSizer->Add(m_sampleTree, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
         sampleButtonSizer = new wxBoxSizer(wxHORIZONTAL);
         sampleButtonSizer->Add(m_sampleAddButton, 1, 0, 0);
         sidebarSizer->Add(sampleButtonSizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
@@ -197,10 +243,29 @@ public:
         m_stopButton = new wxButton(editorPanel, wxID_ANY, "Stop");
         m_metadataButton = new wxButton(editorPanel, wxID_ANY, "Metadata");
         m_playScopeChoice = new wxChoice(editorPanel, wxID_ANY);
+        m_midiStorageChoice = new wxChoice(editorPanel, wxID_ANY);
         m_previewVolumeSlider = new wxSlider(editorPanel, wxID_ANY, 100, 0, 100, wxDefaultPosition, wxSize(120, -1), wxSL_HORIZONTAL);
         m_playScopeChoice->Append("All Tracks");
         m_playScopeChoice->Append("Current Track");
         m_playScopeChoice->SetSelection(0);
+        m_midiStorageChoice->Append("CMID (best effort)");
+        m_midiStorageChoice->Append("ECMI (encrypt + compress)");
+        m_midiStorageChoice->Append("EMID (encrypt)");
+        m_midiStorageChoice->Append("MIDI (plain)");
+        m_midiStorageChoice->SetSelection(1);
+
+        {
+            wxSize compactSpinSize(128, -1);
+
+            m_tempoSpin->SetMinSize(compactSpinSize);
+            m_bankSpin->SetMinSize(compactSpinSize);
+            m_programSpin->SetMinSize(compactSpinSize);
+            m_transposeSpin->SetMinSize(compactSpinSize);
+            m_panSpin->SetMinSize(compactSpinSize);
+            m_volumeSpin->SetMinSize(compactSpinSize);
+        }
+        m_midiStorageChoice->SetMinSize(wxSize(220, -1));
+        m_metadataButton->SetMinSize(wxSize(110, -1));
 
         controlsSizer->Add(new wxStaticText(editorPanel, wxID_ANY, "Tempo"), 0, wxALIGN_CENTER_VERTICAL);
         controlsSizer->Add(m_tempoSpin, 1, wxEXPAND);
@@ -223,14 +288,30 @@ public:
         transportSizer->Add(m_playScopeChoice, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
         transportSizer->Add(new wxStaticText(editorPanel, wxID_ANY, "Preview Vol"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
         transportSizer->Add(m_previewVolumeSlider, 0, wxALIGN_CENTER_VERTICAL, 0);
-        transportSizer->AddStretchSpacer(1);
-        transportSizer->Add(m_metadataButton, 0, wxALIGN_CENTER_VERTICAL);
+
+        {
+            wxBoxSizer *topRowSizer;
+            wxBoxSizer *extraControlsSizer;
+            wxBoxSizer *midiStorageRow;
+
+            topRowSizer = new wxBoxSizer(wxHORIZONTAL);
+            extraControlsSizer = new wxBoxSizer(wxVERTICAL);
+            midiStorageRow = new wxBoxSizer(wxHORIZONTAL);
+
+            midiStorageRow->Add(new wxStaticText(editorPanel, wxID_ANY, "MIDI Type"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+            midiStorageRow->Add(m_midiStorageChoice, 0, wxALIGN_CENTER_VERTICAL, 0);
+            extraControlsSizer->Add(midiStorageRow, 0, wxALIGN_LEFT | wxBOTTOM, 8);
+            extraControlsSizer->Add(m_metadataButton, 0, wxALIGN_LEFT, 0);
+
+            topRowSizer->Add(controlsSizer, 1, wxEXPAND | wxRIGHT, 12);
+            topRowSizer->Add(extraControlsSizer, 0, wxALIGN_CENTER_VERTICAL, 0);
+            editorSizer->Add(topRowSizer, 0, wxEXPAND | wxALL, 10);
+        }
 
         m_positionSlider = new wxSlider(editorPanel, wxID_ANY, 0, 0, 1000, wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL);
         m_positionLabel = new wxStaticText(editorPanel, wxID_ANY, "0:00.0 / 0:00.0");
 
         m_pianoRoll = CreatePianoRollPanel(editorPanel);
-        editorSizer->Add(controlsSizer, 0, wxEXPAND | wxALL, 10);
         editorSizer->Add(transportSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
         {
             wxBoxSizer *positionSizer;
@@ -245,6 +326,18 @@ public:
 
         PianoRollPanel_SetSelectionChangedCallback(m_pianoRoll, [this]() { UpdateControlsFromSelection(); });
         PianoRollPanel_SetSeekRequestedCallback(m_pianoRoll, [this](uint32_t tick) { SeekToTickFromPianoRoll(tick); });
+        PianoRollPanel_SetNotePreviewRequestedCallback(m_pianoRoll,
+                                                       [this](uint16_t bank,
+                                                              unsigned char program,
+                                                              unsigned char note,
+                                                              uint32_t durationTicks,
+                                                              int trackIndex) {
+                                                           PreviewPianoRollNote(bank, program, note, durationTicks, trackIndex);
+                                                       });
+        PianoRollPanel_SetNotePreviewStopRequestedCallback(m_pianoRoll,
+                                                           [this]() {
+                                                               StopPianoRollPreview(false);
+                                                           });
         PianoRollPanel_SetUndoCallbacks(m_pianoRoll,
                         [this](wxString const &label) { BeginUndoAction(label); },
                         [this](wxString const &label) { CommitUndoAction(label); },
@@ -263,7 +356,7 @@ public:
         Bind(wxEVT_MENU, [this](wxCommandEvent &) { Close(); }, wxID_EXIT);
         m_trackList->Bind(wxEVT_LISTBOX, &MainFrame::OnTrackSelected, this);
         m_trackList->Bind(wxEVT_CONTEXT_MENU, &MainFrame::OnTrackContextMenu, this);
-        m_sampleList->Bind(wxEVT_CONTEXT_MENU, &MainFrame::OnSampleContextMenu, this);
+        m_sampleTree->Bind(wxEVT_CONTEXT_MENU, &MainFrame::OnSampleContextMenu, this);
         m_tempoSpin->Bind(wxEVT_SPINCTRL, &MainFrame::OnTempoChanged, this);
         m_bankSpin->Bind(wxEVT_SPINCTRL, &MainFrame::OnTrackSettingsChanged, this);
         m_programSpin->Bind(wxEVT_SPINCTRL, &MainFrame::OnTrackSettingsChanged, this);
@@ -288,10 +381,11 @@ public:
         Bind(wxEVT_MENU, &MainFrame::OnSampleNewInstrument, this, ID_SampleNewInstrument);
         Bind(wxEVT_MENU, &MainFrame::OnInstrumentEdit, this, ID_InstrumentEdit);
         Bind(wxEVT_MENU, &MainFrame::OnSampleDelete, this, ID_SampleDelete);
-        m_sampleList->Bind(wxEVT_LISTBOX_DCLICK, &MainFrame::OnInstrumentEditDblClick, this);
+        m_sampleTree->Bind(wxEVT_TREE_ITEM_ACTIVATED, &MainFrame::OnInstrumentEditDblClick, this);
         Bind(wxEVT_MENU, &MainFrame::OnLoadBank, this, ID_LoadBank);
         Bind(wxEVT_MENU, &MainFrame::OnUnloadBanks, this, ID_UnloadBanks);
-        Bind(wxEVT_TIMER, &MainFrame::OnPlaybackTimer, this);
+        Bind(wxEVT_TIMER, &MainFrame::OnPlaybackTimer, this, ID_PlaybackTimer);
+        Bind(wxEVT_TIMER, &MainFrame::OnNotePreviewTimer, this, ID_NotePreviewTimer);
         LoadIniSettings();
         UpdateUndoMenuState();
 
@@ -304,6 +398,7 @@ public:
             m_document = nullptr;
         }
         StopPlayback(true);
+        StopPianoRollPreview(true);
         if (m_previewSound)
         {
             BAESound_Stop(m_previewSound, FALSE);
@@ -330,19 +425,25 @@ private:
     wxButton *m_stopButton;
     wxButton *m_metadataButton;
     wxChoice *m_playScopeChoice;
+    wxChoice *m_midiStorageChoice;
     wxSlider *m_previewVolumeSlider;
     wxSlider *m_positionSlider;
     wxStaticText *m_positionLabel;
-    wxListBox *m_sampleList;
-    std::vector<uint32_t> m_sampleListMap; /* list row -> first sample index for that program */
+    wxTreeCtrl *m_sampleTree;
     wxButton *m_sampleAddButton;
     BAEMixer m_playbackMixer;
     BAESong m_playbackSong;
     std::vector<unsigned char> m_playbackSongBlob;
+    BAESong m_notePreviewSong;
+    std::vector<unsigned char> m_notePreviewSongBlob;
     BAESound m_previewSound;
     wxString m_playbackTempPath;
     wxString m_previewSampleTempPath;
     wxTimer m_playbackTimer;
+    wxTimer m_notePreviewTimer;
+    bool m_notePreviewActive;
+    unsigned char m_notePreviewChannel;
+    unsigned char m_notePreviewNote;
     bool m_ignoreSeekEvent;
     bool m_autoFollowPlayhead;
     BAEBankToken m_bankToken;
@@ -365,10 +466,15 @@ private:
                             wxEmptyString,
                             wxCONFIG_USE_LOCAL_FILE);
         long previewVolume;
+        long midiStorage;
 
         previewVolume = 100;
         if (config.Read("audio/preview_volume", &previewVolume) && m_previewVolumeSlider) {
             m_previewVolumeSlider->SetValue(std::clamp<long>(previewVolume, 0, 100));
+        }
+        midiStorage = 1;
+        if (config.Read("rmf/midi_storage_mode", &midiStorage) && m_midiStorageChoice) {
+            m_midiStorageChoice->SetSelection(std::clamp<long>(midiStorage, 0, 3));
         }
     }
 
@@ -380,7 +486,49 @@ private:
                             wxCONFIG_USE_LOCAL_FILE);
 
         config.Write("audio/preview_volume", static_cast<long>(m_previewVolumeSlider ? m_previewVolumeSlider->GetValue() : 100));
+        config.Write("rmf/midi_storage_mode", static_cast<long>(m_midiStorageChoice ? m_midiStorageChoice->GetSelection() : 1));
         config.Flush();
+    }
+
+    BAERmfEditorMidiStorageType GetSelectedMidiStorageType() const {
+        int selection;
+
+        selection = m_midiStorageChoice ? m_midiStorageChoice->GetSelection() : 1;
+        switch (selection) {
+            case 0:
+                return BAE_EDITOR_MIDI_STORAGE_CMID_BEST_EFFORT;
+            case 2:
+                return BAE_EDITOR_MIDI_STORAGE_EMID;
+            case 3:
+                return BAE_EDITOR_MIDI_STORAGE_MIDI;
+            case 1:
+            default:
+                return BAE_EDITOR_MIDI_STORAGE_ECMI;
+        }
+    }
+
+    void SetSelectedMidiStorageType(BAERmfEditorMidiStorageType storageType) {
+        int selection;
+
+        selection = 1;
+        switch (storageType) {
+            case BAE_EDITOR_MIDI_STORAGE_CMID_BEST_EFFORT:
+                selection = 0;
+                break;
+            case BAE_EDITOR_MIDI_STORAGE_EMID:
+                selection = 2;
+                break;
+            case BAE_EDITOR_MIDI_STORAGE_MIDI:
+                selection = 3;
+                break;
+            case BAE_EDITOR_MIDI_STORAGE_ECMI:
+            default:
+                selection = 1;
+                break;
+        }
+        if (m_midiStorageChoice) {
+            m_midiStorageChoice->SetSelection(selection);
+        }
     }
 
     BAE_UNSIGNED_FIXED GetPreviewVolumeFixed() const {
@@ -406,6 +554,7 @@ private:
         m_pendingUndoState = UndoDocumentState();
         m_pendingUndoLabel.clear();
         m_hasPendingUndo = false;
+        InvalidatePianoRollPreviewSong();
         UpdateUndoMenuState();
     }
 
@@ -419,6 +568,91 @@ private:
         }
     }
 
+    bool CaptureSerializedDocument(std::vector<unsigned char> *outBytes) const {
+        wxString tempPath;
+        wxScopedCharBuffer utf8Path;
+        wxFile file;
+        wxFileOffset length;
+
+        if (!outBytes || !m_document) {
+            return false;
+        }
+
+        tempPath = wxFileName::CreateTempFileName("nbstudio_undo");
+        if (tempPath.empty()) {
+            return false;
+        }
+
+        utf8Path = tempPath.utf8_str();
+        if (BAERmfEditorDocument_SaveAsRmf(m_document, const_cast<char *>(utf8Path.data())) != BAE_NO_ERROR) {
+            wxRemoveFile(tempPath);
+            return false;
+        }
+
+        if (!file.Open(tempPath, wxFile::read)) {
+            wxRemoveFile(tempPath);
+            return false;
+        }
+        length = file.Length();
+        if (length <= 0) {
+            file.Close();
+            wxRemoveFile(tempPath);
+            return false;
+        }
+
+        outBytes->assign(static_cast<size_t>(length), 0);
+        if (file.Read(outBytes->data(), static_cast<size_t>(length)) != length) {
+            outBytes->clear();
+            file.Close();
+            wxRemoveFile(tempPath);
+            return false;
+        }
+
+        file.Close();
+        wxRemoveFile(tempPath);
+        return true;
+    }
+
+    bool RestoreSerializedDocument(std::vector<unsigned char> const &bytes) {
+        wxString tempPath;
+        wxScopedCharBuffer utf8Path;
+        wxFile file;
+        BAERmfEditorDocument *loadedDocument;
+
+        if (bytes.empty()) {
+            return false;
+        }
+
+        tempPath = wxFileName::CreateTempFileName("nbstudio_undo");
+        if (tempPath.empty()) {
+            return false;
+        }
+
+        if (!file.Open(tempPath, wxFile::write)) {
+            wxRemoveFile(tempPath);
+            return false;
+        }
+        if (file.Write(bytes.data(), bytes.size()) != (wxFileOffset)bytes.size()) {
+            file.Close();
+            wxRemoveFile(tempPath);
+            return false;
+        }
+        file.Close();
+
+        utf8Path = tempPath.utf8_str();
+        loadedDocument = BAERmfEditorDocument_LoadFromFile(const_cast<char *>(utf8Path.data()));
+        wxRemoveFile(tempPath);
+        if (!loadedDocument) {
+            return false;
+        }
+
+        if (m_document) {
+            BAERmfEditorDocument_Delete(m_document);
+        }
+        m_document = loadedDocument;
+        return true;
+    }
+
     bool CaptureUndoState(UndoDocumentState *outState) const {
         uint16_t trackCount;
         uint32_t tempoCount;
@@ -430,6 +664,7 @@ private:
         BAERmfEditorDocument_GetTempoBPM(m_document, &outState->tempoBpm);
         outState->tempoEvents.clear();
         outState->tracks.clear();
+        outState->serializedDocument.clear();
 
         tempoCount = 0;
         if (BAERmfEditorDocument_GetTempoEventCount(m_document, &tempoCount) == BAE_NO_ERROR) {
@@ -491,6 +726,9 @@ private:
                 }
             }
         }
+        if (!CaptureSerializedDocument(&outState->serializedDocument)) {
+            outState->serializedDocument.clear();
+        }
         return true;
     }
 
@@ -499,6 +737,9 @@ private:
 
         if (!m_document) {
             return false;
+        }
+        if (!state.serializedDocument.empty()) {
+            return RestoreSerializedDocument(state.serializedDocument);
         }
         trackCount = 0;
         if (BAERmfEditorDocument_GetTrackCount(m_document, &trackCount) != BAE_NO_ERROR || trackCount != state.tracks.size()) {
@@ -644,7 +885,10 @@ private:
         if (m_redoStack.size() > 128) {
             m_redoStack.erase(m_redoStack.begin());
         }
+        PopulateTrackList();
+        PopulateSampleList();
         PianoRollPanel_RefreshFromDocument(m_pianoRoll, true);
+        InvalidatePianoRollPreviewSong();
         UpdateControlsFromSelection();
         SetStatusText(entry.label.empty() ? "Undo" : wxString::Format("Undid %s", entry.label), 0);
         UpdateUndoMenuState();
@@ -671,7 +915,10 @@ private:
         if (m_undoStack.size() > 128) {
             m_undoStack.erase(m_undoStack.begin());
         }
+        PopulateTrackList();
+        PopulateSampleList();
         PianoRollPanel_RefreshFromDocument(m_pianoRoll, true);
+        InvalidatePianoRollPreviewSong();
         UpdateControlsFromSelection();
         SetStatusText(entry.label.empty() ? "Redo" : wxString::Format("Redid %s", entry.label), 0);
         UpdateUndoMenuState();
@@ -747,56 +994,148 @@ private:
     }
 
     void PopulateSampleList() {
-        uint32_t sampleCount;
-        uint32_t sampleIndex;
+        uint32_t assetCount;
+        wxTreeItemId root;
 
-        m_sampleList->Clear();
-        m_sampleListMap.clear();
+        m_sampleTree->DeleteAllItems();
+        root = m_sampleTree->AddRoot("Sample Assets");
         if (!m_document) {
             return;
         }
-        sampleCount = 0;
-        BAERmfEditorDocument_GetSampleCount(m_document, &sampleCount);
-        /* One list row per unique program number, showing the first sample's name. */
-        std::vector<bool> seen(128, false);
-        for (sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
-            BAERmfEditorSampleInfo sampleInfo;
-            uint32_t instID;
-            BAERmfEditorInstrumentExtInfo instInfo;
-            wxString instrumentName;
+        assetCount = 0;
+        if (BAERmfEditorDocument_GetSampleAssetCount(m_document, &assetCount) != BAE_NO_ERROR) {
+            return;
+        }
+        for (uint32_t assetIndex = 0; assetIndex < assetCount; ++assetIndex) {
+            BAERmfEditorSampleAssetInfo assetInfo;
+            wxTreeItemId assetNode;
+            wxString assetName;
+            wxString assetLabel;
 
-            if (BAERmfEditorDocument_GetSampleInfo(m_document, sampleIndex, &sampleInfo) != BAE_NO_ERROR) {
+            if (BAERmfEditorDocument_GetSampleAssetInfo(m_document, assetIndex, &assetInfo) != BAE_NO_ERROR) {
                 continue;
             }
-            if (seen[sampleInfo.program]) {
-                continue;
-            }
-            seen[sampleInfo.program] = true;
-            /* Count how many samples share this program for the split hint. */
-            uint32_t splitCount = 0;
-            for (uint32_t j = 0; j < sampleCount; ++j) {
-                BAERmfEditorSampleInfo other;
-                if (BAERmfEditorDocument_GetSampleInfo(m_document, j, &other) == BAE_NO_ERROR &&
-                    other.program == sampleInfo.program) {
-                    ++splitCount;
+            assetName = assetInfo.displayName ? assetInfo.displayName : "(unnamed sample)";
+            assetLabel = wxString::Format("A%u: %s (%u uses)",
+                                          static_cast<unsigned>(assetInfo.assetID),
+                                          assetName,
+                                          static_cast<unsigned>(assetInfo.usageCount));
+            assetNode = m_sampleTree->AppendItem(root,
+                                                 assetLabel,
+                                                 -1,
+                                                 -1,
+                                                 new SampleTreeItemData(assetInfo.assetID,
+                                                                        static_cast<uint32_t>(-1),
+                                                                        true));
+
+            for (uint32_t usageIndex = 0; usageIndex < assetInfo.usageCount; ++usageIndex) {
+                uint32_t sampleIndex;
+                BAERmfEditorSampleInfo sampleInfo;
+                uint32_t instID;
+                BAERmfEditorInstrumentExtInfo instInfo;
+                wxString usageLabel;
+                wxString instName;
+
+                if (BAERmfEditorDocument_GetSampleAssetSampleIndex(m_document,
+                                                                   assetInfo.assetID,
+                                                                   usageIndex,
+                                                                   &sampleIndex) != BAE_NO_ERROR) {
+                    continue;
                 }
-            }
+                if (BAERmfEditorDocument_GetSampleInfo(m_document, sampleIndex, &sampleInfo) != BAE_NO_ERROR) {
+                    continue;
+                }
 
-            instrumentName = sampleInfo.displayName ? sampleInfo.displayName : "(unnamed)";
-            if (BAERmfEditorDocument_GetInstIDForSample(m_document, sampleIndex, &instID) == BAE_NO_ERROR &&
-                BAERmfEditorDocument_GetInstrumentExtInfo(m_document, instID, &instInfo) == BAE_NO_ERROR &&
-                instInfo.displayName && instInfo.displayName[0]) {
-                instrumentName = instInfo.displayName;
-            }
+                instName = sampleInfo.displayName ? sampleInfo.displayName : "(unnamed instrument)";
+                if (BAERmfEditorDocument_GetInstIDForSample(m_document, sampleIndex, &instID) == BAE_NO_ERROR &&
+                    BAERmfEditorDocument_GetInstrumentExtInfo(m_document, instID, &instInfo) == BAE_NO_ERROR &&
+                    instInfo.displayName && instInfo.displayName[0]) {
+                    instName = instInfo.displayName;
+                }
 
-            wxString label = wxString::Format("P%u: %s",
+                usageLabel = wxString::Format("P%u %s [%u-%u] rk=%u",
                                               static_cast<unsigned>(sampleInfo.program),
-                                              instrumentName);
-            if (splitCount > 1) {
-                label += wxString::Format(" (%u splits)", splitCount);
+                                              instName,
+                                              static_cast<unsigned>(sampleInfo.lowKey),
+                                              static_cast<unsigned>(sampleInfo.highKey),
+                                              static_cast<unsigned>(sampleInfo.rootKey));
+                m_sampleTree->AppendItem(assetNode,
+                                         usageLabel,
+                                         -1,
+                                         -1,
+                                         new SampleTreeItemData(assetInfo.assetID,
+                                                                sampleIndex,
+                                                                false));
             }
-            m_sampleList->Append(label);
-            m_sampleListMap.push_back(sampleIndex);
+            m_sampleTree->Expand(assetNode);
+        }
+        m_sampleTree->Expand(root);
+    }
+
+    SampleTreeItemData *GetSelectedSampleTreeData() const {
+        wxTreeItemId selected;
+
+        selected = m_sampleTree->GetSelection();
+        if (!selected.IsOk()) {
+            return nullptr;
+        }
+        return dynamic_cast<SampleTreeItemData *>(m_sampleTree->GetItemData(selected));
+    }
+
+    bool GetSelectedSampleIndexFromTree(uint32_t *outSampleIndex) const {
+        SampleTreeItemData *data;
+
+        if (!outSampleIndex) {
+            return false;
+        }
+        data = GetSelectedSampleTreeData();
+        if (!data) {
+            return false;
+        }
+
+        if (!data->IsAssetNode()) {
+            *outSampleIndex = data->GetSampleIndex();
+            return true;
+        }
+
+        {
+            uint32_t sampleIndex;
+            if (BAERmfEditorDocument_GetSampleAssetSampleIndex(m_document,
+                                                               data->GetAssetID(),
+                                                               0,
+                                                               &sampleIndex) == BAE_NO_ERROR) {
+                *outSampleIndex = sampleIndex;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void SelectTreeItemForSample(uint32_t sampleIndex) {
+        wxTreeItemId root;
+        wxTreeItemIdValue assetCookie;
+        wxTreeItemId assetNode;
+
+        root = m_sampleTree->GetRootItem();
+        if (!root.IsOk()) {
+            return;
+        }
+
+        assetNode = m_sampleTree->GetFirstChild(root, assetCookie);
+        while (assetNode.IsOk()) {
+            wxTreeItemIdValue usageCookie;
+            wxTreeItemId usageNode = m_sampleTree->GetFirstChild(assetNode, usageCookie);
+            while (usageNode.IsOk()) {
+                SampleTreeItemData *data;
+
+                data = dynamic_cast<SampleTreeItemData *>(m_sampleTree->GetItemData(usageNode));
+                if (data && !data->IsAssetNode() && data->GetSampleIndex() == sampleIndex) {
+                    m_sampleTree->SelectItem(usageNode);
+                    return;
+                }
+                usageNode = m_sampleTree->GetNextChild(assetNode, usageCookie);
+            }
+            assetNode = m_sampleTree->GetNextChild(root, assetCookie);
         }
     }
 
@@ -804,13 +1143,19 @@ private:
                             int midiKey,
                             BAESampleInfo const *overrideInfo = nullptr,
                             int16_t splitVolumeOverride = 0,
-                            unsigned char rootKeyOverride = 0xFF) {
+                            unsigned char rootKeyOverride = 0xFF,
+                            BAERmfEditorCompressionType compressionOverride = BAE_EDITOR_COMPRESSION_DONT_CHANGE) {
         BAERmfEditorSampleInfo sampleInfo;
         BAEResult loadResult;
         BAEResult startResult;
         BAEResult rateResult;
         BAEResult stopResult;
         BAE_UNSIGNED_FIXED baseSampleRate;
+        int previewRoot;
+        int semitones;
+        int loadRateOctaveShift;
+        constexpr double kMinRateFixed = static_cast<double>(4000U << 16);
+        constexpr double kMaxRateFixed = static_cast<double>(0xFFFF0000u);
 
         if (!m_document) {
             return false;
@@ -818,6 +1163,19 @@ private:
         if (BAERmfEditorDocument_GetSampleInfo(m_document, sampleIndex, &sampleInfo) != BAE_NO_ERROR) {
             return false;
         }
+
+        previewRoot = static_cast<int>(NormalizeRootKeyForSingleKeySplit(sampleInfo.rootKey,
+                                                                          sampleInfo.lowKey,
+                                                                          sampleInfo.highKey));
+        if (rootKeyOverride <= 127) {
+            previewRoot = static_cast<int>(rootKeyOverride);
+        }
+        if (previewRoot < 0 || previewRoot > 127) {
+            previewRoot = static_cast<int>((overrideInfo ? overrideInfo->baseMidiPitch : sampleInfo.sampleInfo.baseMidiPitch) & 0x7F);
+        }
+        semitones = midiKey - previewRoot;
+        loadRateOctaveShift = 0;
+
         baseSampleRate = sampleInfo.sampleInfo.sampledRate;
         if (baseSampleRate < (4000U << 16)) {
             baseSampleRate = (44100U << 16);
@@ -836,6 +1194,28 @@ private:
         }
 
         loadResult = BAE_GENERAL_ERR;
+
+        if (overrideInfo &&
+            compressionOverride != BAE_EDITOR_COMPRESSION_DONT_CHANGE &&
+            compressionOverride != BAE_EDITOR_COMPRESSION_PCM) {
+            wxString compressedPath;
+
+            if (BuildCompressedPreviewSampleFile(sampleIndex, compressionOverride, &compressedPath)) {
+                wxScopedCharBuffer utf8CompressedPath = compressedPath.utf8_str();
+                BAEFileType compressedType = X_DetermineFileTypeByPath(utf8CompressedPath.data());
+                if (compressedType == BAE_INVALID_TYPE) {
+                    compressedType = X_DetermineFileType(utf8CompressedPath.data());
+                }
+                if (compressedType != BAE_INVALID_TYPE) {
+                    loadResult = BAESound_LoadFileSample(m_previewSound,
+                                                         const_cast<char *>(utf8CompressedPath.data()),
+                                                         compressedType);
+                }
+                if (wxFileExists(compressedPath)) {
+                    wxRemoveFile(compressedPath);
+                }
+            }
+        }
 
         /* BAESound_LoadCustomSample expects signed 8-bit PCM input; it internally
            applies XPhase (subtract 128) to convert to the engine's unsigned format.
@@ -865,9 +1245,39 @@ private:
             return BAESound_LoadCustomSample(m_previewSound, const_cast<void *>(data), frames, bits, chans, rate, loopS, loopE);
         };
 
-        /* When the caller provides live loop overrides, always use raw PCM so
-           loop settings from the UI are honoured instead of stale file data. */
-        if (overrideInfo) {
+        auto adaptLoadRateForPitch = [&](BAE_UNSIGNED_FIXED &ioRate,
+                                         int &outOctaveShift) {
+            double desiredRate;
+            int maxSemitones;
+            int octaveShift;
+            BAE_UNSIGNED_FIXED shiftedRate;
+
+            if (ioRate == 0) {
+                outOctaveShift = 0;
+                return;
+            }
+
+            maxSemitones = std::max(0, 127 - previewRoot);
+            desiredRate = static_cast<double>(ioRate) * std::pow(2.0, static_cast<double>(maxSemitones) / 12.0);
+            shiftedRate = ioRate;
+            octaveShift = 0;
+
+            while (desiredRate > kMaxRateFixed && shiftedRate > (8000U << 16)) {
+                shiftedRate >>= 1;
+                desiredRate *= 0.5;
+                ++octaveShift;
+            }
+            if (shiftedRate < (4000U << 16)) {
+                shiftedRate = (4000U << 16);
+            }
+
+            ioRate = shiftedRate;
+            outOctaveShift = octaveShift;
+        };
+
+          /* When the caller provides live loop overrides and compressed preview is
+              not requested, use raw PCM so loop settings from the UI are honoured. */
+          if (loadResult != BAE_NO_ERROR && overrideInfo) {
             void const *waveData;
             uint32_t frameCount;
             uint16_t bitSize;
@@ -891,6 +1301,9 @@ private:
                 frameCount > 0 &&
                 (bitSize == 8 || bitSize == 16) &&
                 (channels == 1 || channels == 2)) {
+                if (overrideInfo->sampledRate > 0) {
+                    sampleRate = overrideInfo->sampledRate;
+                }
                 if (sampleRate < (8000U << 16)) {
                     if (sampleRate >= 4000U && sampleRate <= 384000U) {
                         sampleRate <<= 16;
@@ -904,6 +1317,7 @@ private:
                     loopStart = 0;
                     loopEnd   = 0;
                 }
+                adaptLoadRateForPitch(sampleRate, loadRateOctaveShift);
                 loadResult = loadCustomSampleFromEngineData(waveData, frameCount,
                                                            bitSize, channels,
                                                            sampleRate,
@@ -994,6 +1408,9 @@ private:
                     static_cast<unsigned>(sampleInfo.sampleInfo.endLoop),
                     static_cast<unsigned>(sampleInfo.rootKey),
                     static_cast<unsigned>(sampleInfo.sampleInfo.baseMidiPitch));
+            if (overrideInfo && overrideInfo->sampledRate > 0) {
+                sampleRate = overrideInfo->sampledRate;
+            }
             if (sampleRate < (8000U << 16)) {
                 if (sampleRate >= 4000U && sampleRate <= 384000U) {
                     sampleRate <<= 16;
@@ -1014,6 +1431,7 @@ private:
                 loopStart = 0;
                 loopEnd = 0;
             }
+            adaptLoadRateForPitch(sampleRate, loadRateOctaveShift);
             loadResult = loadCustomSampleFromEngineData(waveData, frameCount,
                                                         bitSize, channels,
                                                         sampleRate,
@@ -1050,18 +1468,17 @@ private:
 
         BAESound_SetLoopCount(m_previewSound, 0);
 
-        int previewRoot = static_cast<int>(sampleInfo.rootKey);
+        previewRoot = static_cast<int>(NormalizeRootKeyForSingleKeySplit(sampleInfo.rootKey,
+                                                                          sampleInfo.lowKey,
+                                                                          sampleInfo.highKey));
         if (rootKeyOverride <= 127) {
             previewRoot = static_cast<int>(rootKeyOverride);
         }
         if (previewRoot < 0 || previewRoot > 127) {
             previewRoot = static_cast<int>((overrideInfo ? overrideInfo->baseMidiPitch : sampleInfo.sampleInfo.baseMidiPitch) & 0x7F);
         }
-        int semitones = midiKey - previewRoot;
+        semitones = midiKey - previewRoot + loadRateOctaveShift * 12;
         double ratio = std::pow(2.0, static_cast<double>(semitones) / 12.0);
-        /* 16.16 fixed-point max representable Hz is 65535.999... */
-        constexpr double kMinRateFixed = static_cast<double>(4000U << 16);
-        constexpr double kMaxRateFixed = static_cast<double>(0xFFFF0000u);
         BAE_UNSIGNED_FIXED rate = static_cast<BAE_UNSIGNED_FIXED>(std::clamp(static_cast<double>(baseSampleRate) * ratio,
                              kMinRateFixed,
                              kMaxRateFixed));
@@ -1150,6 +1567,13 @@ private:
 
     static uint16_t InternalBankFromDisplay(uint16_t displayBank) {
         return static_cast<uint16_t>((displayBank & 0x7F) << 7);
+    }
+
+    static unsigned char RawMidiBankFromInternal(uint16_t internalBank) {
+        if (internalBank >= 128) {
+            return static_cast<unsigned char>((internalBank >> 7) & 0x7F);
+        }
+        return static_cast<unsigned char>(internalBank & 0x7F);
     }
 
     wxString BuildTrackLabel(int trackZeroBased, BAERmfEditorTrackInfo const &trackInfo) const {
@@ -1286,6 +1710,139 @@ private:
         return playDoc;
     }
 
+    void InvalidatePianoRollPreviewSong() {
+        StopPianoRollPreview(true);
+    }
+
+    bool EnsurePianoRollPreviewSong() {
+        BAEResult loadResult;
+        BAELoadResult loadInfo;
+
+        if (m_notePreviewSong) {
+            return true;
+        }
+        if (!m_document) {
+            return false;
+        }
+        if (!EnsurePlaybackEngine()) {
+            return false;
+        }
+        if (!BuildPreviewPlaybackBlob(m_document, &m_notePreviewSongBlob)) {
+            return false;
+        }
+        memset(&loadInfo, 0, sizeof(loadInfo));
+        loadResult = BAEMixer_LoadFromMemory(m_playbackMixer,
+                                             m_notePreviewSongBlob.data(),
+                                             static_cast<uint32_t>(m_notePreviewSongBlob.size()),
+                                             &loadInfo);
+        if (loadResult != BAE_NO_ERROR || loadInfo.type != BAE_LOAD_TYPE_SONG || !loadInfo.data.song) {
+            BAELoadResult_Cleanup(&loadInfo);
+            m_notePreviewSongBlob.clear();
+            return false;
+        }
+        m_notePreviewSong = loadInfo.data.song;
+        loadInfo.type = BAE_LOAD_TYPE_NONE;
+        loadInfo.data.song = nullptr;
+        BAESong_Preroll(m_notePreviewSong);
+        BAESong_SetVolume(m_notePreviewSong, GetPreviewVolumeFixed());
+        BAESong_SetLoops(m_notePreviewSong, 0);
+        return true;
+    }
+
+    void StopPianoRollPreview(bool releaseSong) {
+        if (m_notePreviewTimer.IsRunning()) {
+            m_notePreviewTimer.Stop();
+        }
+        if (m_notePreviewSong && m_notePreviewActive) {
+            BAESong_NoteOff(m_notePreviewSong,
+                            m_notePreviewChannel,
+                            m_notePreviewNote,
+                            0,
+                            0);
+            BAESong_Stop(m_notePreviewSong, FALSE);
+        }
+        m_notePreviewActive = false;
+        if (releaseSong && m_notePreviewSong) {
+            BAESong_AllNotesOff(m_notePreviewSong, 0);
+            BAESong_Stop(m_notePreviewSong, FALSE);
+            BAESong_Delete(m_notePreviewSong);
+            m_notePreviewSong = nullptr;
+            m_notePreviewSongBlob.clear();
+        }
+    }
+
+    void PreviewPianoRollNote(uint16_t bank,
+                              unsigned char program,
+                              unsigned char note,
+                              uint32_t durationTicks,
+                              int trackIndex) {
+        BAERmfEditorTrackInfo trackInfo;
+        uint64_t noteDurationUsec;
+        uint32_t noteDurationMs;
+        uint32_t songLengthUsec;
+        BAEResult startResult;
+        BAEResult programResult;
+        unsigned char channel;
+
+        if (!m_document) {
+            return;
+        }
+        if (trackIndex < 0 || BAERmfEditorDocument_GetTrackInfo(m_document, static_cast<uint16_t>(trackIndex), &trackInfo) != BAE_NO_ERROR) {
+            return;
+        }
+        if (!EnsurePianoRollPreviewSong()) {
+            return;
+        }
+
+        channel = trackInfo.channel;
+        StopPianoRollPreview(false);
+
+        /* Start from the song end so tick-0 events do not fire during manual note preview. */
+        songLengthUsec = 0;
+        if (BAESong_GetMicrosecondLength(m_notePreviewSong, &songLengthUsec) == BAE_NO_ERROR && songLengthUsec > 0) {
+            BAESong_SetMicrosecondPosition(m_notePreviewSong, songLengthUsec - 1);
+        }
+
+        /* Keep preview simple and deterministic: run the preview song only while auditioning. */
+        BAESong_Preroll(m_notePreviewSong);
+        if (BAESong_Start(m_notePreviewSong, 0) != BAE_NO_ERROR) {
+            return;
+        }
+        if (songLengthUsec > 0) {
+            BAESong_SetMicrosecondPosition(m_notePreviewSong, songLengthUsec - 1);
+        }
+
+        /* Ensure the preview channel is audible regardless of prior track automation state. */
+        BAESong_UnmuteChannel(m_notePreviewSong, channel);
+        BAESong_ControlChange(m_notePreviewSong, channel, 7, 127, 0);
+        BAESong_ControlChange(m_notePreviewSong, channel, 11, 127, 0);
+
+        programResult = BAESong_ProgramBankChange(m_notePreviewSong,
+                                                  channel,
+                                                  program,
+                                                  RawMidiBankFromInternal(bank),
+                                                  0);
+        if (programResult != BAE_NO_ERROR) {
+            return;
+        }
+        startResult = BAESong_NoteOnWithLoad(m_notePreviewSong, channel, note, 100, 0);
+        if (startResult != BAE_NO_ERROR) {
+            return;
+        }
+
+        m_notePreviewActive = true;
+        m_notePreviewChannel = channel;
+        m_notePreviewNote = note;
+
+        noteDurationUsec = TicksToMicroseconds(std::max<uint32_t>(durationTicks, 1));
+        noteDurationMs = static_cast<uint32_t>(std::clamp<uint64_t>((noteDurationUsec + 999ULL) / 1000ULL, 40ULL, 15000ULL));
+        m_notePreviewTimer.StartOnce(static_cast<int>(noteDurationMs));
+    }
+
+    void OnNotePreviewTimer(wxTimerEvent &) {
+        StopPianoRollPreview(false);
+    }
+
     void StopPlayback(bool releaseSong) {
         if (!m_playbackSong) {
             m_playbackTimer.Stop();
@@ -1304,6 +1861,7 @@ private:
     }
 
     void ShutdownPlaybackEngine() {
+        StopPianoRollPreview(true);
         if (m_playbackMixer) {
             BAEMixer_Close(m_playbackMixer);
             BAEMixer_Delete(m_playbackMixer);
@@ -1328,6 +1886,131 @@ private:
         }
         m_previewSampleTempPath = wxFileName::GetTempDir() + "/rmfeditwx_preview_sample.wav";
         return !m_previewSampleTempPath.empty();
+    }
+
+    bool BuildCompressedPreviewSampleFile(uint32_t sampleIndex,
+                                          BAERmfEditorCompressionType compressionType,
+                                          wxString *outPath) {
+        wxString docBasePath;
+        wxString docPath;
+        wxString sampleBasePath;
+        wxString samplePath;
+        wxScopedCharBuffer utf8DocPath;
+        wxScopedCharBuffer utf8SamplePath;
+        BAERmfEditorDocument *tempDoc;
+        BAERmfEditorSampleInfo info;
+        std::string displayName;
+        BAEResult result;
+
+        if (!m_document || !outPath) {
+            return false;
+        }
+        if (compressionType == BAE_EDITOR_COMPRESSION_DONT_CHANGE ||
+            compressionType == BAE_EDITOR_COMPRESSION_PCM) {
+            return false;
+        }
+
+        docBasePath = wxFileName::CreateTempFileName("nbstudio_cmp_doc");
+        if (docBasePath.empty()) {
+            return false;
+        }
+        docPath = docBasePath + ".rmf";
+        utf8DocPath = docPath.utf8_str();
+
+        if (BAERmfEditorDocument_SaveAsRmf(m_document, const_cast<char *>(utf8DocPath.data())) != BAE_NO_ERROR) {
+            if (wxFileExists(docPath)) wxRemoveFile(docPath);
+            if (wxFileExists(docBasePath)) wxRemoveFile(docBasePath);
+            return false;
+        }
+
+        tempDoc = BAERmfEditorDocument_LoadFromFile(const_cast<char *>(utf8DocPath.data()));
+        if (wxFileExists(docPath)) wxRemoveFile(docPath);
+        if (wxFileExists(docBasePath)) wxRemoveFile(docBasePath);
+        if (!tempDoc) {
+            return false;
+        }
+
+        if (BAERmfEditorDocument_GetSampleInfo(tempDoc, sampleIndex, &info) != BAE_NO_ERROR) {
+            BAERmfEditorDocument_Delete(tempDoc);
+            return false;
+        }
+
+        displayName = info.displayName ? info.displayName : "";
+        info.displayName = const_cast<char *>(displayName.c_str());
+        info.compressionType = compressionType;
+        if (BAERmfEditorDocument_SetSampleInfo(tempDoc, sampleIndex, &info) != BAE_NO_ERROR) {
+            BAERmfEditorDocument_Delete(tempDoc);
+            return false;
+        }
+
+        sampleBasePath = wxFileName::CreateTempFileName("nbstudio_cmp_sample");
+        if (sampleBasePath.empty()) {
+            BAERmfEditorDocument_Delete(tempDoc);
+            return false;
+        }
+
+        switch (compressionType) {
+            case BAE_EDITOR_COMPRESSION_MP3_32K:
+            case BAE_EDITOR_COMPRESSION_MP3_48K:
+            case BAE_EDITOR_COMPRESSION_MP3_64K:
+            case BAE_EDITOR_COMPRESSION_MP3_96K:
+            case BAE_EDITOR_COMPRESSION_MP3_128K:
+            case BAE_EDITOR_COMPRESSION_MP3_192K:
+            case BAE_EDITOR_COMPRESSION_MP3_256K:
+            case BAE_EDITOR_COMPRESSION_MP3_320K:
+                samplePath = sampleBasePath + ".mp3";
+                break;
+            case BAE_EDITOR_COMPRESSION_VORBIS_32K:
+            case BAE_EDITOR_COMPRESSION_VORBIS_48K:
+            case BAE_EDITOR_COMPRESSION_VORBIS_64K:
+            case BAE_EDITOR_COMPRESSION_VORBIS_80K:
+            case BAE_EDITOR_COMPRESSION_VORBIS_96K:
+            case BAE_EDITOR_COMPRESSION_VORBIS_128K:
+            case BAE_EDITOR_COMPRESSION_VORBIS_160K:
+            case BAE_EDITOR_COMPRESSION_VORBIS_192K:
+            case BAE_EDITOR_COMPRESSION_VORBIS_256K:
+                samplePath = sampleBasePath + ".ogg";
+                break;
+            case BAE_EDITOR_COMPRESSION_OPUS_12K:
+            case BAE_EDITOR_COMPRESSION_OPUS_16K:
+            case BAE_EDITOR_COMPRESSION_OPUS_24K:
+            case BAE_EDITOR_COMPRESSION_OPUS_32K:
+            case BAE_EDITOR_COMPRESSION_OPUS_48K:
+            case BAE_EDITOR_COMPRESSION_OPUS_64K:
+            case BAE_EDITOR_COMPRESSION_OPUS_96K:
+            case BAE_EDITOR_COMPRESSION_OPUS_128K:
+            case BAE_EDITOR_COMPRESSION_OPUS_256K:
+                samplePath = sampleBasePath + ".opus";
+                break;
+            case BAE_EDITOR_COMPRESSION_FLAC:
+                samplePath = sampleBasePath + ".flac";
+                break;
+            case BAE_EDITOR_COMPRESSION_ADPCM:
+                samplePath = sampleBasePath + ".aif";
+                break;
+            default:
+                samplePath = sampleBasePath + ".wav";
+                break;
+        }
+
+        utf8SamplePath = samplePath.utf8_str();
+        result = BAERmfEditorDocument_ExportSampleToFile(tempDoc,
+                                                         sampleIndex,
+                                                         const_cast<char *>(utf8SamplePath.data()));
+        BAERmfEditorDocument_Delete(tempDoc);
+
+        if (wxFileExists(sampleBasePath)) {
+            wxRemoveFile(sampleBasePath);
+        }
+        if (result != BAE_NO_ERROR) {
+            if (wxFileExists(samplePath)) {
+                wxRemoveFile(samplePath);
+            }
+            return false;
+        }
+
+        *outPath = samplePath;
+        return true;
     }
 
     bool BuildPreviewPlaybackBlob(BAERmfEditorDocument *playDoc, std::vector<unsigned char> *outData) {
@@ -1656,6 +2339,14 @@ private:
             BAERmfEditorDocument_Delete(m_document);
         }
         m_document = document;
+        {
+            BAERmfEditorMidiStorageType storageType;
+
+            if (BAERmfEditorDocument_GetMidiStorageType(m_document, &storageType) == BAE_NO_ERROR) {
+                SetSelectedMidiStorageType(storageType);
+            }
+        }
+        InvalidatePianoRollPreviewSong();
         ClearUndoHistory();
         m_currentPath = path;
         PianoRollPanel_SetDocument(m_pianoRoll, m_document);
@@ -1804,6 +2495,7 @@ private:
         }
 
         requiresZmf = BAERmfEditorDocument_RequiresZmf(saveDoc) != 0;
+        BAERmfEditorDocument_SetMidiStorageType(saveDoc, GetSelectedMidiStorageType());
 
         wxFileDialog dialog(this,
                             requiresZmf ? "Save As ZMF (required by FLAC/Vorbis/Opus samples)"
@@ -1899,36 +2591,65 @@ private:
         }
     }
 
-    void OnTrackSettingsChanged(wxCommandEvent &) {
+    void OnTrackSettingsChanged(wxCommandEvent &event) {
         BAERmfEditorTrackInfo trackInfo;
         BAERmfEditorNoteInfo selectedNote;
         int selectedTrack;
+        wxObject *source;
+        bool bankProgramControl;
+        bool defaultInstrumentUpdated;
 
         if (!m_document || m_updatingControls) {
             return;
         }
+        source = event.GetEventObject();
+        bankProgramControl = (source == m_bankSpin || source == m_programSpin);
         selectedTrack = GetSelectedTrack();
         if (selectedTrack < 0 || BAERmfEditorDocument_GetTrackInfo(m_document, static_cast<uint16_t>(selectedTrack), &trackInfo) != BAE_NO_ERROR) {
             return;
         }
-        if (PianoRollPanel_GetSelectedNoteInfo(m_pianoRoll, &selectedNote)) {
+        if (bankProgramControl && PianoRollPanel_GetSelectedNoteInfo(m_pianoRoll, &selectedNote)) {
             selectedNote.bank = InternalBankFromDisplay(static_cast<uint16_t>(m_bankSpin->GetValue()));
             selectedNote.program = static_cast<unsigned char>(m_programSpin->GetValue());
             PianoRollPanel_SetSelectedNoteInstrument(m_pianoRoll, selectedNote.bank, selectedNote.program);
             PianoRollPanel_SetNewNoteInstrument(m_pianoRoll, selectedNote.bank, selectedNote.program);
+            InvalidatePianoRollPreviewSong();
             return;
         }
-        trackInfo.bank = InternalBankFromDisplay(static_cast<uint16_t>(m_bankSpin->GetValue()));
-        trackInfo.program = static_cast<unsigned char>(m_programSpin->GetValue());
+        defaultInstrumentUpdated = false;
+        if (bankProgramControl) {
+            uint16_t bank;
+            unsigned char program;
+
+            bank = InternalBankFromDisplay(static_cast<uint16_t>(m_bankSpin->GetValue()));
+            program = static_cast<unsigned char>(m_programSpin->GetValue());
+            if (BAERmfEditorDocument_SetTrackDefaultInstrument(m_document,
+                                                               static_cast<uint16_t>(selectedTrack),
+                                                               bank,
+                                                               program) == BAE_NO_ERROR) {
+                trackInfo.bank = bank;
+                trackInfo.program = program;
+                defaultInstrumentUpdated = true;
+            }
+        }
         trackInfo.transpose = static_cast<int16_t>(m_transposeSpin->GetValue());
         trackInfo.pan = static_cast<unsigned char>(m_panSpin->GetValue());
         trackInfo.volume = static_cast<unsigned char>(m_volumeSpin->GetValue());
-        if (BAERmfEditorDocument_SetTrackInfo(m_document, static_cast<uint16_t>(selectedTrack), &trackInfo) == BAE_NO_ERROR) {
+        if (!bankProgramControl && BAERmfEditorDocument_SetTrackInfo(m_document, static_cast<uint16_t>(selectedTrack), &trackInfo) == BAE_NO_ERROR) {
             if (selectedTrack >= 0 && selectedTrack < static_cast<int>(m_trackList->GetCount())) {
                 m_trackList->SetString(static_cast<unsigned>(selectedTrack), BuildTrackLabel(selectedTrack, trackInfo));
             }
             PianoRollPanel_SetNewNoteInstrument(m_pianoRoll, trackInfo.bank, trackInfo.program);
             PianoRollPanel_Refresh(m_pianoRoll);
+        } else if (defaultInstrumentUpdated) {
+            if (selectedTrack >= 0 && selectedTrack < static_cast<int>(m_trackList->GetCount())) {
+                m_trackList->SetString(static_cast<unsigned>(selectedTrack), BuildTrackLabel(selectedTrack, trackInfo));
+            }
+            PianoRollPanel_SetNewNoteInstrument(m_pianoRoll, trackInfo.bank, trackInfo.program);
+            PianoRollPanel_Refresh(m_pianoRoll);
+        }
+        if (bankProgramControl) {
+            InvalidatePianoRollPreviewSong();
         }
     }
 
@@ -1942,10 +2663,16 @@ private:
 
     void OnSampleContextMenu(wxContextMenuEvent &) {
         wxMenu menu;
+        SampleTreeItemData *selectedData;
 
-        if (m_sampleList->GetSelection() >= 0) {
+        selectedData = GetSelectedSampleTreeData();
+        if (selectedData) {
             menu.Append(ID_InstrumentEdit, "Edit Instrument...");
-            menu.Append(ID_SampleDelete, "Delete Instrument");
+            if (selectedData->IsAssetNode()) {
+                menu.Append(ID_SampleDelete, "Delete Sample Asset");
+            } else {
+                menu.Append(ID_SampleDelete, "Delete Instrument");
+            }
         }
         PopupMenu(&menu);
     }
@@ -2396,6 +3123,12 @@ private:
             return;
         }
         PopulateSampleList();
+        {
+            uint32_t sampleCount = 0;
+            if (BAERmfEditorDocument_GetSampleCount(m_document, &sampleCount) == BAE_NO_ERROR && sampleCount > 0) {
+                SelectTreeItemForSample(sampleCount - 1);
+            }
+        }
     }
 
     void OnSampleNewInstrument(wxCommandEvent &) {
@@ -2463,25 +3196,12 @@ private:
         }
 
         PopulateSampleList();
-        if (newSampleIndex < static_cast<uint32_t>(m_sampleList->GetCount())) {
-            /* Find the list row that maps to this new sample's program. */
-            for (size_t row = 0; row < m_sampleListMap.size(); ++row) {
-                if (m_sampleListMap[row] == newSampleIndex) {
-                    m_sampleList->SetSelection(static_cast<int>(row));
-                    break;
-                }
-            }
-        }
+        SelectTreeItemForSample(newSampleIndex);
+        OpenInstrumentExtEditor();
 
         {
-            wxCommandEvent dummyEvent;
-            OnInstrumentEditDblClick(dummyEvent);
-        }
-
-        {
-            int curSel = m_sampleList->GetSelection();
-            if (curSel >= 0 && static_cast<size_t>(curSel) < m_sampleListMap.size()) {
-                uint32_t checkIndex = m_sampleListMap[static_cast<size_t>(curSel)];
+            uint32_t checkIndex;
+            if (GetSelectedSampleIndexFromTree(&checkIndex)) {
                 BAERmfEditorSampleInfo verifyInfo;
                 if (BAERmfEditorDocument_GetSampleInfo(m_document, checkIndex, &verifyInfo) == BAE_NO_ERROR &&
                     verifyInfo.sourcePath == NULL && verifyInfo.sampleInfo.waveFrames <= 1) {
@@ -2494,67 +3214,94 @@ private:
     }
 
     void OnSampleDelete(wxCommandEvent &) {
-        int selected;
-        uint32_t firstSampleIndex;
-        BAERmfEditorSampleInfo firstInfo;
-        uint32_t sampleCount;
-        unsigned char program;
+        SampleTreeItemData *selectedData;
         std::vector<uint32_t> toDelete;
 
         if (!m_document) {
             return;
         }
-        selected = m_sampleList->GetSelection();
-        if (selected < 0 || static_cast<size_t>(selected) >= m_sampleListMap.size()) {
+        selectedData = GetSelectedSampleTreeData();
+        if (!selectedData) {
             return;
         }
-        firstSampleIndex = m_sampleListMap[static_cast<size_t>(selected)];
-        if (BAERmfEditorDocument_GetSampleInfo(m_document, firstSampleIndex, &firstInfo) != BAE_NO_ERROR) {
-            return;
-        }
-        program = firstInfo.program;
-        sampleCount = 0;
-        BAERmfEditorDocument_GetSampleCount(m_document, &sampleCount);
-        for (uint32_t i = 0; i < sampleCount; ++i) {
-            BAERmfEditorSampleInfo info;
-            if (BAERmfEditorDocument_GetSampleInfo(m_document, i, &info) == BAE_NO_ERROR &&
-                info.program == program) {
-                toDelete.push_back(i);
+
+        if (selectedData->IsAssetNode()) {
+            uint32_t selectedAssetID;
+            uint32_t usageCount;
+
+            selectedAssetID = selectedData->GetAssetID();
+            if (BAERmfEditorDocument_GetSampleAssetUsageCount(m_document, selectedAssetID, &usageCount) != BAE_NO_ERROR) {
+                return;
+            }
+            for (uint32_t usageIndex = 0; usageIndex < usageCount; ++usageIndex) {
+                uint32_t sampleIndex;
+                if (BAERmfEditorDocument_GetSampleAssetSampleIndex(m_document,
+                                                                   selectedAssetID,
+                                                                   usageIndex,
+                                                                   &sampleIndex) == BAE_NO_ERROR) {
+                    toDelete.push_back(sampleIndex);
+                }
+            }
+            {
+                wxString msg = toDelete.size() > 1
+                    ? wxString::Format("Delete sample asset A%u and all %u usages?",
+                                       static_cast<unsigned>(selectedAssetID),
+                                       static_cast<unsigned>(toDelete.size()))
+                    : wxString::Format("Delete sample asset A%u?", static_cast<unsigned>(selectedAssetID));
+                if (wxMessageBox(msg, "Confirm Delete", wxYES_NO | wxICON_QUESTION, this) != wxYES) {
+                    return;
+                }
+            }
+        } else {
+            uint32_t firstSampleIndex;
+            BAERmfEditorSampleInfo firstInfo;
+            uint32_t sampleCount;
+            unsigned char program;
+
+            firstSampleIndex = selectedData->GetSampleIndex();
+            if (BAERmfEditorDocument_GetSampleInfo(m_document, firstSampleIndex, &firstInfo) != BAE_NO_ERROR) {
+                return;
+            }
+            program = firstInfo.program;
+            sampleCount = 0;
+            BAERmfEditorDocument_GetSampleCount(m_document, &sampleCount);
+            for (uint32_t i = 0; i < sampleCount; ++i) {
+                BAERmfEditorSampleInfo info;
+                if (BAERmfEditorDocument_GetSampleInfo(m_document, i, &info) == BAE_NO_ERROR &&
+                    info.program == program) {
+                    toDelete.push_back(i);
+                }
+            }
+            {
+                wxString msg = toDelete.size() > 1
+                    ? wxString::Format("Delete instrument P%u and all %u of its splits?",
+                                       static_cast<unsigned>(program),
+                                       static_cast<unsigned>(toDelete.size()))
+                    : wxString::Format("Delete instrument P%u?", static_cast<unsigned>(program));
+                if (wxMessageBox(msg, "Confirm Delete", wxYES_NO | wxICON_QUESTION, this) != wxYES) {
+                    return;
+                }
             }
         }
-        wxString msg = toDelete.size() > 1
-            ? wxString::Format("Delete instrument P%u and all %u of its splits?",
-                               static_cast<unsigned>(program),
-                               static_cast<unsigned>(toDelete.size()))
-            : wxString::Format("Delete instrument P%u?", static_cast<unsigned>(program));
-        if (wxMessageBox(msg, "Confirm Delete", wxYES_NO | wxICON_QUESTION, this) != wxYES) {
-            return;
-        }
+
         /* Delete in reverse order so earlier indices stay valid. */
         for (auto it = toDelete.rbegin(); it != toDelete.rend(); ++it) {
             BAERmfEditorDocument_DeleteSample(m_document, *it);
         }
         PopulateSampleList();
-        int newSel = selected;
-        if (newSel >= static_cast<int>(m_sampleList->GetCount())) {
-            newSel = static_cast<int>(m_sampleList->GetCount()) - 1;
-        }
-        if (newSel >= 0) {
-            m_sampleList->SetSelection(newSel);
-        }
     }
 
     void OnInstrumentEdit(wxCommandEvent &) {
         OpenInstrumentExtEditor();
     }
 
-    void OnInstrumentEditDblClick(wxCommandEvent &) {
+    void OnInstrumentEditDblClick(wxTreeEvent &) {
         OpenInstrumentExtEditor();
     }
 
     void OpenInstrumentExtEditor() {
-        int selected;
         uint32_t primarySampleIndex;
+        uint32_t selectedAssetID;
         uint32_t instID;
         BAERmfEditorInstrumentExtInfo extInfo;
         std::vector<uint32_t> deletedSampleIndices;
@@ -2565,11 +3312,12 @@ private:
         if (!m_document) {
             return;
         }
-        selected = m_sampleList->GetSelection();
-        if (selected < 0 || static_cast<size_t>(selected) >= m_sampleListMap.size()) {
+        if (!GetSelectedSampleIndexFromTree(&primarySampleIndex)) {
             return;
         }
-        primarySampleIndex = m_sampleListMap[static_cast<size_t>(selected)];
+        if (BAERmfEditorDocument_GetSampleAssetIDForSample(m_document, primarySampleIndex, &selectedAssetID) != BAE_NO_ERROR) {
+            selectedAssetID = 0;
+        }
 
         /* Look up the instID and fetch extended info */
         memset(&extInfo, 0, sizeof(extInfo));
@@ -2577,13 +3325,17 @@ private:
             extInfo.instID = instID;
             BAERmfEditorDocument_GetInstrumentExtInfo(m_document, instID, &extInfo);
         }
+
         accepted = ShowInstrumentExtEditorDialog(
             this,
             m_document,
             primarySampleIndex,
             &extInfo,
-            [this](uint32_t sampleIndex, int key, BAESampleInfo const *overrideInfo, int16_t splitVolumeOverride, unsigned char rootKeyOverride) {
-                if (!PreviewSampleAtKey(sampleIndex, key, overrideInfo, splitVolumeOverride, rootKeyOverride)) {
+            [this](wxString const &label) { BeginUndoAction(label); },
+            [this](wxString const &label) { CommitUndoAction(label); },
+            [this]() { CancelUndoAction(); },
+            [this](uint32_t sampleIndex, int key, BAESampleInfo const *overrideInfo, int16_t splitVolumeOverride, unsigned char rootKeyOverride, BAERmfEditorCompressionType compressionOverride) {
+                if (!PreviewSampleAtKey(sampleIndex, key, overrideInfo, splitVolumeOverride, rootKeyOverride, compressionOverride)) {
                     wxMessageBox("Preview playback failed for this sample.",
                                  "Sample Preview", wxOK | wxICON_ERROR, this);
                 }
@@ -2610,8 +3362,12 @@ private:
         /* Apply sample edits */
         {
             bool ok = true;
+            std::vector<uint32_t> affectAllAssets;
+            std::vector<uint32_t> cloneAssets;
 
             for (size_t i = 0; i < sampleIndices.size() && i < editedSamples.size(); ++i) {
+                BAERmfEditorCompressionType oldCompression;
+
                 /* A sentinel index means the sample was created inside the dialog and needs
                  * to be added to the document first. */
                 if (sampleIndices[i] == static_cast<uint32_t>(-1)) {
@@ -2630,6 +3386,58 @@ private:
                     }
                     sampleIndices[i] = newIdx;
                 }
+
+                oldCompression = BAE_EDITOR_COMPRESSION_PCM;
+                {
+                    BAERmfEditorSampleInfo oldInfo;
+                    if (BAERmfEditorDocument_GetSampleInfo(m_document, sampleIndices[i], &oldInfo) == BAE_NO_ERROR) {
+                        oldCompression = oldInfo.compressionType;
+                    }
+                }
+
+                if (oldCompression != editedSamples[i].compressionType) {
+                    uint32_t assetID;
+                    uint32_t usageCount;
+
+                    assetID = 0;
+                    usageCount = 0;
+                    if (BAERmfEditorDocument_GetSampleAssetIDForSample(m_document, sampleIndices[i], &assetID) == BAE_NO_ERROR &&
+                        BAERmfEditorDocument_GetSampleAssetUsageCount(m_document, assetID, &usageCount) == BAE_NO_ERROR &&
+                        usageCount > 1 &&
+                        std::find(affectAllAssets.begin(), affectAllAssets.end(), assetID) == affectAllAssets.end()) {
+                        if (std::find(cloneAssets.begin(), cloneAssets.end(), assetID) != cloneAssets.end()) {
+                            if (BAERmfEditorDocument_CloneSampleAssetForSample(m_document, sampleIndices[i], NULL) != BAE_NO_ERROR) {
+                                ok = false;
+                                break;
+                            }
+                        } else {
+                            wxMessageDialog choiceDialog(
+                                this,
+                                wxString::Format("Sample asset A%u is used by %u instrument usages.\n\n"
+                                                 "Choose how to apply this compression change.",
+                                                 static_cast<unsigned>(assetID),
+                                                 static_cast<unsigned>(usageCount)),
+                                "Shared Sample Asset",
+                                wxYES_NO | wxCANCEL | wxICON_QUESTION | wxYES_DEFAULT);
+                            choiceDialog.SetYesNoLabels("This Instrument Only", "All Shared Uses");
+                            int choice = choiceDialog.ShowModal();
+                            if (choice == wxCANCEL) {
+                                ok = false;
+                                break;
+                            }
+                            if (choice == wxYES) {
+                                cloneAssets.push_back(assetID);
+                                if (BAERmfEditorDocument_CloneSampleAssetForSample(m_document, sampleIndices[i], NULL) != BAE_NO_ERROR) {
+                                    ok = false;
+                                    break;
+                                }
+                            } else {
+                                affectAllAssets.push_back(assetID);
+                            }
+                        }
+                    }
+                }
+
                 BAERmfEditorSampleInfo info;
                 wxScopedCharBuffer nameUtf8 = editedSamples[i].displayName.utf8_str();
                 info.displayName = const_cast<char *>(nameUtf8.data());
@@ -2662,9 +3470,18 @@ private:
         }
 
         PopulateSampleList();
-        if (selected < static_cast<int>(m_sampleList->GetCount())) {
-            m_sampleList->SetSelection(selected);
+        if (!sampleIndices.empty() && sampleIndices[0] != static_cast<uint32_t>(-1)) {
+            SelectTreeItemForSample(sampleIndices[0]);
+        } else if (selectedAssetID != 0) {
+            uint32_t usageCount = 0;
+            if (BAERmfEditorDocument_GetSampleAssetUsageCount(m_document, selectedAssetID, &usageCount) == BAE_NO_ERROR && usageCount > 0) {
+                uint32_t sampleIndex;
+                if (BAERmfEditorDocument_GetSampleAssetSampleIndex(m_document, selectedAssetID, 0, &sampleIndex) == BAE_NO_ERROR) {
+                    SelectTreeItemForSample(sampleIndex);
+                }
+            }
         }
+
     }
 };
 

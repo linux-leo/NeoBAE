@@ -43,12 +43,55 @@
 - ~~Replicate `Linn Groove 900.rmf` in preview player and export~~
 
 # 0.04 alpha
+- ~~Settings appear to be ignored in track editor~~
+- ~~Cannot use custom instrument added to a MIDI~~
+- ~~Cannot use custom instrument added to a MIDI if P0~~
+- ~~Custom sample loop point data is not saved when changed/compressed (VORBIS/OPUS)~~
+- ~~Editor does not respect tempo change (track or event)~~
+- ~~Cannot edit default tempo event~~
+- ~~Opus may be making mono samples into stereo~~
+- ~~Add MP3 bitrates: 48, 128, 192, 256, 320~~
+- ~~Add Opus bitrates: 12, 24, 48~~
+- ~~Add Vorbis bitrates: 48, 80, 128, 160, 192, 256~~
+- ~~Split codec menu into codec/bitrate~~
+- ~~Instrument editor piano should dim or otherwise highlight pressed key~~
+- ~~Add visual graph to ADSR stuff~~
+- ~~Update timing in ADSR to floating point seconds~~
+- ~~Add sample rate editor field to sample editor~~
+- ~~Test ADPCM~~
+- ~~In the sample editor dialog, applying a rootKey change doesn't refresh keyboard range~~
+- ~~Area selection in piano roll, allow editing of bank/program of multiple notes, or moving multiple notes~~
+- ~~Do not change all notes when changing default program/bank in a track~~
+- ~~Mouse wheel on piano roll ruler should scroll horizontally not vertically~~
+- ~~Play note for duration of piano roll note when clicking it or dragging it to a new key, release note when mouse button up (not when multiple notes selected tho)~~
+- ~~Revisit sample editing: Implement Sample Tree~~
+  - ~~Instruments can pull from the same soundbank table but apply different ADSR to it~~
+  - ~~eg 1 sample on multiple instruments~~
+  - ~~Right now if you compress a sample in one instrument but not in another the samples duplicate~~
+  - ~~Looking at a tree of samples and editing those would be better~~
+  - ~~Optimize to prevent duplicate samples~~
+- ~~MP3 sample encoding gap issue~~
+- ~~Broke classic RMF mpeg (sample rate change?)~~
+- ~~Allow choosing encryption/compression options for MIDI data (cmid (best effort compression like current ecmi), ecmi, emid, midi)~~
+- ~~Set window minimum size~~
+- ~~Add instrument LFO visualizers and filter envelopes~~
+- ~~Reorganize instrument dialog~~
+- ~~If no rootKey is defined and the split is a single key, assume that key to be the rootKey~~
+- ~~Assertion when right clicking while holding down left mouse on a piano roll note~~
+- ~~Allow creating looppoints from the waveform in the sample editor (context menu "Set Start Point" "Set End Point", and allow dragging the bars)~~
+- ~~Expand undo to instrument/sample dialog~~
+- ~~Allow previewing compressed version of sample without overwriting sample~~
+- ~~Instrument panel keyboard plays (pitch shifted) notes outside of split range when should be silent~~
+- `DoorSlam.rmf` door slam note plays at wrong speed
+
+# Future
+- Add option to set all samples of a specific instrument to a specific codec (for convenience)
+- Apply changes in instrument/sample dialog instantly (rebuilds preview ZMF each time though)
+- Larger instrument dialog piano not working 100% correctly
+- MP3 externally imported samples (not encoded by us) may have a gap
 - Start from nothing (currently the editor requires you to load a file)
 - Resizable tracks
 - Allow configuration of SysEx and 'non-standard' CC commands
-- Allow choosing encryption/compression options for MIDI data (cmid, ecmi, emid, midi)
-
-# Future
 - SESSIONS! Savable and loadable workspace sessions.
   - Session data should embed all resources (instruments, samples, midi, settings)
   - Should not rely on original files
@@ -61,6 +104,8 @@
   - We should enable channel exporting in the same manner.
   - It should allow exporting certain channels (multiple possible, eg ch9 and ch10 only).
   - It should also allow exporting of each selected channel to a seperate RMF files (eg `user_selected_name[chX].rmf`)
-- Instrument "stealing"
+- Instrument "stealing" ("Clone Instrument")
   - Import an instrument from the loaded HSB bank into NBStudio's instrument list
+- Instrument sample pointers ("Sample Alias (Pointer)")
+  - like stealing, but we don't copy the samples, and point to the bank's samples
 - MIDI In (record to track)

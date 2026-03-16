@@ -10990,11 +10990,29 @@ BAEResult BAEMixer_LoadFromMemory(BAEMixer mixer, void const *pData, uint32_t da
     result->data.sound = NULL;
     result->data.stream = NULL;
 
-    // Detect file type from content
+    // Detect file type from content.
+    // Prefer explicit RMF/ZMF signatures so embedded-instrument playback
+    // cannot be misrouted into the MIDI loader.
     int32_t probeSize = (int32_t)dataSize;
-    if (probeSize > 64) probeSize = 64; // Only need first 64 bytes for detection
-    
-    BAEFileType ftype = X_DetermineFileTypeByData((const unsigned char *)pData, probeSize);
+    BAEFileType ftype;
+
+    if (probeSize > 64) probeSize = 64; // Generic probe only needs first 64 bytes
+
+    ftype = BAE_INVALID_TYPE;
+    if (dataSize >= 4)
+    {
+        const unsigned char *bytes = (const unsigned char *)pData;
+
+        if ((bytes[0] == 'I' && bytes[1] == 'R' && bytes[2] == 'E' && bytes[3] == 'Z') ||
+            (bytes[0] == 'Z' && bytes[1] == 'R' && bytes[2] == 'E' && bytes[3] == 'Z'))
+        {
+            ftype = BAE_RMF;
+        }
+    }
+    if (ftype == BAE_INVALID_TYPE)
+    {
+        ftype = X_DetermineFileTypeByData((const unsigned char *)pData, probeSize);
+    }
     result->fileType = ftype;
     
     BAE_PRINTF("[BAEMixer_LoadFromMemory] Detected file type: %s\n", X_GetFileTypeString(ftype));

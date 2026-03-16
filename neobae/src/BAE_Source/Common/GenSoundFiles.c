@@ -3502,8 +3502,20 @@ OPErr XExpandVorbis(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst)
              * rootKey that was stored at save time. */
             dst->baseMidiPitch = src->baseMidiPitch ? src->baseMidiPitch : decoded->baseMidiPitch;
             dst->compressionType = C_NONE; // Decoded is uncompressed
-            dst->startLoop = decoded->startLoop > startFrame ? decoded->startLoop - startFrame : 0;
-            dst->endLoop = decoded->endLoop > startFrame ? decoded->endLoop - startFrame : 0;
+            /* Preserve loop points from SND metadata. Vorbis streams usually do
+             * not carry loop tags in this path, and decoded->startLoop/endLoop
+             * are commonly zero. */
+            dst->startLoop = src->startLoop > startFrame ? src->startLoop - startFrame : 0;
+            dst->endLoop = src->endLoop > startFrame ? src->endLoop - startFrame : 0;
+            if (dst->endLoop > availableFrames)
+            {
+                dst->endLoop = availableFrames;
+            }
+            if (dst->startLoop >= dst->endLoop)
+            {
+                dst->startLoop = 0;
+                dst->endLoop = 0;
+            }
             
             // Calculate the size we need for the requested frames
             const uint32_t requestedBytes = availableFrames * bytesPerFrame;
@@ -3837,10 +3849,21 @@ OPErr XExpandOpus(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst)
             dst->sampledRate = decoded->sampledRate;
             dst->bitSize = decoded->bitSize;
             dst->channels = decoded->channels;
-            dst->baseMidiPitch = decoded->baseMidiPitch;
+            dst->baseMidiPitch = src->baseMidiPitch ? src->baseMidiPitch : decoded->baseMidiPitch;
             dst->compressionType = C_NONE; // Decoded is uncompressed
-            dst->startLoop = decoded->startLoop > startFrame ? decoded->startLoop - startFrame : 0;
-            dst->endLoop = decoded->endLoop > startFrame ? decoded->endLoop - startFrame : 0;
+            /* Preserve loop points from SND metadata; Opus decoder metadata does
+             * not provide loop points in this code path. */
+            dst->startLoop = src->startLoop > startFrame ? src->startLoop - startFrame : 0;
+            dst->endLoop = src->endLoop > startFrame ? src->endLoop - startFrame : 0;
+            if (dst->endLoop > availableFrames)
+            {
+                dst->endLoop = availableFrames;
+            }
+            if (dst->startLoop >= dst->endLoop)
+            {
+                dst->startLoop = 0;
+                dst->endLoop = 0;
+            }
             
             // Calculate the size we need for the requested frames
             const uint32_t requestedBytes = availableFrames * bytesPerFrame;

@@ -2888,14 +2888,36 @@ typedef enum BAERmfEditorCompressionType
     BAE_EDITOR_COMPRESSION_VORBIS_32K  = 6,  /* Ogg Vorbis at ~32 kbps */
     BAE_EDITOR_COMPRESSION_VORBIS_64K  = 7,  /* Ogg Vorbis at ~64 kbps */
     BAE_EDITOR_COMPRESSION_VORBIS_96K  = 8,  /* Ogg Vorbis at ~96 kbps */
+    BAE_EDITOR_COMPRESSION_VORBIS_48K  = 24, /* Ogg Vorbis at ~48 kbps */
+    BAE_EDITOR_COMPRESSION_VORBIS_80K  = 25, /* Ogg Vorbis at ~80 kbps */
+    BAE_EDITOR_COMPRESSION_VORBIS_128K = 26, /* Ogg Vorbis at ~128 kbps */
+    BAE_EDITOR_COMPRESSION_VORBIS_160K = 27, /* Ogg Vorbis at ~160 kbps */
+    BAE_EDITOR_COMPRESSION_VORBIS_192K = 28, /* Ogg Vorbis at ~192 kbps */
+    BAE_EDITOR_COMPRESSION_VORBIS_256K = 29, /* Ogg Vorbis at ~256 kbps */
     BAE_EDITOR_COMPRESSION_FLAC        = 9,  /* FLAC lossless (compression level 9) */
     BAE_EDITOR_COMPRESSION_OPUS_64K    = 10, /* Ogg Opus at 64 kbps */
     BAE_EDITOR_COMPRESSION_OPUS_96K    = 11, /* Ogg Opus at 96 kbps */
     BAE_EDITOR_COMPRESSION_OPUS_128K   = 12, /* Ogg Opus at 128 kbps */
     BAE_EDITOR_COMPRESSION_OPUS_256K   = 13, /* Ogg Opus at 256 kbps */
     BAE_EDITOR_COMPRESSION_OPUS_16K    = 14, /* Ogg Opus at 16 kbps */
-    BAE_EDITOR_COMPRESSION_OPUS_32K    = 15  /* Ogg Opus at 32 kbps */
+    BAE_EDITOR_COMPRESSION_OPUS_32K    = 15, /* Ogg Opus at 32 kbps */
+    BAE_EDITOR_COMPRESSION_MP3_48K     = 16, /* MP3 at 48 kbps */
+    BAE_EDITOR_COMPRESSION_MP3_128K    = 17, /* MP3 at 128 kbps */
+    BAE_EDITOR_COMPRESSION_MP3_192K    = 18, /* MP3 at 192 kbps */
+    BAE_EDITOR_COMPRESSION_MP3_256K    = 19, /* MP3 at 256 kbps */
+    BAE_EDITOR_COMPRESSION_MP3_320K    = 20, /* MP3 at 320 kbps */
+    BAE_EDITOR_COMPRESSION_OPUS_12K    = 21, /* Ogg Opus at 12 kbps */
+    BAE_EDITOR_COMPRESSION_OPUS_24K    = 22, /* Ogg Opus at 24 kbps */
+    BAE_EDITOR_COMPRESSION_OPUS_48K    = 23  /* Ogg Opus at 48 kbps */
 } BAERmfEditorCompressionType;
+
+typedef enum BAERmfEditorMidiStorageType
+{
+    BAE_EDITOR_MIDI_STORAGE_CMID_BEST_EFFORT = 0,
+    BAE_EDITOR_MIDI_STORAGE_ECMI,
+    BAE_EDITOR_MIDI_STORAGE_EMID,
+    BAE_EDITOR_MIDI_STORAGE_MIDI
+} BAERmfEditorMidiStorageType;
 
 typedef struct BAERmfEditorSampleInfo
 {
@@ -2910,6 +2932,20 @@ typedef struct BAERmfEditorSampleInfo
     BAERmfEditorCompressionType compressionType; /* target compression for saving */
     BAE_BOOL hasOriginalData;                    /* TRUE if DONT_CHANGE is available */
 } BAERmfEditorSampleInfo;
+
+/* Global sample asset model.
+ * A sample asset represents shared audio content and compression policy.
+ * Multiple instrument splits can reference one asset.
+ */
+typedef struct BAERmfEditorSampleAssetInfo
+{
+    uint32_t assetID;
+    char const *displayName;
+    char const *sourcePath;
+    BAERmfEditorCompressionType compressionType;
+    BAE_BOOL hasOriginalData;
+    uint32_t usageCount;
+} BAERmfEditorSampleAssetInfo;
 
 /* ---------- Extended instrument data (ADSR, LFO, LPF, curves) ---------- */
 
@@ -3001,6 +3037,10 @@ BAEResult BAERmfEditorDocument_GetTrackInfo(BAERmfEditorDocument const *document
 BAEResult BAERmfEditorDocument_SetTrackInfo(BAERmfEditorDocument *document,
                                             uint16_t trackIndex,
                                             BAERmfEditorTrackInfo const *trackInfo);
+BAEResult BAERmfEditorDocument_SetTrackDefaultInstrument(BAERmfEditorDocument *document,
+                                                         uint16_t trackIndex,
+                                                         uint16_t bank,
+                                                         unsigned char program);
 BAEResult BAERmfEditorDocument_DeleteTrack(BAERmfEditorDocument *document,
                                            uint16_t trackIndex);
 BAEResult BAERmfEditorDocument_AddNote(BAERmfEditorDocument *document,
@@ -3039,6 +3079,30 @@ BAEResult BAERmfEditorDocument_GetSampleInfo(BAERmfEditorDocument const *documen
 BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
                                              uint32_t sampleIndex,
                                              BAERmfEditorSampleInfo const *sampleInfo);
+BAEResult BAERmfEditorDocument_GetSampleAssetIDForSample(BAERmfEditorDocument const *document,
+                                                         uint32_t sampleIndex,
+                                                         uint32_t *outAssetID);
+BAEResult BAERmfEditorDocument_GetSampleAssetCount(BAERmfEditorDocument const *document,
+                                                   uint32_t *outAssetCount);
+BAEResult BAERmfEditorDocument_GetSampleAssetInfo(BAERmfEditorDocument const *document,
+                                                  uint32_t assetIndex,
+                                                  BAERmfEditorSampleAssetInfo *outAssetInfo);
+BAEResult BAERmfEditorDocument_GetSampleAssetUsageCount(BAERmfEditorDocument const *document,
+                                                        uint32_t assetID,
+                                                        uint32_t *outUsageCount);
+BAEResult BAERmfEditorDocument_GetSampleAssetSampleIndex(BAERmfEditorDocument const *document,
+                                                         uint32_t assetID,
+                                                         uint32_t usageIndex,
+                                                         uint32_t *outSampleIndex);
+BAEResult BAERmfEditorDocument_SetSampleAssetCompression(BAERmfEditorDocument *document,
+                                                         uint32_t assetID,
+                                                         BAERmfEditorCompressionType compressionType);
+BAEResult BAERmfEditorDocument_SetSampleAssetForSample(BAERmfEditorDocument *document,
+                                                       uint32_t sampleIndex,
+                                                       uint32_t assetID);
+BAEResult BAERmfEditorDocument_CloneSampleAssetForSample(BAERmfEditorDocument *document,
+                                                         uint32_t sampleIndex,
+                                                         uint32_t *outNewAssetID);
 BAEResult BAERmfEditorDocument_DeleteSample(BAERmfEditorDocument *document,
                                             uint32_t sampleIndex);
 BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *document,
@@ -3128,6 +3192,10 @@ BAEResult BAERmfEditorDocument_CopySamplesForPrograms(BAERmfEditorDocument *dest
                                                       BAERmfEditorDocument const *src,
                                                       unsigned char const *programFlags128,
                                                       uint32_t *outCopiedCount);
+BAEResult BAERmfEditorDocument_SetMidiStorageType(BAERmfEditorDocument *document,
+                                                  BAERmfEditorMidiStorageType storageType);
+BAEResult BAERmfEditorDocument_GetMidiStorageType(BAERmfEditorDocument const *document,
+                                                  BAERmfEditorMidiStorageType *outStorageType);
 BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
                                          BAEPathName filePath);
 BAEResult BAERmfEditorDocument_SaveAsMidi(BAERmfEditorDocument *document,

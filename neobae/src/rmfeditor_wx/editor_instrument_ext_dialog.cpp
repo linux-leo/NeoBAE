@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <cmath>
 #include <climits>
 #include <string>
 #include <utility>
@@ -72,6 +73,15 @@ static void FillChoice(wxChoice *choice, FourCharLabel const *table, int count) 
     }
 }
 
+static unsigned char NormalizeRootKeyForSingleKeySplit(unsigned char rootKey,
+                                                        unsigned char lowKey,
+                                                        unsigned char highKey) {
+    if (rootKey == 0 && lowKey <= 127 && highKey <= 127 && lowKey == highKey) {
+        return lowKey;
+    }
+    return rootKey;
+}
+
 /* ====================================================================== */
 /*  Piano keyboard panel                                                  */
 /* ====================================================================== */
@@ -85,7 +95,7 @@ public:
           m_noteOn(std::move(noteOnCallback)),
           m_noteOff(std::move(noteOffCallback)),
           m_baseNote(48),  /* C3 */
-          m_octaves(3),
+                    m_octaves(4),
                     m_pressedKey(-1),
                     m_noteIsOn(false),
                     m_releaseWatchdog(this) {
@@ -98,6 +108,8 @@ public:
         Bind(wxEVT_MOUSE_CAPTURE_LOST, &PianoKeyboardPanel::OnMouseCaptureLost, this);
         Bind(wxEVT_MOUSE_CAPTURE_CHANGED, &PianoKeyboardPanel::OnMouseCaptureChanged, this);
                 Bind(wxEVT_TIMER, &PianoKeyboardPanel::OnReleaseWatchdog, this);
+        Bind(wxEVT_SIZE, &PianoKeyboardPanel::OnSize, this);
+        UpdateVisibleRangeForWidth(GetClientSize().x);
     }
 
     void ForceStop() {
@@ -112,6 +124,22 @@ public:
         int clamped = std::clamp(baseNote, 0, maxBase);
         if (clamped != m_baseNote) {
             m_baseNote = clamped;
+            Refresh();
+        }
+    }
+
+    void UpdateVisibleRangeForWidth(int width) {
+        int desiredWhiteKeys;
+        int desiredOctaves;
+
+        if (width <= 0) {
+            return;
+        }
+        desiredWhiteKeys = std::clamp(width / 26, 21, 42);
+        desiredOctaves = std::clamp(desiredWhiteKeys / 7, 3, 6);
+        if (desiredOctaves != m_octaves) {
+            m_octaves = desiredOctaves;
+            m_baseNote = std::clamp(m_baseNote, 0, std::max(0, 127 - (m_octaves * 12)));
             Refresh();
         }
     }
@@ -241,8 +269,13 @@ private:
             int x1;
             int x2;
             if (WhiteKeyRectForNote(note, size, whiteKeyWidth, &x1, &x2)) {
-                dc.SetBrush(wxBrush(wxColour(240, 240, 235)));
-                dc.SetPen(wxPen(wxColour(100, 100, 100), 1));
+                if (note == m_pressedKey) {
+                    dc.SetBrush(wxBrush(wxColour(170, 205, 165)));
+                    dc.SetPen(wxPen(wxColour(95, 150, 95), 1));
+                } else {
+                    dc.SetBrush(wxBrush(wxColour(240, 240, 235)));
+                    dc.SetPen(wxPen(wxColour(100, 100, 100), 1));
+                }
                 dc.DrawRectangle(x1, 0, x2 - x1, size.y);
             }
         }
@@ -260,11 +293,25 @@ private:
 
         /* Highlight pressed key */
         if (m_pressedKey >= 0) {
-            /* Simple highlight: draw a colored indicator at bottom */
+            /* Tint the actual pressed key so the feedback is visible while dragging. */
+            if (IsBlackKey(m_pressedKey % 12)) {
+                int bx;
+                int bw;
+                if (BlackKeyRectForNote(m_pressedKey, size, whiteKeyWidth, blackKeyWidth, &bx, &bw)) {
+                    dc.SetBrush(wxBrush(wxColour(70, 110, 70)));
+                    dc.SetPen(wxPen(wxColour(160, 220, 160), 1));
+                    dc.DrawRectangle(bx, 0, bw, blackKeyHeight);
+                }
+            }
             dc.SetFont(wxFont(7, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
             dc.SetTextForeground(wxColour(40, 200, 40));
             dc.DrawText(wxString::Format("Note: %d", m_pressedKey), 4, size.y - 14);
         }
+    }
+
+    void OnSize(wxSizeEvent &event) {
+        UpdateVisibleRangeForWidth(event.GetSize().x);
+        event.Skip();
     }
 
     void OnMouseDown(wxMouseEvent &evt) {
@@ -462,6 +509,285 @@ private:
 };
 
 /* ====================================================================== */
+/*  ADSR Envelope graph panel                                             */
+/* ====================================================================== */
+
+class ADSRGraphPanel final : public wxPanel {
+public:
+    explicit ADSRGraphPanel(wxWindow *parent)
+                : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(480, 96), wxBORDER_SIMPLE),
+          m_stageCount(0) {
+        memset(m_levels, 0, sizeof(m_levels));
+        memset(m_times, 0, sizeof(m_times));
+        memset(m_flags, 0, sizeof(m_flags));
+        SetBackgroundStyle(wxBG_STYLE_PAINT);
+        Bind(wxEVT_PAINT, &ADSRGraphPanel::OnPaint, this);
+    }
+
+    void SetEnvelope(int stageCount, int32_t const *levels, int32_t const *times, int32_t const *flags) {
+        m_stageCount = std::clamp(stageCount, 0, BAE_EDITOR_MAX_ADSR_STAGES);
+        for (int i = 0; i < m_stageCount; i++) {
+            m_levels[i] = levels[i];
+            m_times[i] = times[i];
+            m_flags[i] = flags[i];
+        }
+        Refresh();
+    }
+
+private:
+    int m_stageCount;
+    int32_t m_levels[BAE_EDITOR_MAX_ADSR_STAGES];
+    int32_t m_times[BAE_EDITOR_MAX_ADSR_STAGES];   /* microseconds */
+    int32_t m_flags[BAE_EDITOR_MAX_ADSR_STAGES];
+
+    static wxColour StageColour(int32_t flags) {
+        if (flags == (int32_t)FOUR_CHAR('S','U','S','T')) return wxColour(80, 200, 80);
+        if (flags == (int32_t)FOUR_CHAR('R','E','L','S')) return wxColour(200, 80, 80);
+        if (flags == (int32_t)FOUR_CHAR('L','A','S','T')) return wxColour(200, 200, 60);
+        if (flags == (int32_t)FOUR_CHAR('G','O','T','O')) return wxColour(140, 100, 220);
+        if (flags == (int32_t)FOUR_CHAR('G','O','S','T')) return wxColour(100, 140, 220);
+        return wxColour(98, 215, 255);  /* LINEAR_RAMP / default */
+    }
+
+    static char const *StageName(int32_t flags) {
+        if (flags == (int32_t)FOUR_CHAR('L','I','N','E')) return "LIN";
+        if (flags == (int32_t)FOUR_CHAR('S','U','S','T')) return "SUS";
+        if (flags == (int32_t)FOUR_CHAR('L','A','S','T')) return "END";
+        if (flags == (int32_t)FOUR_CHAR('G','O','T','O')) return "GOTO";
+        if (flags == (int32_t)FOUR_CHAR('G','O','S','T')) return "GOST";
+        if (flags == (int32_t)FOUR_CHAR('R','E','L','S')) return "REL";
+        return "OFF";
+    }
+
+    void OnPaint(wxPaintEvent &) {
+        wxAutoBufferedPaintDC dc(this);
+        wxSize size = GetClientSize();
+        int w = size.x;
+        int h = size.y;
+
+        dc.SetBackground(wxBrush(wxColour(22, 22, 22)));
+        dc.Clear();
+
+        if (m_stageCount <= 0 || w < 20 || h < 20) {
+            dc.SetTextForeground(wxColour(120, 120, 120));
+            dc.DrawText("No ADSR stages", 8, h / 2 - 6);
+            return;
+        }
+
+        int const margin = 6;
+        int const graphL = margin + 30;
+        int const graphR = w - margin;
+        int const graphT = margin;
+        int const graphB = h - margin - 14;  /* leave room for labels */
+        int const graphW = graphR - graphL;
+        int const graphH = graphB - graphT;
+
+        if (graphW < 10 || graphH < 10) return;
+
+        /* Find level range and total time for scaling */
+        int32_t minLevel = 0;
+        int32_t maxLevel = 0;
+        int64_t totalTime = 0;
+        for (int i = 0; i < m_stageCount; i++) {
+            if (m_levels[i] < minLevel) minLevel = m_levels[i];
+            if (m_levels[i] > maxLevel) maxLevel = m_levels[i];
+            totalTime += std::abs((int64_t)m_times[i]);
+        }
+        if (maxLevel <= minLevel) maxLevel = minLevel + 1;
+        if (totalTime <= 0) totalTime = 1;
+
+        /* Y-axis helper: level -> pixel y */
+        auto levelToY = [&](int32_t level) -> int {
+            double norm = (double)(level - minLevel) / (double)(maxLevel - minLevel);
+            return graphB - (int)(norm * graphH);
+        };
+
+        /* Draw gridlines */
+        dc.SetPen(wxPen(wxColour(50, 50, 50), 1));
+        dc.DrawLine(graphL, graphT, graphL, graphB);
+        dc.DrawLine(graphL, graphB, graphR, graphB);
+        /* Zero level line */
+        if (minLevel < 0 && maxLevel > 0) {
+            int y0 = levelToY(0);
+            dc.SetPen(wxPen(wxColour(60, 60, 60), 1, wxPENSTYLE_DOT));
+            dc.DrawLine(graphL, y0, graphR, y0);
+        }
+
+        /* Y axis labels */
+        dc.SetFont(wxFont(7, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+        dc.SetTextForeground(wxColour(140, 140, 140));
+        dc.DrawText(wxString::Format("%d", maxLevel), margin, graphT - 2);
+        dc.DrawText(wxString::Format("%d", minLevel), margin, graphB - 8);
+
+        /* Draw envelope segments */
+        int32_t prevLevel = 0;  /* starts at zero before first stage */
+        int64_t cumulativeTime = 0;
+
+        for (int i = 0; i < m_stageCount; i++) {
+            int64_t stageTime = std::abs((int64_t)m_times[i]);
+            int x1 = graphL + (int)((double)cumulativeTime / (double)totalTime * graphW);
+            int x2 = graphL + (int)((double)(cumulativeTime + stageTime) / (double)totalTime * graphW);
+            int y1 = levelToY(prevLevel);
+            int y2 = levelToY(m_levels[i]);
+
+            wxColour colour = StageColour(m_flags[i]);
+
+            /* Stage background band */
+            dc.SetBrush(wxBrush(wxColour(colour.Red() / 6, colour.Green() / 6, colour.Blue() / 6)));
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.DrawRectangle(x1, graphT, std::max(1, x2 - x1), graphH);
+
+            /* Envelope line */
+            dc.SetPen(wxPen(colour, 2));
+            if (m_flags[i] == (int32_t)FOUR_CHAR('S','U','S','T') ||
+                m_flags[i] == 0) {
+                /* Hold at level (sustain or OFF) */
+                int yHold = levelToY(m_levels[i]);
+                dc.DrawLine(x1, y1, x1, yHold);
+                dc.DrawLine(x1, yHold, x2, yHold);
+            } else {
+                /* Ramp from previous level to target */
+                dc.DrawLine(x1, y1, x2, y2);
+            }
+
+            /* Stage label at bottom */
+            dc.SetFont(wxFont(7, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+            dc.SetTextForeground(colour);
+            int labelX = (x1 + x2) / 2 - 8;
+            dc.DrawText(StageName(m_flags[i]), std::max(graphL, labelX), graphB + 2);
+
+            cumulativeTime += stageTime;
+            prevLevel = m_levels[i];
+        }
+
+        /* Draw stage boundary ticks */
+        cumulativeTime = 0;
+        dc.SetPen(wxPen(wxColour(80, 80, 80), 1, wxPENSTYLE_DOT));
+        for (int i = 0; i < m_stageCount - 1; i++) {
+            cumulativeTime += std::abs((int64_t)m_times[i]);
+            int x = graphL + (int)((double)cumulativeTime / (double)totalTime * graphW);
+            dc.DrawLine(x, graphT, x, graphB);
+        }
+    }
+};
+
+/* ====================================================================== */
+/*  LFO waveform graph panel                                              */
+/* ====================================================================== */
+
+class LFOWaveformGraphPanel final : public wxPanel {
+public:
+    explicit LFOWaveformGraphPanel(wxWindow *parent)
+                : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(480, 72), wxBORDER_SIMPLE),
+          m_waveShape((int32_t)FOUR_CHAR('S','I','N','E')),
+          m_period(0),
+          m_dcFeed(0),
+          m_level(0) {
+        SetBackgroundStyle(wxBG_STYLE_PAINT);
+        Bind(wxEVT_PAINT, &LFOWaveformGraphPanel::OnPaint, this);
+    }
+
+    void SetLFO(int32_t waveShape, int32_t period, int32_t dcFeed, int32_t level) {
+        m_waveShape = waveShape;
+        m_period = period;
+        m_dcFeed = dcFeed;
+        m_level = level;
+        Refresh();
+    }
+
+private:
+    int32_t m_waveShape;
+    int32_t m_period;
+    int32_t m_dcFeed;
+    int32_t m_level;
+
+    static double EvaluateWave(int32_t waveShape, double phase) {
+        phase -= std::floor(phase);
+        if (phase < 0.0) {
+            phase += 1.0;
+        }
+
+        switch (waveShape) {
+            case (int32_t)FOUR_CHAR('T','R','I','A'):
+            {
+                double tri = 4.0 * std::fabs(phase - 0.5) - 1.0;
+                return -tri;
+            }
+            case (int32_t)FOUR_CHAR('S','Q','U','A'):
+                return (phase < 0.5) ? 1.0 : -1.0;
+            case (int32_t)FOUR_CHAR('S','Q','U','2'):
+                return (phase < 0.25) ? 1.0 : -1.0;
+            case (int32_t)FOUR_CHAR('S','A','W','T'):
+                return (2.0 * phase) - 1.0;
+            case (int32_t)FOUR_CHAR('S','A','W','2'):
+                return 1.0 - (2.0 * phase);
+            case (int32_t)FOUR_CHAR('S','I','N','E'):
+            default:
+                return std::sin(phase * 2.0 * 3.14159265358979323846);
+        }
+    }
+
+    void OnPaint(wxPaintEvent &) {
+        wxAutoBufferedPaintDC dc(this);
+        wxSize size = GetClientSize();
+        int w = size.x;
+        int h = size.y;
+
+        dc.SetBackground(wxBrush(wxColour(22, 22, 22)));
+        dc.Clear();
+
+        if (w < 20 || h < 20) {
+            return;
+        }
+
+        int const margin = 6;
+        int const left = margin;
+        int const right = w - margin;
+        int const top = margin;
+        int const bottom = h - margin;
+        int const width = right - left;
+        int const height = bottom - top;
+        int const centerY = top + height / 2;
+
+        dc.SetPen(wxPen(wxColour(55, 55, 55), 1));
+        dc.DrawRectangle(left, top, width, height);
+        dc.DrawLine(left, centerY, right, centerY);
+
+        if (m_period == 0 && m_level == 0 && m_dcFeed == 0) {
+            dc.SetTextForeground(wxColour(120, 120, 120));
+            dc.DrawText("LFO preview", left + 8, centerY - 6);
+            return;
+        }
+
+        int64_t span = std::max<int64_t>(1, std::llabs((int64_t)m_level) + std::llabs((int64_t)m_dcFeed));
+
+        dc.SetPen(wxPen(wxColour(98, 215, 255), 2));
+        wxPoint prev;
+        bool hasPrev = false;
+
+        for (int x = 0; x < width; ++x) {
+            double phase = (width > 1) ? ((double)x / (double)(width - 1)) : 0.0;
+            double wave = EvaluateWave(m_waveShape, phase);
+            double value = wave * (double)m_level + (double)m_dcFeed;
+            double normalized = value / (double)span;
+            normalized = std::clamp(normalized, -1.0, 1.0);
+            int y = centerY - (int)(normalized * (height / 2 - 2));
+            wxPoint p(left + x, y);
+
+            if (hasPrev) {
+                dc.DrawLine(prev, p);
+            }
+            prev = p;
+            hasPrev = true;
+        }
+
+        dc.SetTextForeground(wxColour(150, 150, 150));
+        dc.SetFont(wxFont(7, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+        dc.DrawText(wxString::Format("period=%d  level=%d  dc=%d", m_period, m_level, m_dcFeed), left + 6, top + 4);
+    }
+};
+
+/* ====================================================================== */
 /*  InstrumentExtEditorDialog                                             */
 /* ====================================================================== */
 
@@ -473,19 +799,26 @@ public:
                                                             BAERmfEditorDocument *document,
                               uint32_t primarySampleIndex,
                               BAERmfEditorInstrumentExtInfo const *initialExtInfo,
-                              std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char)> playCallback,
+                              std::function<void(wxString const &)> beginUndoCallback,
+                              std::function<void(wxString const &)> commitUndoCallback,
+                              std::function<void()> cancelUndoCallback,
+                              std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType)> playCallback,
                               std::function<void()> stopCallback,
                               std::function<bool(uint32_t, wxString const &)> replaceCallback,
                               std::function<bool(uint32_t, wxString const &)> exportCallback)
-        : wxDialog(parent, wxID_ANY, "Edit Instrument", wxDefaultPosition, wxSize(700, 700),
+        : wxDialog(parent, wxID_ANY, "Edit Instrument", wxDefaultPosition, wxSize(1180, 560),
                    wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER),
           m_document(document),
                     m_instID(0),
           m_extInfo(*initialExtInfo),
           m_extInfoModified(false),
           m_currentLocalIndex(-1),
+          m_currentLfoIndex(-1),
           m_savedLoopStart(0),
           m_savedLoopEnd(0),
+          m_beginUndoCallback(std::move(beginUndoCallback)),
+          m_commitUndoCallback(std::move(commitUndoCallback)),
+          m_cancelUndoCallback(std::move(cancelUndoCallback)),
           m_playCallback(std::move(playCallback)),
           m_stopCallback(std::move(stopCallback)),
           m_replaceCallback(std::move(replaceCallback)),
@@ -511,6 +844,7 @@ public:
         m_pianoPanel = new PianoKeyboardPanel(this,
             [this](int note) {
                 if (!m_playCallback || m_sampleIndices.empty()) return;
+                SaveCurrentSampleFromUI();
                 /* Find the sample whose key range contains the played note */
                 int best = -1;
                 for (size_t i = 0; i < m_samples.size(); i++) {
@@ -523,7 +857,8 @@ public:
                 m_playCallback(m_sampleIndices[(size_t)best], note,
                                &m_samples[(size_t)best].sampleInfo,
                                m_samples[(size_t)best].splitVolume,
-                               m_samples[(size_t)best].rootKey);
+                               m_samples[(size_t)best].rootKey,
+                               m_samples[(size_t)best].compressionType);
             },
             [this]() {
                 if (m_stopCallback) m_stopCallback();
@@ -542,6 +877,7 @@ public:
         }
 
         SetSizerAndFit(rootSizer);
+        SetSize(wxSize(1180, 560));
 
         Bind(wxEVT_LEFT_UP, [this](wxMouseEvent &evt) {
             if (m_pianoPanel) {
@@ -552,12 +888,95 @@ public:
 
         Bind(wxEVT_BUTTON, &InstrumentExtEditorDialog::OnApply, this, wxID_APPLY);
         Bind(wxEVT_BUTTON, &InstrumentExtEditorDialog::OnOk, this, wxID_OK);
+        Bind(wxEVT_CHAR_HOOK, [this](wxKeyEvent &event) {
+            int keyCode = event.GetKeyCode();
+            bool ctrlDown = event.ControlDown() || event.CmdDown();
+            wxWindow *focus = wxWindow::FindFocus();
+
+            if (ctrlDown && !event.ShiftDown() && !event.AltDown() &&
+                (keyCode == 'Z' || keyCode == 'z')) {
+                wxTextCtrl *textCtrl = wxDynamicCast(focus, wxTextCtrl);
+                if (textCtrl && textCtrl->CanUndo()) {
+                    textCtrl->Undo();
+                    return;
+                }
+                wxCommandEvent cmd(wxEVT_MENU, wxID_UNDO);
+                wxWindow *target = wxGetTopLevelParent(this);
+                if (target && target != this) {
+                    if (target->GetEventHandler()->ProcessEvent(cmd)) {
+                        return;
+                    }
+                }
+            }
+            if (ctrlDown && !event.AltDown() &&
+                (keyCode == 'Y' || keyCode == 'y' ||
+                 (event.ShiftDown() && (keyCode == 'Z' || keyCode == 'z')))) {
+                wxTextCtrl *textCtrl = wxDynamicCast(focus, wxTextCtrl);
+                if (textCtrl && textCtrl->CanRedo()) {
+                    textCtrl->Redo();
+                    return;
+                }
+                wxCommandEvent cmd(wxEVT_MENU, wxID_REDO);
+                wxWindow *target = wxGetTopLevelParent(this);
+                if (target && target != this) {
+                    if (target->GetEventHandler()->ProcessEvent(cmd)) {
+                        return;
+                    }
+                }
+            }
+            event.Skip();
+        });
 
         /* Load initial sample data */
         if (!m_samples.empty()) {
             m_splitChoice->SetSelection(0);
             LoadLocalSample(0);
         }
+
+        auto instantApply = [this](wxCommandEvent &event) {
+            if (!m_loadingUiValues) {
+                wxCommandEvent evt;
+                OnApply(evt);
+            }
+            event.Skip();
+        };
+        if (m_instNameText) m_instNameText->Bind(wxEVT_TEXT, instantApply);
+        if (m_instProgramSpin) {
+            m_instProgramSpin->Bind(wxEVT_SPINCTRL, instantApply);
+            m_instProgramSpin->Bind(wxEVT_TEXT, instantApply);
+        }
+        if (m_nameText) m_nameText->Bind(wxEVT_TEXT, instantApply);
+        if (m_rootSpin) {
+            m_rootSpin->Bind(wxEVT_SPINCTRL, instantApply);
+            m_rootSpin->Bind(wxEVT_TEXT, instantApply);
+        }
+        if (m_lowSpin) {
+            m_lowSpin->Bind(wxEVT_SPINCTRL, instantApply);
+            m_lowSpin->Bind(wxEVT_TEXT, instantApply);
+        }
+        if (m_highSpin) {
+            m_highSpin->Bind(wxEVT_SPINCTRL, instantApply);
+            m_highSpin->Bind(wxEVT_TEXT, instantApply);
+        }
+        if (m_sampleRateSpin) {
+            m_sampleRateSpin->Bind(wxEVT_SPINCTRL, instantApply);
+            m_sampleRateSpin->Bind(wxEVT_TEXT, instantApply);
+        }
+        if (m_splitVolumeSpin) {
+            m_splitVolumeSpin->Bind(wxEVT_SPINCTRL, instantApply);
+            m_splitVolumeSpin->Bind(wxEVT_TEXT, instantApply);
+        }
+        if (m_loopEnableCheck) m_loopEnableCheck->Bind(wxEVT_CHECKBOX, instantApply);
+        if (m_loopStartSpin) {
+            m_loopStartSpin->Bind(wxEVT_SPINCTRL, instantApply);
+            m_loopStartSpin->Bind(wxEVT_TEXT, instantApply);
+        }
+        if (m_loopEndSpin) {
+            m_loopEndSpin->Bind(wxEVT_SPINCTRL, instantApply);
+            m_loopEndSpin->Bind(wxEVT_TEXT, instantApply);
+        }
+        if (m_codecChoice) m_codecChoice->Bind(wxEVT_CHOICE, instantApply);
+        if (m_bitrateChoice) m_bitrateChoice->Bind(wxEVT_CHOICE, instantApply);
     }
 
     BAERmfEditorInstrumentExtInfo const &GetExtInfo() {
@@ -583,8 +1002,12 @@ private:
     std::vector<uint32_t> m_sampleIndices;
     std::vector<EditedSample> m_samples;
     int m_currentLocalIndex;
+    int m_currentLfoIndex;
     uint32_t m_savedLoopStart, m_savedLoopEnd;
-    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char)> m_playCallback;
+    std::function<void(wxString const &)> m_beginUndoCallback;
+    std::function<void(wxString const &)> m_commitUndoCallback;
+    std::function<void()> m_cancelUndoCallback;
+    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType)> m_playCallback;
     std::function<void()> m_stopCallback;
     std::function<bool(uint32_t, wxString const &)> m_replaceCallback;
     std::function<bool(uint32_t, wxString const &)> m_exportCallback;
@@ -592,6 +1015,8 @@ private:
     wxNotebook *m_notebook;
     PianoKeyboardPanel *m_pianoPanel;
     wxButton *m_applyButton;
+    bool m_loadingUiValues = false;
+    bool m_inInstantApply = false;
 
     /* Instrument tab controls */
     wxTextCtrl *m_instNameText;
@@ -607,9 +1032,10 @@ private:
     /* ADSR stages */
     wxSpinCtrl *m_adsrStageSpin;
     wxSpinCtrl *m_adsrLevel[BAE_EDITOR_MAX_ADSR_STAGES];
-    wxSpinCtrl *m_adsrTime[BAE_EDITOR_MAX_ADSR_STAGES];
+    wxSpinCtrlDouble *m_adsrTime[BAE_EDITOR_MAX_ADSR_STAGES];
     wxChoice *m_adsrFlags[BAE_EDITOR_MAX_ADSR_STAGES];
     wxStaticText *m_adsrRowLabels[BAE_EDITOR_MAX_ADSR_STAGES];
+    ADSRGraphPanel *m_adsrGraph;
     /* LFO controls */
     wxSpinCtrl *m_lfoCountSpin;
     wxChoice *m_lfoSelector;
@@ -618,6 +1044,9 @@ private:
     wxSpinCtrl *m_lfoPeriod;
     wxSpinCtrl *m_lfoDCFeed;
     wxSpinCtrl *m_lfoLevel;
+    LFOWaveformGraphPanel *m_lfoGraph;
+    ADSRGraphPanel *m_lfoAdsrGraph;
+    ADSRGraphPanel *m_filterGraph;
 
     /* Samples tab controls */
     wxChoice *m_splitChoice;
@@ -625,12 +1054,14 @@ private:
     wxSpinCtrl *m_rootSpin;
     wxSpinCtrl *m_lowSpin;
     wxSpinCtrl *m_highSpin;
+    wxSpinCtrl *m_sampleRateSpin;
     wxSpinCtrl *m_splitVolumeSpin;
     wxCheckBox *m_loopEnableCheck;
     wxSpinCtrl *m_loopStartSpin;
     wxSpinCtrl *m_loopEndSpin;
     wxStaticText *m_loopInfoLabel;
-    wxChoice *m_compressionChoice;
+    wxChoice *m_codecChoice;
+    wxChoice *m_bitrateChoice;
     wxStaticText *m_codecLabel;
     WaveformPanelExt *m_waveformPanel;
     wxButton *m_deleteSampleButton;
@@ -639,6 +1070,9 @@ private:
     void BuildInstrumentTab() {
         wxPanel *page = new wxPanel(m_notebook);
         wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
+        wxStaticBoxSizer *lpfBox = nullptr;
+        wxStaticBoxSizer *lfoBox = nullptr;
+        wxStaticBoxSizer *adsrBox = nullptr;
 
         /* Name + Program */
         {
@@ -687,25 +1121,40 @@ private:
 
         /* LPF */
         {
-            wxStaticBoxSizer *box = new wxStaticBoxSizer(wxHORIZONTAL, page, "Low-Pass Filter");
-            box->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Frequency"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-            m_lpfFrequency = new wxSpinCtrl(box->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(80, -1),
+            lpfBox = new wxStaticBoxSizer(wxHORIZONTAL, page, "Low-Pass Filter");
+            wxBoxSizer *controlsRow = new wxBoxSizer(wxHORIZONTAL);
+
+            controlsRow->Add(new wxStaticText(lpfBox->GetStaticBox(), wxID_ANY, "Frequency"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+            m_lpfFrequency = new wxSpinCtrl(lpfBox->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(80, -1),
                                             wxSP_ARROW_KEYS, -100000, 100000, m_extInfo.LPF_frequency);
-            box->Add(m_lpfFrequency, 0, wxRIGHT, 10);
-            box->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Resonance"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-            m_lpfResonance = new wxSpinCtrl(box->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(80, -1),
+            controlsRow->Add(m_lpfFrequency, 0, wxRIGHT, 12);
+            controlsRow->Add(new wxStaticText(lpfBox->GetStaticBox(), wxID_ANY, "Resonance"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+            m_lpfResonance = new wxSpinCtrl(lpfBox->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(80, -1),
                                             wxSP_ARROW_KEYS, -100000, 100000, m_extInfo.LPF_resonance);
-            box->Add(m_lpfResonance, 0, wxRIGHT, 10);
-            box->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Amount"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-            m_lpfLowpassAmount = new wxSpinCtrl(box->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(80, -1),
+            controlsRow->Add(m_lpfResonance, 0, wxRIGHT, 12);
+            controlsRow->Add(new wxStaticText(lpfBox->GetStaticBox(), wxID_ANY, "Amount"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+            m_lpfLowpassAmount = new wxSpinCtrl(lpfBox->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(80, -1),
                                                 wxSP_ARROW_KEYS, -100000, 100000, m_extInfo.LPF_lowpassAmount);
-            box->Add(m_lpfLowpassAmount, 0);
-            sizer->Add(box, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
+            controlsRow->Add(m_lpfLowpassAmount, 0);
+            lpfBox->Add(controlsRow, 0, wxALIGN_CENTER_VERTICAL | wxALL, 4);
+
+            wxBoxSizer *previewCol = new wxBoxSizer(wxVERTICAL);
+            previewCol->Add(new wxStaticText(lpfBox->GetStaticBox(), wxID_ANY, "Filter Envelope Preview"), 0, wxBOTTOM, 2);
+            m_filterGraph = new ADSRGraphPanel(lpfBox->GetStaticBox());
+            m_filterGraph->SetMinSize(wxSize(-1, 60));
+            previewCol->Add(m_filterGraph, 1, wxEXPAND);
+            lpfBox->Add(previewCol, 1, wxEXPAND | wxALL, 4);
+
+            m_lpfFrequency->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { RefreshFilterEnvelopeGraph(); });
+            m_lpfResonance->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { RefreshFilterEnvelopeGraph(); });
+            m_lpfLowpassAmount->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { RefreshFilterEnvelopeGraph(); });
+
         }
 
         /* Volume ADSR */
         {
             wxStaticBoxSizer *box = new wxStaticBoxSizer(wxVERTICAL, page, "Volume ADSR");
+            adsrBox = box;
             wxBoxSizer *countRow = new wxBoxSizer(wxHORIZONTAL);
             countRow->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Stages:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
             m_adsrStageSpin = new wxSpinCtrl(box->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(60, -1),
@@ -713,29 +1162,40 @@ private:
             countRow->Add(m_adsrStageSpin, 0);
             box->Add(countRow, 0, wxALL, 4);
 
+            /* Envelope graph */
+            m_adsrGraph = new ADSRGraphPanel(box->GetStaticBox());
+            m_adsrGraph->SetMinSize(wxSize(-1, 84));
+            box->Add(m_adsrGraph, 0, wxEXPAND | wxLEFT | wxRIGHT, 4);
+
             /* Header */
             wxFlexGridSizer *grid = new wxFlexGridSizer(0, 4, 2, 6);
             grid->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "#"), 0, wxALIGN_CENTER);
             grid->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Level"), 0, wxALIGN_CENTER);
-            grid->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Time"), 0, wxALIGN_CENTER);
+            grid->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Time (s)"), 0, wxALIGN_CENTER);
             grid->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Type"), 0, wxALIGN_CENTER);
 
             for (int i = 0; i < BAE_EDITOR_MAX_ADSR_STAGES; i++) {
                 m_adsrRowLabels[i] = new wxStaticText(box->GetStaticBox(), wxID_ANY, wxString::Format("%d", i));
                 grid->Add(m_adsrRowLabels[i], 0, wxALIGN_CENTER_VERTICAL);
                 int lvl = (i < (int)m_extInfo.volumeADSR.stageCount) ? m_extInfo.volumeADSR.stages[i].level : 0;
-                int tm = (i < (int)m_extInfo.volumeADSR.stageCount) ? m_extInfo.volumeADSR.stages[i].time : 0;
+                int32_t tmRaw = (i < (int)m_extInfo.volumeADSR.stageCount) ? m_extInfo.volumeADSR.stages[i].time : 0;
                 int fl = (i < (int)m_extInfo.volumeADSR.stageCount) ? m_extInfo.volumeADSR.stages[i].flags : 0;
                 m_adsrLevel[i] = new wxSpinCtrl(box->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(80, -1),
                                                 wxSP_ARROW_KEYS, -1000000, 1000000, lvl);
                 grid->Add(m_adsrLevel[i], 0);
-                m_adsrTime[i] = new wxSpinCtrl(box->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(80, -1),
-                                               wxSP_ARROW_KEYS, -1000000, 1000000, tm);
+                m_adsrTime[i] = new wxSpinCtrlDouble(box->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(100, -1),
+                                                     wxSP_ARROW_KEYS, -16.0, 16.0, (double)tmRaw / 1000000.0, 0.001);
+                m_adsrTime[i]->SetDigits(3);
                 grid->Add(m_adsrTime[i], 0);
                 m_adsrFlags[i] = new wxChoice(box->GetStaticBox(), wxID_ANY);
                 FillChoice(m_adsrFlags[i], kADSRFlagLabels, kADSRFlagCount);
                 m_adsrFlags[i]->SetSelection(FindLabelIndex(kADSRFlagLabels, kADSRFlagCount, fl));
                 grid->Add(m_adsrFlags[i], 0);
+
+                /* Bind change events to refresh the graph */
+                m_adsrLevel[i]->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { RefreshADSRGraph(); });
+                m_adsrTime[i]->Bind(wxEVT_SPINCTRLDOUBLE, [this](wxSpinDoubleEvent &) { RefreshADSRGraph(); });
+                m_adsrFlags[i]->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) { RefreshADSRGraph(); });
 
                 bool visible = (i < (int)m_extInfo.volumeADSR.stageCount);
                 m_adsrRowLabels[i]->Show(visible);
@@ -744,7 +1204,6 @@ private:
                 m_adsrFlags[i]->Show(visible);
             }
             box->Add(grid, 0, wxALL, 4);
-            sizer->Add(box, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
             m_adsrStageSpin->Bind(wxEVT_SPINCTRL, [this, box](wxCommandEvent &) {
                 int count = m_adsrStageSpin->GetValue();
@@ -756,54 +1215,123 @@ private:
                     m_adsrFlags[i]->Show(vis);
                 }
                 box->GetStaticBox()->GetParent()->Layout();
+                RefreshADSRGraph();
             });
+
+            RefreshADSRGraph();
+            RefreshFilterEnvelopeGraph();
         }
 
         /* LFO section */
         {
-            wxStaticBoxSizer *box = new wxStaticBoxSizer(wxVERTICAL, page, "LFOs");
+            lfoBox = new wxStaticBoxSizer(wxVERTICAL, page, "LFOs");
             wxBoxSizer *row = new wxBoxSizer(wxHORIZONTAL);
-            row->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Count:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
-            m_lfoCountSpin = new wxSpinCtrl(box->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(60, -1),
+            row->Add(new wxStaticText(lfoBox->GetStaticBox(), wxID_ANY, "Count:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
+            m_lfoCountSpin = new wxSpinCtrl(lfoBox->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(60, -1),
                                             wxSP_ARROW_KEYS, 0, BAE_EDITOR_MAX_LFOS, (int)m_extInfo.lfoCount);
             row->Add(m_lfoCountSpin, 0, wxRIGHT, 15);
-            row->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Edit LFO:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
-            m_lfoSelector = new wxChoice(box->GetStaticBox(), wxID_ANY);
+            row->Add(new wxStaticText(lfoBox->GetStaticBox(), wxID_ANY, "Edit LFO:"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
+            m_lfoSelector = new wxChoice(lfoBox->GetStaticBox(), wxID_ANY);
             for (int i = 0; i < BAE_EDITOR_MAX_LFOS; i++) m_lfoSelector->Append(wxString::Format("LFO %d", i));
             if (m_extInfo.lfoCount > 0) m_lfoSelector->SetSelection(0);
             row->Add(m_lfoSelector, 0);
-            box->Add(row, 0, wxALL, 4);
+            lfoBox->Add(row, 0, wxALL, 4);
 
             wxFlexGridSizer *grid = new wxFlexGridSizer(2, 4, 6);
-            grid->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Dest"), 0, wxALIGN_CENTER_VERTICAL);
-            m_lfoDest = new wxChoice(box->GetStaticBox(), wxID_ANY);
+            grid->Add(new wxStaticText(lfoBox->GetStaticBox(), wxID_ANY, "Dest"), 0, wxALIGN_CENTER_VERTICAL);
+            m_lfoDest = new wxChoice(lfoBox->GetStaticBox(), wxID_ANY);
             FillChoice(m_lfoDest, kLFODestLabels, kLFODestCount);
             grid->Add(m_lfoDest, 0);
-            grid->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Shape"), 0, wxALIGN_CENTER_VERTICAL);
-            m_lfoShape = new wxChoice(box->GetStaticBox(), wxID_ANY);
+            grid->Add(new wxStaticText(lfoBox->GetStaticBox(), wxID_ANY, "Shape"), 0, wxALIGN_CENTER_VERTICAL);
+            m_lfoShape = new wxChoice(lfoBox->GetStaticBox(), wxID_ANY);
             FillChoice(m_lfoShape, kLFOShapeLabels, kLFOShapeCount);
             grid->Add(m_lfoShape, 0);
-            grid->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Period"), 0, wxALIGN_CENTER_VERTICAL);
-            m_lfoPeriod = new wxSpinCtrl(box->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(100, -1),
+            grid->Add(new wxStaticText(lfoBox->GetStaticBox(), wxID_ANY, "Period"), 0, wxALIGN_CENTER_VERTICAL);
+            m_lfoPeriod = new wxSpinCtrl(lfoBox->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(100, -1),
                                          wxSP_ARROW_KEYS, -1000000, 10000000, 0);
             grid->Add(m_lfoPeriod, 0);
-            grid->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "DC Feed"), 0, wxALIGN_CENTER_VERTICAL);
-            m_lfoDCFeed = new wxSpinCtrl(box->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(100, -1),
+            grid->Add(new wxStaticText(lfoBox->GetStaticBox(), wxID_ANY, "DC Feed"), 0, wxALIGN_CENTER_VERTICAL);
+            m_lfoDCFeed = new wxSpinCtrl(lfoBox->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(100, -1),
                                          wxSP_ARROW_KEYS, -1000000, 1000000, 0);
             grid->Add(m_lfoDCFeed, 0);
-            grid->Add(new wxStaticText(box->GetStaticBox(), wxID_ANY, "Level"), 0, wxALIGN_CENTER_VERTICAL);
-            m_lfoLevel = new wxSpinCtrl(box->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(100, -1),
+            grid->Add(new wxStaticText(lfoBox->GetStaticBox(), wxID_ANY, "Level"), 0, wxALIGN_CENTER_VERTICAL);
+            m_lfoLevel = new wxSpinCtrl(lfoBox->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(100, -1),
                                         wxSP_ARROW_KEYS, -1000000, 1000000, 0);
             grid->Add(m_lfoLevel, 0);
-            box->Add(grid, 0, wxALL, 4);
-            sizer->Add(box, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
+            lfoBox->Add(grid, 0, wxALL, 4);
 
-            if (m_extInfo.lfoCount > 0) LoadLFOIntoUI(0);
+            m_lfoGraph = new LFOWaveformGraphPanel(lfoBox->GetStaticBox());
+            lfoBox->Add(m_lfoGraph, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4);
+
+            lfoBox->Add(new wxStaticText(lfoBox->GetStaticBox(), wxID_ANY, "LFO Envelope (selected LFO)"), 0, wxLEFT | wxRIGHT | wxBOTTOM, 4);
+            m_lfoAdsrGraph = new ADSRGraphPanel(lfoBox->GetStaticBox());
+            m_lfoAdsrGraph->SetMinSize(wxSize(-1, 72));
+            lfoBox->Add(m_lfoAdsrGraph, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4);
+
+            if (m_extInfo.lfoCount > 0) {
+                m_currentLfoIndex = 0;
+                LoadLFOIntoUI(0);
+            }
+            RefreshLFOGraph();
+            RefreshLFOEnvelopeGraph();
 
             m_lfoSelector->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) {
                 int sel = m_lfoSelector->GetSelection();
+                if (m_currentLfoIndex >= 0) {
+                    SaveLFOFromUI(m_currentLfoIndex);
+                }
+                m_currentLfoIndex = sel;
                 if (sel >= 0) LoadLFOIntoUI(sel);
+                RefreshLFOGraph();
+                RefreshLFOEnvelopeGraph();
+                RefreshFilterEnvelopeGraph();
             });
+
+            m_lfoCountSpin->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) {
+                int count = m_lfoCountSpin->GetValue();
+                if (count <= 0) {
+                    m_currentLfoIndex = -1;
+                    m_lfoSelector->SetSelection(wxNOT_FOUND);
+                } else {
+                    int sel = m_lfoSelector->GetSelection();
+                    if (sel < 0 || sel >= count) {
+                        sel = 0;
+                        m_lfoSelector->SetSelection(sel);
+                    }
+                    m_currentLfoIndex = sel;
+                    LoadLFOIntoUI(sel);
+                }
+                RefreshLFOGraph();
+                RefreshLFOEnvelopeGraph();
+                RefreshFilterEnvelopeGraph();
+            });
+
+            auto lfoChanged = [this](wxCommandEvent &) {
+                int sel = (m_currentLfoIndex >= 0) ? m_currentLfoIndex : m_lfoSelector->GetSelection();
+                if (sel >= 0) {
+                    SaveLFOFromUI(sel);
+                }
+                RefreshLFOGraph();
+            };
+            m_lfoDest->Bind(wxEVT_CHOICE, lfoChanged);
+            m_lfoShape->Bind(wxEVT_CHOICE, lfoChanged);
+            m_lfoPeriod->Bind(wxEVT_SPINCTRL, lfoChanged);
+            m_lfoDCFeed->Bind(wxEVT_SPINCTRL, lfoChanged);
+            m_lfoLevel->Bind(wxEVT_SPINCTRL, lfoChanged);
+        }
+
+        if (lpfBox) {
+            sizer->Add(lpfBox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
+        }
+        if (lfoBox && adsrBox) {
+            wxBoxSizer *modulationRow = new wxBoxSizer(wxHORIZONTAL);
+            modulationRow->Add(lfoBox, 1, wxEXPAND | wxRIGHT, 6);
+            modulationRow->Add(adsrBox, 1, wxEXPAND | wxLEFT, 6);
+            sizer->Add(modulationRow, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
+        } else if (lfoBox) {
+            sizer->Add(lfoBox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
+        } else if (adsrBox) {
+            sizer->Add(adsrBox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
         }
 
         page->SetSizerAndFit(sizer);
@@ -817,6 +1345,8 @@ private:
             m_lfoPeriod->SetValue(0);
             m_lfoDCFeed->SetValue(0);
             m_lfoLevel->SetValue(0);
+            RefreshLFOGraph();
+            RefreshLFOEnvelopeGraph();
             return;
         }
         BAERmfEditorLFOInfo const &lfo = m_extInfo.lfos[idx];
@@ -825,6 +1355,8 @@ private:
         m_lfoPeriod->SetValue(lfo.period);
         m_lfoDCFeed->SetValue(lfo.DC_feed);
         m_lfoLevel->SetValue(lfo.level);
+        RefreshLFOGraph();
+        RefreshLFOEnvelopeGraph();
     }
 
     void SaveLFOFromUI(int idx) {
@@ -837,6 +1369,124 @@ private:
         lfo.period = m_lfoPeriod->GetValue();
         lfo.DC_feed = m_lfoDCFeed->GetValue();
         lfo.level = m_lfoLevel->GetValue();
+    }
+
+    void RefreshADSRGraph() {
+        int count = m_adsrStageSpin->GetValue();
+        int32_t levels[BAE_EDITOR_MAX_ADSR_STAGES];
+        int32_t times[BAE_EDITOR_MAX_ADSR_STAGES];
+        int32_t flags[BAE_EDITOR_MAX_ADSR_STAGES];
+        for (int i = 0; i < count && i < BAE_EDITOR_MAX_ADSR_STAGES; i++) {
+            levels[i] = m_adsrLevel[i]->GetValue();
+            times[i] = (int32_t)(m_adsrTime[i]->GetValue() * 1000000.0);
+            int sel = m_adsrFlags[i]->GetSelection();
+            flags[i] = (sel >= 0 && sel < kADSRFlagCount) ? kADSRFlagLabels[sel].value : 0;
+        }
+        m_adsrGraph->SetEnvelope(count, levels, times, flags);
+        RefreshFilterEnvelopeGraph();
+    }
+
+    void RefreshLFOGraph() {
+        int shapeSel;
+        int32_t shape;
+
+        if (!m_lfoGraph) {
+            return;
+        }
+        shapeSel = m_lfoShape ? m_lfoShape->GetSelection() : 0;
+        shape = (shapeSel >= 0 && shapeSel < kLFOShapeCount) ? kLFOShapeLabels[shapeSel].value : (int32_t)FOUR_CHAR('S','I','N','E');
+        m_lfoGraph->SetLFO(shape,
+                           m_lfoPeriod ? m_lfoPeriod->GetValue() : 0,
+                           m_lfoDCFeed ? m_lfoDCFeed->GetValue() : 0,
+                           m_lfoLevel ? m_lfoLevel->GetValue() : 0);
+    }
+
+    void RefreshLFOEnvelopeGraph() {
+        int idx;
+        int count;
+        int32_t levels[BAE_EDITOR_MAX_ADSR_STAGES];
+        int32_t times[BAE_EDITOR_MAX_ADSR_STAGES];
+        int32_t flags[BAE_EDITOR_MAX_ADSR_STAGES];
+
+        if (!m_lfoAdsrGraph) {
+            return;
+        }
+        idx = (m_currentLfoIndex >= 0) ? m_currentLfoIndex : (m_lfoSelector ? m_lfoSelector->GetSelection() : -1);
+        if (idx < 0 || idx >= (int)m_extInfo.lfoCount) {
+            m_lfoAdsrGraph->SetEnvelope(0, levels, times, flags);
+            return;
+        }
+
+        count = std::clamp((int)m_extInfo.lfos[idx].adsr.stageCount, 0, BAE_EDITOR_MAX_ADSR_STAGES);
+        for (int i = 0; i < count; ++i) {
+            levels[i] = m_extInfo.lfos[idx].adsr.stages[i].level;
+            times[i] = m_extInfo.lfos[idx].adsr.stages[i].time;
+            flags[i] = m_extInfo.lfos[idx].adsr.stages[i].flags;
+        }
+        m_lfoAdsrGraph->SetEnvelope(count, levels, times, flags);
+    }
+
+    void RefreshFilterEnvelopeGraph() {
+        int count;
+        int32_t levels[BAE_EDITOR_MAX_ADSR_STAGES];
+        int32_t times[BAE_EDITOR_MAX_ADSR_STAGES];
+        int32_t flags[BAE_EDITOR_MAX_ADSR_STAGES];
+        int32_t baseFreq;
+        int32_t amount;
+        int64_t sourceLevels[BAE_EDITOR_MAX_ADSR_STAGES];
+        int64_t maxAbsLevel;
+        BAERmfEditorADSRInfo const *lpfSourceAdsr;
+
+        if (!m_filterGraph || !m_adsrStageSpin) {
+            return;
+        }
+        baseFreq = m_lpfFrequency ? m_lpfFrequency->GetValue() : 0;
+        amount = m_lpfLowpassAmount ? m_lpfLowpassAmount->GetValue() : 0;
+        lpfSourceAdsr = nullptr;
+
+        for (uint32_t i = 0; i < m_extInfo.lfoCount; ++i) {
+            int32_t dest = m_extInfo.lfos[i].destination;
+            if ((dest == (int32_t)FOUR_CHAR('L','P','F','R') ||
+                 dest == (int32_t)FOUR_CHAR('L','P','A','M')) &&
+                m_extInfo.lfos[i].adsr.stageCount > 0) {
+                lpfSourceAdsr = &m_extInfo.lfos[i].adsr;
+                break;
+            }
+        }
+
+        if (lpfSourceAdsr) {
+            count = std::clamp((int)lpfSourceAdsr->stageCount, 0, BAE_EDITOR_MAX_ADSR_STAGES);
+            for (int i = 0; i < count; ++i) {
+                sourceLevels[i] = lpfSourceAdsr->stages[i].level;
+                times[i] = lpfSourceAdsr->stages[i].time;
+                flags[i] = lpfSourceAdsr->stages[i].flags;
+            }
+        } else {
+            count = std::clamp(m_adsrStageSpin->GetValue(), 0, BAE_EDITOR_MAX_ADSR_STAGES);
+            for (int i = 0; i < count; ++i) {
+                sourceLevels[i] = m_adsrLevel[i] ? (int64_t)m_adsrLevel[i]->GetValue() : 0;
+                times[i] = (int32_t)((m_adsrTime[i] ? m_adsrTime[i]->GetValue() : 0.0) * 1000000.0);
+                {
+                    int sel = m_adsrFlags[i] ? m_adsrFlags[i]->GetSelection() : 0;
+                    flags[i] = (sel >= 0 && sel < kADSRFlagCount) ? kADSRFlagLabels[sel].value : 0;
+                }
+            }
+        }
+
+        maxAbsLevel = 0;
+        for (int i = 0; i < count; ++i) {
+            maxAbsLevel = std::max<int64_t>(maxAbsLevel, std::llabs(sourceLevels[i]));
+        }
+        if (maxAbsLevel == 0) {
+            maxAbsLevel = 4096;
+        }
+
+        for (int i = 0; i < count; ++i) {
+            int64_t cutoff = (int64_t)baseFreq + (sourceLevels[i] * (int64_t)amount) / maxAbsLevel;
+            cutoff = std::clamp<int64_t>(cutoff, INT32_MIN, INT32_MAX);
+            levels[i] = (int32_t)cutoff;
+        }
+        m_filterGraph->SetEnvelope(count, levels, times, flags);
     }
 
     wxString GetInstrumentDisplayName() const {
@@ -866,13 +1516,13 @@ private:
         m_extInfo.volumeADSR.stageCount = (uint32_t)m_adsrStageSpin->GetValue();
         for (int i = 0; i < (int)m_extInfo.volumeADSR.stageCount && i < BAE_EDITOR_MAX_ADSR_STAGES; i++) {
             m_extInfo.volumeADSR.stages[i].level = m_adsrLevel[i]->GetValue();
-            m_extInfo.volumeADSR.stages[i].time = m_adsrTime[i]->GetValue();
+            m_extInfo.volumeADSR.stages[i].time = (int32_t)(m_adsrTime[i]->GetValue() * 1000000.0);
             int sel = m_adsrFlags[i]->GetSelection();
             m_extInfo.volumeADSR.stages[i].flags = (sel >= 0 && sel < kADSRFlagCount) ? kADSRFlagLabels[sel].value : 0;
         }
 
         /* LFOs - save current one being edited */
-        int lfoSel = m_lfoSelector->GetSelection();
+        int lfoSel = (m_currentLfoIndex >= 0) ? m_currentLfoIndex : m_lfoSelector->GetSelection();
         if (lfoSel >= 0) SaveLFOFromUI(lfoSel);
         m_extInfo.lfoCount = (uint32_t)m_lfoCountSpin->GetValue();
 
@@ -944,6 +1594,9 @@ private:
         grid->Add(new wxStaticText(page, wxID_ANY, "High Key"), 0, wxALIGN_CENTER_VERTICAL);
         m_highSpin = new wxSpinCtrl(page, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, 127);
         grid->Add(m_highSpin, 0);
+        grid->Add(new wxStaticText(page, wxID_ANY, "Sample Rate (Hz)"), 0, wxALIGN_CENTER_VERTICAL);
+        m_sampleRateSpin = new wxSpinCtrl(page, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, 65535, 22050);
+        grid->Add(m_sampleRateSpin, 0);
         grid->Add(new wxStaticText(page, wxID_ANY, "Split Vol (0=default)"), 0, wxALIGN_CENTER_VERTICAL);
         m_splitVolumeSpin = new wxSpinCtrl(page, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 32767, 100);
         grid->Add(m_splitVolumeSpin, 0);
@@ -970,27 +1623,30 @@ private:
         {
             wxBoxSizer *row = new wxBoxSizer(wxHORIZONTAL);
             row->Add(new wxStaticText(page, wxID_ANY, "Compression"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-            m_compressionChoice = new wxChoice(page, wxID_ANY);
-            m_compressionChoice->Append("Don't Change");
-            m_compressionChoice->Append("RAW PCM");
-            m_compressionChoice->Append("ADPCM");
-            m_compressionChoice->Append("MP3 32k");
-            m_compressionChoice->Append("MP3 64k");
-            m_compressionChoice->Append("MP3 96k");
-            m_compressionChoice->Append("VORBIS 32k");
-            m_compressionChoice->Append("VORBIS 64k");
-            m_compressionChoice->Append("VORBIS 96k");
-            m_compressionChoice->Append("FLAC (level 9)");
-            m_compressionChoice->Append("OPUS 16k");
-            m_compressionChoice->Append("OPUS 32k");
-            m_compressionChoice->Append("OPUS 64k");
-            m_compressionChoice->Append("OPUS 96k");
-            m_compressionChoice->Append("OPUS 128k");
-            m_compressionChoice->Append("OPUS 256k");
-            row->Add(m_compressionChoice, 0);
+            m_codecChoice = new wxChoice(page, wxID_ANY);
+            m_codecChoice->Append("Don't Change");
+            m_codecChoice->Append("RAW PCM");
+            m_codecChoice->Append("ADPCM");
+            m_codecChoice->Append("MP3");
+            m_codecChoice->Append("VORBIS");
+            m_codecChoice->Append("FLAC");
+            m_codecChoice->Append("OPUS");
+            row->Add(m_codecChoice, 0);
+            row->Add(new wxStaticText(page, wxID_ANY, "Bitrate"), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 8);
+            m_bitrateChoice = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxSize(130, -1));
+            m_bitrateChoice->Append("---");
+            m_bitrateChoice->SetSelection(0);
+            m_bitrateChoice->Enable(false);
+            row->Add(m_bitrateChoice, 0);
+            sizer->Add(row, 0, wxLEFT | wxRIGHT, 8);
+
+            wxBoxSizer *sourceRow = new wxBoxSizer(wxHORIZONTAL);
             m_codecLabel = new wxStaticText(page, wxID_ANY, "");
-            row->Add(m_codecLabel, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 12);
-            sizer->Add(row, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+            sourceRow->Add(m_codecLabel, 0, wxALIGN_CENTER_VERTICAL);
+            sizer->Add(sourceRow, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+            m_codecChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) {
+                UpdateBitrateChoice(m_codecChoice->GetSelection());
+            });
         }
 
         /* Action buttons */
@@ -1027,6 +1683,10 @@ private:
         m_loopEnableCheck->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &) { OnLoopEnableChanged(); });
         m_loopStartSpin->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { OnLoopPointChanged(); });
         m_loopEndSpin->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { OnLoopPointChanged(); });
+        m_loopStartSpin->Bind(wxEVT_TEXT, [this](wxCommandEvent &) { OnLoopPointChanged(); });
+        m_loopEndSpin->Bind(wxEVT_TEXT, [this](wxCommandEvent &) { OnLoopPointChanged(); });
+        m_rootSpin->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { RefreshPianoRangeFromRootUI(); });
+        m_rootSpin->Bind(wxEVT_TEXT, [this](wxCommandEvent &) { RefreshPianoRangeFromRootUI(); });
         m_lowSpin->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { ClampRange(); });
         m_highSpin->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { ClampRange(); });
         UpdateSampleButtonState();
@@ -1050,6 +1710,7 @@ private:
         s.highKey = 127;
         s.splitVolume = 0;
         memset(&s.sampleInfo, 0, sizeof(s.sampleInfo));
+        s.sampleInfo.sampledRate = (BAE_UNSIGNED_FIXED)(22050u << 16);
         s.compressionType = BAE_EDITOR_COMPRESSION_PCM;
         s.hasOriginalData = false;
 
@@ -1138,7 +1799,7 @@ private:
                 edited.displayName = SanitizeDisplayName(info.displayName ? wxString::FromUTF8(info.displayName) : wxString());
                 edited.sourcePath = info.sourcePath ? wxString::FromUTF8(info.sourcePath) : wxString();
                 edited.program = info.program;
-                edited.rootKey = info.rootKey;
+                edited.rootKey = NormalizeRootKeyForSingleKeySplit(info.rootKey, info.lowKey, info.highKey);
                 edited.lowKey = info.lowKey;
                 edited.highKey = info.highKey;
                 edited.splitVolume = info.splitVolume;
@@ -1156,47 +1817,137 @@ private:
         return wxString::Format("%d-%d: %s", (int)s.lowKey, (int)s.highKey, s.displayName);
     }
 
-    static int CompressionTypeToChoiceIndex(BAERmfEditorCompressionType t) {
+    /* Returns {codec_idx, bitrate_idx} for the two-dropdown UI */
+    static std::pair<int,int> CompressionTypeToCodecBitrate(BAERmfEditorCompressionType t) {
         switch (t) {
-            case BAE_EDITOR_COMPRESSION_DONT_CHANGE: return 0;
-            case BAE_EDITOR_COMPRESSION_PCM:         return 1;
-            case BAE_EDITOR_COMPRESSION_ADPCM:       return 2;
-            case BAE_EDITOR_COMPRESSION_MP3_32K:     return 3;
-            case BAE_EDITOR_COMPRESSION_MP3_64K:     return 4;
-            case BAE_EDITOR_COMPRESSION_MP3_96K:     return 5;
-            case BAE_EDITOR_COMPRESSION_VORBIS_32K:  return 6;
-            case BAE_EDITOR_COMPRESSION_VORBIS_64K:  return 7;
-            case BAE_EDITOR_COMPRESSION_VORBIS_96K:  return 8;
-            case BAE_EDITOR_COMPRESSION_FLAC:        return 9;
-            case BAE_EDITOR_COMPRESSION_OPUS_16K:    return 10;
-            case BAE_EDITOR_COMPRESSION_OPUS_32K:    return 11;
-            case BAE_EDITOR_COMPRESSION_OPUS_64K:    return 12;
-            case BAE_EDITOR_COMPRESSION_OPUS_96K:    return 13;
-            case BAE_EDITOR_COMPRESSION_OPUS_128K:   return 14;
-            case BAE_EDITOR_COMPRESSION_OPUS_256K:   return 15;
-            default:                                  return 1;
+            case BAE_EDITOR_COMPRESSION_DONT_CHANGE: return {0, 0};
+            case BAE_EDITOR_COMPRESSION_PCM:         return {1, 0};
+            case BAE_EDITOR_COMPRESSION_ADPCM:       return {2, 0};
+            case BAE_EDITOR_COMPRESSION_MP3_32K:     return {3, 0};
+            case BAE_EDITOR_COMPRESSION_MP3_48K:     return {3, 1};
+            case BAE_EDITOR_COMPRESSION_MP3_64K:     return {3, 2};
+            case BAE_EDITOR_COMPRESSION_MP3_96K:     return {3, 3};
+            case BAE_EDITOR_COMPRESSION_MP3_128K:    return {3, 4};
+            case BAE_EDITOR_COMPRESSION_MP3_192K:    return {3, 5};
+            case BAE_EDITOR_COMPRESSION_MP3_256K:    return {3, 6};
+            case BAE_EDITOR_COMPRESSION_MP3_320K:    return {3, 7};
+            case BAE_EDITOR_COMPRESSION_VORBIS_32K:  return {4, 0};
+            case BAE_EDITOR_COMPRESSION_VORBIS_48K:  return {4, 1};
+            case BAE_EDITOR_COMPRESSION_VORBIS_64K:  return {4, 2};
+            case BAE_EDITOR_COMPRESSION_VORBIS_80K:  return {4, 3};
+            case BAE_EDITOR_COMPRESSION_VORBIS_96K:  return {4, 4};
+            case BAE_EDITOR_COMPRESSION_VORBIS_128K: return {4, 5};
+            case BAE_EDITOR_COMPRESSION_VORBIS_160K: return {4, 6};
+            case BAE_EDITOR_COMPRESSION_VORBIS_192K: return {4, 7};
+            case BAE_EDITOR_COMPRESSION_VORBIS_256K: return {4, 8};
+            case BAE_EDITOR_COMPRESSION_FLAC:        return {5, 0};
+            case BAE_EDITOR_COMPRESSION_OPUS_12K:    return {6, 0};
+            case BAE_EDITOR_COMPRESSION_OPUS_16K:    return {6, 1};
+            case BAE_EDITOR_COMPRESSION_OPUS_24K:    return {6, 2};
+            case BAE_EDITOR_COMPRESSION_OPUS_32K:    return {6, 3};
+            case BAE_EDITOR_COMPRESSION_OPUS_48K:    return {6, 4};
+            case BAE_EDITOR_COMPRESSION_OPUS_64K:    return {6, 5};
+            case BAE_EDITOR_COMPRESSION_OPUS_96K:    return {6, 6};
+            case BAE_EDITOR_COMPRESSION_OPUS_128K:   return {6, 7};
+            case BAE_EDITOR_COMPRESSION_OPUS_256K:   return {6, 8};
+            default:                                  return {1, 0};
         }
     }
 
-    static BAERmfEditorCompressionType ChoiceIndexToCompressionType(int idx) {
-        switch (idx) {
-            case 0:  return BAE_EDITOR_COMPRESSION_DONT_CHANGE;
-            case 1:  return BAE_EDITOR_COMPRESSION_PCM;
-            case 2:  return BAE_EDITOR_COMPRESSION_ADPCM;
-            case 3:  return BAE_EDITOR_COMPRESSION_MP3_32K;
-            case 4:  return BAE_EDITOR_COMPRESSION_MP3_64K;
-            case 5:  return BAE_EDITOR_COMPRESSION_MP3_96K;
-            case 6:  return BAE_EDITOR_COMPRESSION_VORBIS_32K;
-            case 7:  return BAE_EDITOR_COMPRESSION_VORBIS_64K;
-            case 8:  return BAE_EDITOR_COMPRESSION_VORBIS_96K;
-            case 9:  return BAE_EDITOR_COMPRESSION_FLAC;
-            case 10: return BAE_EDITOR_COMPRESSION_OPUS_16K;
-            case 11: return BAE_EDITOR_COMPRESSION_OPUS_32K;
-            case 12: return BAE_EDITOR_COMPRESSION_OPUS_64K;
-            case 13: return BAE_EDITOR_COMPRESSION_OPUS_96K;
-            case 14: return BAE_EDITOR_COMPRESSION_OPUS_128K;
-            case 15: return BAE_EDITOR_COMPRESSION_OPUS_256K;
+    static BAERmfEditorCompressionType CodecBitrateToCompressionType(int codec, int bitrate) {
+        switch (codec) {
+            case 0: return BAE_EDITOR_COMPRESSION_DONT_CHANGE;
+            case 1: return BAE_EDITOR_COMPRESSION_PCM;
+            case 2: return BAE_EDITOR_COMPRESSION_ADPCM;
+            case 3: // MP3
+                switch (bitrate) {
+                    case 0: return BAE_EDITOR_COMPRESSION_MP3_32K;
+                    case 1: return BAE_EDITOR_COMPRESSION_MP3_48K;
+                    case 2: return BAE_EDITOR_COMPRESSION_MP3_64K;
+                    case 3: return BAE_EDITOR_COMPRESSION_MP3_96K;
+                    case 4: return BAE_EDITOR_COMPRESSION_MP3_128K;
+                    case 5: return BAE_EDITOR_COMPRESSION_MP3_192K;
+                    case 6: return BAE_EDITOR_COMPRESSION_MP3_256K;
+                    case 7: return BAE_EDITOR_COMPRESSION_MP3_320K;
+                    default: return BAE_EDITOR_COMPRESSION_MP3_128K;
+                }
+            case 4: // VORBIS
+                switch (bitrate) {
+                    case 0: return BAE_EDITOR_COMPRESSION_VORBIS_32K;
+                    case 1: return BAE_EDITOR_COMPRESSION_VORBIS_48K;
+                    case 2: return BAE_EDITOR_COMPRESSION_VORBIS_64K;
+                    case 3: return BAE_EDITOR_COMPRESSION_VORBIS_80K;
+                    case 4: return BAE_EDITOR_COMPRESSION_VORBIS_96K;
+                    case 5: return BAE_EDITOR_COMPRESSION_VORBIS_128K;
+                    case 6: return BAE_EDITOR_COMPRESSION_VORBIS_160K;
+                    case 7: return BAE_EDITOR_COMPRESSION_VORBIS_192K;
+                    case 8: return BAE_EDITOR_COMPRESSION_VORBIS_256K;
+                    default: return BAE_EDITOR_COMPRESSION_VORBIS_128K;
+                }
+            case 5: return BAE_EDITOR_COMPRESSION_FLAC;
+            case 6: // OPUS
+                switch (bitrate) {
+                    case 0: return BAE_EDITOR_COMPRESSION_OPUS_12K;
+                    case 1: return BAE_EDITOR_COMPRESSION_OPUS_16K;
+                    case 2: return BAE_EDITOR_COMPRESSION_OPUS_24K;
+                    case 3: return BAE_EDITOR_COMPRESSION_OPUS_32K;
+                    case 4: return BAE_EDITOR_COMPRESSION_OPUS_48K;
+                    case 5: return BAE_EDITOR_COMPRESSION_OPUS_64K;
+                    case 6: return BAE_EDITOR_COMPRESSION_OPUS_96K;
+                    case 7: return BAE_EDITOR_COMPRESSION_OPUS_128K;
+                    case 8: return BAE_EDITOR_COMPRESSION_OPUS_256K;
+                    default: return BAE_EDITOR_COMPRESSION_OPUS_48K;
+                }
             default: return BAE_EDITOR_COMPRESSION_PCM;
+        }
+    }
+
+    void UpdateBitrateChoice(int codecIdx) {
+        m_bitrateChoice->Clear();
+        switch (codecIdx) {
+            case 3: // MP3
+                m_bitrateChoice->Append("32k");
+                m_bitrateChoice->Append("48k");
+                m_bitrateChoice->Append("64k");
+                m_bitrateChoice->Append("96k");
+                m_bitrateChoice->Append("128k");
+                m_bitrateChoice->Append("192k");
+                m_bitrateChoice->Append("256k");
+                m_bitrateChoice->Append("320k");
+                m_bitrateChoice->SetSelection(0);
+                m_bitrateChoice->Enable(true);
+                break;
+            case 4: // VORBIS
+                m_bitrateChoice->Append("32k");
+                m_bitrateChoice->Append("48k");
+                m_bitrateChoice->Append("64k");
+                m_bitrateChoice->Append("80k");
+                m_bitrateChoice->Append("96k");
+                m_bitrateChoice->Append("128k");
+                m_bitrateChoice->Append("160k");
+                m_bitrateChoice->Append("192k");
+                m_bitrateChoice->Append("256k");
+                m_bitrateChoice->SetSelection(0);
+                m_bitrateChoice->Enable(true);
+                break;
+            case 6: // OPUS
+                m_bitrateChoice->Append("12k");
+                m_bitrateChoice->Append("16k");
+                m_bitrateChoice->Append("24k");
+                m_bitrateChoice->Append("32k");
+                m_bitrateChoice->Append("48k");
+                m_bitrateChoice->Append("64k");
+                m_bitrateChoice->Append("96k");
+                m_bitrateChoice->Append("128k");
+                m_bitrateChoice->Append("256k");
+                m_bitrateChoice->SetSelection(0);
+                m_bitrateChoice->Enable(true);
+                break;
+            default: // Don't Change, PCM, ADPCM, FLAC – no bitrate
+                m_bitrateChoice->Append("---");
+                m_bitrateChoice->SetSelection(0);
+                m_bitrateChoice->Enable(false);
+                break;
         }
     }
 
@@ -1205,15 +1956,31 @@ private:
         EditedSample &s = m_samples[(size_t)m_currentLocalIndex];
         s.displayName = SanitizeDisplayName(m_nameText->GetValue());
         s.rootKey = (unsigned char)m_rootSpin->GetValue();
+        if (m_pianoPanel) {
+            m_pianoPanel->SetBaseNote(std::max(0, (int)s.rootKey - 12));
+        }
         s.lowKey = (unsigned char)m_lowSpin->GetValue();
         s.highKey = (unsigned char)m_highSpin->GetValue();
+        {
+            uint32_t rateHz = (uint32_t)std::max(1, m_sampleRateSpin->GetValue());
+            s.sampleInfo.sampledRate = (BAE_UNSIGNED_FIXED)(rateHz << 16);
+        }
         s.splitVolume = (int16_t)m_splitVolumeSpin->GetValue();
         /* Program comes from the instrument tab */
         s.program = (unsigned char)m_instProgramSpin->GetValue();
-        int idx = m_compressionChoice->GetSelection();
-        BAERmfEditorCompressionType chosen = ChoiceIndexToCompressionType(idx);
+        int codecIdx = m_codecChoice->GetSelection();
+        int bitrateIdx = m_bitrateChoice->IsEnabled() ? m_bitrateChoice->GetSelection() : 0;
+        BAERmfEditorCompressionType chosen = CodecBitrateToCompressionType(codecIdx, bitrateIdx);
         if (chosen == BAE_EDITOR_COMPRESSION_DONT_CHANGE && !s.hasOriginalData) chosen = BAE_EDITOR_COMPRESSION_PCM;
         s.compressionType = chosen;
+
+        if (m_loopEnableCheck->GetValue()) {
+            ApplyLoopFromUI();
+        } else {
+            s.sampleInfo.startLoop = 0;
+            s.sampleInfo.endLoop = 0;
+        }
+
         if (m_splitChoice && m_currentLocalIndex < (int)m_splitChoice->GetCount()) {
             m_splitChoice->SetString(m_currentLocalIndex, BuildSplitLabel(m_currentLocalIndex));
         }
@@ -1221,6 +1988,7 @@ private:
 
     void LoadLocalSample(int localIndex) {
         if (localIndex < 0 || localIndex >= (int)m_samples.size()) return;
+        m_loadingUiValues = true;
         m_currentLocalIndex = localIndex;
         EditedSample const &s = m_samples[(size_t)localIndex];
         if (m_pianoPanel) {
@@ -1230,13 +1998,22 @@ private:
         m_rootSpin->SetValue(s.rootKey);
         m_lowSpin->SetValue(s.lowKey);
         m_highSpin->SetValue(s.highKey);
+        {
+            int rateHz = (int)(s.sampleInfo.sampledRate >> 16);
+            m_sampleRateSpin->SetValue(std::clamp(rateHz, 1, 65535));
+        }
         m_splitVolumeSpin->SetValue(std::clamp<int>(s.splitVolume, 0, 32767));
         {
             bool canKeep = s.hasOriginalData;
             BAERmfEditorCompressionType effectiveComp = s.compressionType;
             if (!canKeep && effectiveComp == BAE_EDITOR_COMPRESSION_DONT_CHANGE) effectiveComp = BAE_EDITOR_COMPRESSION_PCM;
-            m_compressionChoice->SetSelection(CompressionTypeToChoiceIndex(effectiveComp));
-            m_compressionChoice->SetString(0, canKeep ? "Don't Change" : "Don't Change (N/A)");
+            auto [codecIdx, bitrateIdx] = CompressionTypeToCodecBitrate(effectiveComp);
+            m_codecChoice->SetSelection(codecIdx);
+            m_codecChoice->SetString(0, canKeep ? "Don't Change" : "Don't Change (N/A)");
+            UpdateBitrateChoice(codecIdx);
+            if (bitrateIdx >= 0 && bitrateIdx < (int)m_bitrateChoice->GetCount()) {
+                m_bitrateChoice->SetSelection(bitrateIdx);
+            }
         }
         {
             char codecBuf[64] = {};
@@ -1263,10 +2040,16 @@ private:
         }
         RefreshWaveform();
         UpdateSampleButtonState();
+        m_loadingUiValues = false;
     }
 
     void ClampRange() {
         if (m_lowSpin->GetValue() > m_highSpin->GetValue()) m_highSpin->SetValue(m_lowSpin->GetValue());
+    }
+
+    void RefreshPianoRangeFromRootUI() {
+        if (!m_pianoPanel || !m_rootSpin) return;
+        m_pianoPanel->SetBaseNote(std::max(0, m_rootSpin->GetValue() - 12));
     }
 
     void OnLoopEnableChanged() {
@@ -1405,13 +2188,54 @@ private:
     }
 
     void OnApply(wxCommandEvent &) {
+        if (m_loadingUiValues || m_inInstantApply) {
+            return;
+        }
+        m_inInstantApply = true;
+        if (m_beginUndoCallback) {
+            m_beginUndoCallback("Edit Instrument");
+        }
         if (!ApplyInstrumentChanges(true)) {
+            if (m_cancelUndoCallback) {
+                m_cancelUndoCallback();
+            }
+            m_inInstantApply = false;
             return;
         }
         SaveCurrentSampleFromUI();
         /* Update program for all samples in the group */
         unsigned char prog = (unsigned char)m_instProgramSpin->GetValue();
         for (auto &s : m_samples) s.program = prog;
+        for (size_t i = 0; i < m_samples.size() && i < m_sampleIndices.size(); ++i) {
+            BAERmfEditorSampleInfo info;
+            uint32_t sampleIndex = m_sampleIndices[i];
+            wxScopedCharBuffer nameUtf8 = m_samples[i].displayName.utf8_str();
+
+            if (sampleIndex == static_cast<uint32_t>(-1)) {
+                continue;
+            }
+            info.displayName = const_cast<char *>(nameUtf8.data());
+            info.sourcePath = NULL;
+            info.program = m_samples[i].program;
+            info.rootKey = m_samples[i].rootKey;
+            info.lowKey = m_samples[i].lowKey;
+            info.highKey = m_samples[i].highKey;
+            info.splitVolume = m_samples[i].splitVolume;
+            info.sampleInfo = m_samples[i].sampleInfo;
+            info.compressionType = m_samples[i].compressionType;
+            info.hasOriginalData = m_samples[i].hasOriginalData ? TRUE : FALSE;
+            if (BAERmfEditorDocument_SetSampleInfo(m_document, sampleIndex, &info) != BAE_NO_ERROR) {
+                if (m_cancelUndoCallback) {
+                    m_cancelUndoCallback();
+                }
+                m_inInstantApply = false;
+                return;
+            }
+        }
+        if (m_commitUndoCallback) {
+            m_commitUndoCallback("Edit Instrument");
+        }
+        m_inInstantApply = false;
     }
 
     void OnOk(wxCommandEvent &evt) {
@@ -1432,7 +2256,10 @@ bool ShowInstrumentExtEditorDialog(
     BAERmfEditorDocument *document,
     uint32_t primarySampleIndex,
     BAERmfEditorInstrumentExtInfo const *initialExtInfo,
-    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char)> playCallback,
+    std::function<void(wxString const &)> beginUndoCallback,
+    std::function<void(wxString const &)> commitUndoCallback,
+    std::function<void()> cancelUndoCallback,
+    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType)> playCallback,
     std::function<void()> stopCallback,
     std::function<bool(uint32_t, wxString const &)> replaceCallback,
     std::function<bool(uint32_t, wxString const &)> exportCallback,
@@ -1442,6 +2269,9 @@ bool ShowInstrumentExtEditorDialog(
 
     InstrumentExtEditorDialog dialog(parent, document, primarySampleIndex,
                                      initialExtInfo,
+                                     std::move(beginUndoCallback),
+                                     std::move(commitUndoCallback),
+                                     std::move(cancelUndoCallback),
                                      std::move(playCallback),
                                      std::move(stopCallback),
                                      std::move(replaceCallback),

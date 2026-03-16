@@ -29,6 +29,7 @@ enum class DragMode {
     Move,
     ResizeLeft,
     ResizeRight,
+    SelectBox,
 };
 
 enum {
@@ -272,7 +273,8 @@ public:
           m_dragStartNote(0),
           m_newNoteBank(0),
                     m_newNoteProgram(0),
-                    m_zoomScale(1.0f) {
+                    m_zoomScale(1.0f),
+          m_lastPreviewDragNote(-1) {
         SetBackgroundStyle(wxBG_STYLE_PAINT);
         SetScrollRate(16, 16);
         Bind(wxEVT_PAINT, &PianoRollPanel::OnPaint, this);
@@ -293,12 +295,16 @@ public:
         m_document = document;
         m_selectedTrack = -1;
         m_selectedNote = -1;
+        m_selectedNotes.clear();
         m_selectedItemKind = PianoRollSelectionKind::None;
         m_selectedAutomationLane = -1;
         m_selectedAutomationEvent = -1;
         m_dragAutomationValid = false;
         m_dragging = false;
         m_dragMode = DragMode::None;
+        m_selectBoxActive = false;
+        m_dragOriginalNoteIndices.clear();
+        m_dragOriginalNotes.clear();
         UpdateVirtualSize();
         ScrollToMidiContentCenter();
         Refresh();
@@ -307,12 +313,16 @@ public:
     void SetSelectedTrack(int trackIndex) {
         m_selectedTrack = trackIndex;
         m_selectedNote = -1;
+        m_selectedNotes.clear();
         m_selectedItemKind = PianoRollSelectionKind::None;
         m_selectedAutomationLane = -1;
         m_selectedAutomationEvent = -1;
         m_dragAutomationValid = false;
         m_dragging = false;
         m_dragMode = DragMode::None;
+        m_selectBoxActive = false;
+        m_dragOriginalNoteIndices.clear();
+        m_dragOriginalNotes.clear();
         UpdateVirtualSize();
         ScrollToMidiContentCenter();
         Refresh();
@@ -324,6 +334,18 @@ public:
 
     void SetSeekRequestedCallback(std::function<void(uint32_t)> callback) {
         m_seekRequestedCallback = std::move(callback);
+    }
+
+    void SetNotePreviewRequestedCallback(std::function<void(uint16_t,
+                                                            unsigned char,
+                                                            unsigned char,
+                                                            uint32_t,
+                                                            int)> callback) {
+        m_notePreviewRequestedCallback = std::move(callback);
+    }
+
+    void SetNotePreviewStopRequestedCallback(std::function<void()> callback) {
+        m_notePreviewStopRequestedCallback = std::move(callback);
     }
 
     void SetUndoCallbacks(std::function<void(wxString const &)> beginCallback,
@@ -338,12 +360,16 @@ public:
         if (clearSelection) {
             m_selectedItemKind = PianoRollSelectionKind::None;
             m_selectedNote = -1;
+            m_selectedNotes.clear();
             m_selectedAutomationLane = -1;
             m_selectedAutomationEvent = -1;
         }
         m_dragging = false;
         m_dragAutomationValid = false;
         m_dragMode = DragMode::None;
+        m_selectBoxActive = false;
+        m_dragOriginalNoteIndices.clear();
+        m_dragOriginalNotes.clear();
         m_dragUndoActive = false;
         m_dragUndoLabel.clear();
         UpdateVirtualSize();
@@ -354,28 +380,62 @@ public:
     }
 
     bool GetSelectedNoteInfo(BAERmfEditorNoteInfo *outNoteInfo) const {
-        if (!outNoteInfo || !HasTrack() || m_selectedNote < 0) {
+        long noteIndex;
+
+        if (!outNoteInfo || !HasTrack()) {
+            return false;
+        }
+        noteIndex = m_selectedNote;
+        if (noteIndex < 0 && !m_selectedNotes.empty()) {
+            noteIndex = m_selectedNotes.front();
+        }
+        if (noteIndex < 0) {
             return false;
         }
         return BAERmfEditorDocument_GetNoteInfo(m_document,
                                                 static_cast<uint16_t>(m_selectedTrack),
-                                                static_cast<uint32_t>(m_selectedNote),
+                                                static_cast<uint32_t>(noteIndex),
                                                 outNoteInfo) == BAE_NO_ERROR;
     }
 
     void SetSelectedNoteInstrument(uint16_t bank, unsigned char program) {
-        BAERmfEditorNoteInfo noteInfo;
+        std::vector<long> noteIndices;
+        bool anyChanged;
 
-        if (!GetSelectedNoteInfo(&noteInfo)) {
+        if (!HasTrack()) {
             return;
         }
-        noteInfo.bank = bank;
-        noteInfo.program = program;
+        noteIndices = m_selectedNotes;
+        if (noteIndices.empty() && m_selectedNote >= 0) {
+            noteIndices.push_back(m_selectedNote);
+        }
+        if (noteIndices.empty()) {
+            return;
+        }
         BeginUndoAction("Change Note Instrument");
-        if (BAERmfEditorDocument_SetNoteInfo(m_document,
-                                             static_cast<uint16_t>(m_selectedTrack),
-                                             static_cast<uint32_t>(m_selectedNote),
-                                             &noteInfo) == BAE_NO_ERROR) {
+        anyChanged = false;
+        for (long noteIndex : noteIndices) {
+            BAERmfEditorNoteInfo noteInfo;
+
+            if (noteIndex < 0) {
+                continue;
+            }
+            if (BAERmfEditorDocument_GetNoteInfo(m_document,
+                                                 static_cast<uint16_t>(m_selectedTrack),
+                                                 static_cast<uint32_t>(noteIndex),
+                                                 &noteInfo) != BAE_NO_ERROR) {
+                continue;
+            }
+            noteInfo.bank = bank;
+            noteInfo.program = program;
+            if (BAERmfEditorDocument_SetNoteInfo(m_document,
+                                                 static_cast<uint16_t>(m_selectedTrack),
+                                                 static_cast<uint32_t>(noteIndex),
+                                                 &noteInfo) == BAE_NO_ERROR) {
+                anyChanged = true;
+            }
+        }
+        if (anyChanged) {
             CommitUndoAction("Change Note Instrument");
             Refresh();
         } else {
@@ -474,6 +534,7 @@ private:
     BAERmfEditorDocument *m_document;
     int m_selectedTrack;
     long m_selectedNote;
+    std::vector<long> m_selectedNotes;
     bool m_dragging;
     DragMode m_dragMode;
     bool m_showPlayhead;
@@ -490,12 +551,146 @@ private:
     unsigned char m_newNoteProgram;
     std::function<void()> m_selectionChangedCallback;
     std::function<void(uint32_t)> m_seekRequestedCallback;
+    std::function<void(uint16_t, unsigned char, unsigned char, uint32_t, int)> m_notePreviewRequestedCallback;
+    std::function<void()> m_notePreviewStopRequestedCallback;
     std::function<void(wxString const &)> m_beginUndoCallback;
     std::function<void(wxString const &)> m_commitUndoCallback;
     std::function<void()> m_cancelUndoCallback;
     bool m_dragUndoActive = false;
     wxString m_dragUndoLabel;
     float m_zoomScale;
+    bool m_selectBoxActive = false;
+    wxPoint m_selectBoxStart;
+    wxPoint m_selectBoxCurrent;
+    std::vector<long> m_dragOriginalNoteIndices;
+    std::vector<BAERmfEditorNoteInfo> m_dragOriginalNotes;
+    int m_lastPreviewDragNote;
+
+    bool ScrollHorizontallyWithWheel(wxMouseEvent const &event, int stepMultiplier) {
+        int wheelDelta;
+        int wheelRotation;
+        int steps;
+        int linesPerStep;
+        int scrollPixelsX;
+        int scrollPixelsY;
+        int viewUnitsX;
+        int viewUnitsY;
+        int currentLeft;
+        int clientWidth;
+        int maxLeft;
+        int newLeft;
+        wxSize virtualSize;
+
+        wheelDelta = event.GetWheelDelta();
+        wheelRotation = event.GetWheelRotation();
+        if (wheelDelta == 0 || wheelRotation == 0) {
+            return false;
+        }
+        steps = wheelRotation / wheelDelta;
+        if (steps == 0) {
+            steps = (wheelRotation > 0) ? 1 : -1;
+        }
+        linesPerStep = std::max(1, event.GetLinesPerAction());
+        GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
+        if (scrollPixelsX <= 0) {
+            return false;
+        }
+        GetViewStart(&viewUnitsX, &viewUnitsY);
+        currentLeft = viewUnitsX * scrollPixelsX;
+        clientWidth = std::max(1, GetClientSize().GetWidth());
+        virtualSize = GetVirtualSize();
+        maxLeft = std::max(0, virtualSize.GetWidth() - clientWidth);
+        newLeft = currentLeft - (steps * linesPerStep * scrollPixelsX * std::max(1, stepMultiplier));
+        newLeft = std::clamp(newLeft, 0, maxLeft);
+        Scroll(newLeft / scrollPixelsX, viewUnitsY);
+        return true;
+    }
+
+    void RequestSingleNotePreview(BAERmfEditorNoteInfo const &noteInfo) {
+        if (!m_notePreviewRequestedCallback || !HasTrack()) {
+            return;
+        }
+        m_notePreviewRequestedCallback(noteInfo.bank,
+                                       noteInfo.program,
+                                       noteInfo.note,
+                                       noteInfo.durationTicks,
+                                       m_selectedTrack);
+    }
+
+    void RequestStopNotePreview() {
+        if (m_notePreviewStopRequestedCallback) {
+            m_notePreviewStopRequestedCallback();
+        }
+    }
+
+    static wxRect NormalizeRect(wxPoint const &a, wxPoint const &b) {
+        int left;
+        int top;
+        int right;
+        int bottom;
+
+        left = std::min(a.x, b.x);
+        top = std::min(a.y, b.y);
+        right = std::max(a.x, b.x);
+        bottom = std::max(a.y, b.y);
+        return wxRect(left, top, std::max(1, right - left), std::max(1, bottom - top));
+    }
+
+    bool IsNoteSelected(long noteIndex) const {
+        return std::find(m_selectedNotes.begin(), m_selectedNotes.end(), noteIndex) != m_selectedNotes.end();
+    }
+
+    void SelectSingleNote(long noteIndex) {
+        m_selectedNotes.clear();
+        if (noteIndex >= 0) {
+            m_selectedNotes.push_back(noteIndex);
+            m_selectedNote = noteIndex;
+            m_selectedItemKind = PianoRollSelectionKind::Note;
+        } else {
+            m_selectedNote = -1;
+            m_selectedItemKind = PianoRollSelectionKind::None;
+        }
+    }
+
+    void UpdatePrimarySelectedNote() {
+        if (!m_selectedNotes.empty()) {
+            m_selectedNote = m_selectedNotes.front();
+            m_selectedItemKind = PianoRollSelectionKind::Note;
+        } else {
+            m_selectedNote = -1;
+            if (m_selectedItemKind == PianoRollSelectionKind::Note) {
+                m_selectedItemKind = PianoRollSelectionKind::None;
+            }
+        }
+    }
+
+    void UpdateAreaSelection(wxRect const &selectionRect) {
+        uint32_t noteCount;
+
+        m_selectedNotes.clear();
+        if (!HasTrack()) {
+            UpdatePrimarySelectedNote();
+            return;
+        }
+        noteCount = 0;
+        if (BAERmfEditorDocument_GetNoteCount(m_document, static_cast<uint16_t>(m_selectedTrack), &noteCount) != BAE_NO_ERROR) {
+            UpdatePrimarySelectedNote();
+            return;
+        }
+        for (uint32_t noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
+            BAERmfEditorNoteInfo noteInfo;
+            wxRect noteRect;
+
+            if (!GetNoteInfo(noteIndex, &noteInfo)) {
+                continue;
+            }
+            noteRect = BuildNoteRect(noteInfo);
+            if (noteRect.Intersects(selectionRect)) {
+                m_selectedNotes.push_back(static_cast<long>(noteIndex));
+            }
+        }
+        UpdatePrimarySelectedNote();
+    }
 
     void BeginUndoAction(wxString const &label) {
         if (m_beginUndoCallback) {
@@ -724,7 +919,28 @@ private:
             }
             if (lane.kind == AutomationLaneKind::Tempo) {
                 eventCount = 0;
-                if (BAERmfEditorDocument_GetTempoEventCount(m_document, &eventCount) != BAE_NO_ERROR || eventCount == 0) {
+                if (BAERmfEditorDocument_GetTempoEventCount(m_document, &eventCount) != BAE_NO_ERROR) {
+                    continue;
+                }
+                if (eventCount == 0) {
+                    /* Default tempo bar spans the whole document – make it selectable. */
+                    if (point.x >= kPianoRollLeftGutter) {
+                        if (outHitInfo) {
+                            uint32_t defaultBpm = 120;
+                            BAERmfEditorDocument_GetTempoBPM(m_document, &defaultBpm);
+                            outHitInfo->laneIndex = laneIndex;
+                            outHitInfo->eventIndex = 0;
+                            outHitInfo->tick = 0;
+                            outHitInfo->endTick = GetDocumentEndTick();
+                            outHitInfo->laneTop = laneTop;
+                            outHitInfo->laneBottom = laneBottom;
+                            outHitInfo->leftX = kPianoRollLeftGutter;
+                            outHitInfo->rightX = TickToX(GetDocumentEndTick());
+                            outHitInfo->value = static_cast<int>(defaultBpm);
+                            outHitInfo->hasFollowingEvent = false;
+                        }
+                        return true;
+                    }
                     continue;
                 }
                 for (eventIndex = 0; eventIndex < eventCount; ++eventIndex) {
@@ -1062,6 +1278,48 @@ private:
         if (lane.kind == AutomationLaneKind::Tempo) {
             uint32_t microsecondsPerQuarter;
 
+            if (eventCount == 0) {
+                /* No explicit tempo events: edit the implicit default tempo.
+                 * On confirmation this converts it to an explicit tick-0 event. */
+                uint32_t defaultBpm = 120;
+                uint32_t newTick;
+                int newBpm;
+                uint32_t newDuration;
+
+                BAERmfEditorDocument_GetTempoBPM(m_document, &defaultBpm);
+                AutomationEditDialog dialog(this,
+                                            "Edit Default Tempo",
+                                            "BPM",
+                                            0,
+                                            static_cast<int>(defaultBpm),
+                                            lane.maxValue,
+                                            GetDocumentEndTick(),
+                                            false);
+                if (dialog.ShowModal() != wxID_OK) {
+                    return false;
+                }
+                if (!dialog.GetValues(&newTick, &newBpm, &newDuration)) {
+                    wxMessageBox("Invalid tempo values.", "Edit Default Tempo", wxOK | wxICON_ERROR, this);
+                    return false;
+                }
+                BeginUndoAction("Edit Default Tempo");
+                if (BAERmfEditorDocument_AddTempoEvent(m_document,
+                                                       newTick,
+                                                       static_cast<uint32_t>(60000000UL / std::max(1, newBpm))) == BAE_NO_ERROR) {
+                    CommitUndoAction("Edit Default Tempo");
+                    m_selectedAutomationEvent = 0;
+                    if (m_selectionChangedCallback) {
+                        m_selectionChangedCallback();
+                    }
+                    UpdateVirtualSize();
+                    Refresh();
+                    return true;
+                }
+                CancelUndoAction();
+                wxMessageBox("Failed to set default tempo.", "Edit Default Tempo", wxOK | wxICON_ERROR, this);
+                return false;
+            }
+
             if (BAERmfEditorDocument_GetTempoEvent(m_document, eventIndex, &tick, &microsecondsPerQuarter) != BAE_NO_ERROR || microsecondsPerQuarter == 0) {
                 return false;
             }
@@ -1197,6 +1455,12 @@ private:
             std::vector<AutomationLaneDescriptor> const &lanes = GetAutomationLanes();
 
             if (lanes[m_selectedAutomationLane].kind == AutomationLaneKind::Tempo) {
+                uint32_t tempoCount = 0;
+                BAERmfEditorDocument_GetTempoEventCount(m_document, &tempoCount);
+                if (tempoCount == 0) {
+                    CancelUndoAction();
+                    return; /* Cannot delete the implicit default tempo. */
+                }
                 result = BAERmfEditorDocument_DeleteTempoEvent(m_document, static_cast<uint32_t>(m_selectedAutomationEvent));
             } else if (lanes[m_selectedAutomationLane].kind == AutomationLaneKind::Controller) {
                 result = BAERmfEditorDocument_DeleteTrackCCEvent(m_document,
@@ -1864,12 +2128,35 @@ private:
     }
 
     void DeleteSelectedNote() {
-        if (!HasTrack() || m_selectedNote < 0) {
+        std::vector<long> noteIndices;
+
+        if (!HasTrack()) {
             return;
         }
+        noteIndices = m_selectedNotes;
+        if (noteIndices.empty() && m_selectedNote >= 0) {
+            noteIndices.push_back(m_selectedNote);
+        }
+        if (noteIndices.empty()) {
+            return;
+        }
+        std::sort(noteIndices.begin(), noteIndices.end());
+        noteIndices.erase(std::unique(noteIndices.begin(), noteIndices.end()), noteIndices.end());
         BeginUndoAction("Delete Note");
-        if (BAERmfEditorDocument_DeleteNote(m_document, static_cast<uint16_t>(m_selectedTrack), static_cast<uint32_t>(m_selectedNote)) == BAE_NO_ERROR) {
+        bool anyDeleted = false;
+        for (auto it = noteIndices.rbegin(); it != noteIndices.rend(); ++it) {
+            if (*it < 0) {
+                continue;
+            }
+            if (BAERmfEditorDocument_DeleteNote(m_document,
+                                                static_cast<uint16_t>(m_selectedTrack),
+                                                static_cast<uint32_t>(*it)) == BAE_NO_ERROR) {
+                anyDeleted = true;
+            }
+        }
+        if (anyDeleted) {
             CommitUndoAction("Delete Note");
+            m_selectedNotes.clear();
             m_selectedNote = -1;
             UpdateVirtualSize();
             Refresh();
@@ -1988,11 +2275,11 @@ private:
                 if (!noteRect.Intersects(notesVisibleRect)) {
                     continue;
                 }
-                selected = (static_cast<long>(noteIndex) == m_selectedNote);
+                selected = IsNoteSelected(static_cast<long>(noteIndex));
                 dc.SetBrush(wxBrush(selected ? wxColour(216, 106, 58) : wxColour(73, 135, 210)));
                 dc.SetPen(wxPen(selected ? wxColour(110, 42, 17) : wxColour(34, 72, 120)));
                 dc.DrawRectangle(noteRect);
-                if (selected) {
+                if (selected && static_cast<long>(noteIndex) == m_selectedNote) {
                     int handleTop;
 
                     handleTop = noteRect.GetTop() + 1;
@@ -2012,6 +2299,14 @@ private:
                 dc.SetPen(wxPen(wxColour(210, 40, 40), 2));
                 dc.DrawLine(playheadX, kPianoRollTopGutter, playheadX, clientSize.GetHeight());
             }
+        }
+        if (m_selectBoxActive) {
+            wxRect selectionRect;
+
+            selectionRect = NormalizeRect(m_selectBoxStart, m_selectBoxCurrent);
+            dc.SetBrush(wxBrush(wxColour(73, 135, 210, 48)));
+            dc.SetPen(wxPen(wxColour(45, 98, 168), 1));
+            dc.DrawRectangle(selectionRect);
         }
         DrawStickyRuler(dc);
     }
@@ -2037,43 +2332,91 @@ private:
         }
         hitNote = HitTestNote(logicalPoint, &noteInfo);
         if (hitNote >= 0) {
+            bool clickedAlreadySelected;
+            bool shouldPreviewSingle;
+
+            clickedAlreadySelected = IsNoteSelected(hitNote);
+            m_dragMode = GetDragModeForPoint(BuildNoteRect(noteInfo), logicalPoint);
+            if (!clickedAlreadySelected || m_dragMode != DragMode::Move) {
+                SelectSingleNote(hitNote);
+            }
+            UpdatePrimarySelectedNote();
             m_selectedItemKind = PianoRollSelectionKind::Note;
-            m_selectedNote = hitNote;
             m_selectedAutomationLane = -1;
             m_selectedAutomationEvent = -1;
             m_dragging = true;
+            m_selectBoxActive = false;
             m_dragAutomationValid = false;
-            m_dragOriginalNote = noteInfo;
             m_dragStartTick = SnapTick(XToTick(logicalPoint.x));
             m_dragStartNote = YToNote(logicalPoint.y);
-            m_dragMode = GetDragModeForPoint(BuildNoteRect(noteInfo), logicalPoint);
+            m_dragOriginalNoteIndices.clear();
+            m_dragOriginalNotes.clear();
+            if (m_dragMode == DragMode::Move && !m_selectedNotes.empty()) {
+                for (long selectedIndex : m_selectedNotes) {
+                    BAERmfEditorNoteInfo selectedNoteInfo;
+
+                    if (selectedIndex < 0) {
+                        continue;
+                    }
+                    if (GetNoteInfo(static_cast<uint32_t>(selectedIndex), &selectedNoteInfo)) {
+                        m_dragOriginalNoteIndices.push_back(selectedIndex);
+                        m_dragOriginalNotes.push_back(selectedNoteInfo);
+                    }
+                }
+            }
+            if (m_dragOriginalNotes.empty()) {
+                m_dragOriginalNote = noteInfo;
+                m_dragOriginalNoteIndices.push_back(hitNote);
+                m_dragOriginalNotes.push_back(noteInfo);
+            } else {
+                m_dragOriginalNote = m_dragOriginalNotes.front();
+            }
+            shouldPreviewSingle = (m_selectedNotes.size() == 1 && m_dragOriginalNotes.size() == 1);
+            if (shouldPreviewSingle) {
+                RequestSingleNotePreview(m_dragOriginalNotes.front());
+                m_lastPreviewDragNote = static_cast<int>(m_dragOriginalNotes.front().note);
+            } else {
+                m_lastPreviewDragNote = -1;
+            }
             m_dragUndoLabel = (m_dragMode == DragMode::Move) ? "Move Note" : "Resize Note";
             BeginUndoAction(m_dragUndoLabel);
             m_dragUndoActive = true;
             CaptureMouse();
         } else if (HitTestAutomation(logicalPoint, &automationHit)) {
+            m_selectedNotes.clear();
             m_selectedItemKind = PianoRollSelectionKind::Automation;
             m_selectedNote = -1;
             m_selectedAutomationLane = automationHit.laneIndex;
             m_selectedAutomationEvent = static_cast<long>(automationHit.eventIndex);
             m_dragging = true;
+            m_selectBoxActive = false;
             m_dragAutomationValid = true;
             m_dragAutomationHit = automationHit;
             m_dragMode = GetDragModeForAutomation(automationHit, logicalPoint);
             m_dragUndoLabel = (m_dragMode == DragMode::ResizeRight) ? "Resize Event" : "Edit Event";
             BeginUndoAction(m_dragUndoLabel);
             m_dragUndoActive = true;
+            m_lastPreviewDragNote = -1;
             CaptureMouse();
         } else {
-            m_selectedItemKind = PianoRollSelectionKind::None;
-            m_selectedNote = -1;
             m_selectedAutomationLane = -1;
             m_selectedAutomationEvent = -1;
-            m_dragging = false;
+            m_dragging = true;
             m_dragAutomationValid = false;
-            m_dragMode = DragMode::None;
+            m_dragMode = DragMode::SelectBox;
             m_dragUndoActive = false;
             m_dragUndoLabel.clear();
+            m_selectBoxActive = true;
+            m_selectBoxStart = logicalPoint;
+            m_selectBoxCurrent = logicalPoint;
+            m_selectedNotes.clear();
+            m_selectedNote = -1;
+            m_selectedItemKind = PianoRollSelectionKind::None;
+            m_lastPreviewDragNote = -1;
+            if (HasCapture()) {
+                ReleaseMouse();
+            }
+            CaptureMouse();
         }
         if (m_selectionChangedCallback) {
             m_selectionChangedCallback();
@@ -2082,10 +2425,21 @@ private:
     }
 
     void OnLeftUp(wxMouseEvent &) {
+        RequestStopNotePreview();
         if (m_dragging && HasCapture()) {
             ReleaseMouse();
         }
-        if (m_dragUndoActive) {
+        if (m_dragMode == DragMode::SelectBox && m_selectBoxActive) {
+            wxRect selectionRect;
+
+            selectionRect = NormalizeRect(m_selectBoxStart, m_selectBoxCurrent);
+            UpdateAreaSelection(selectionRect);
+            m_selectBoxActive = false;
+            if (m_selectionChangedCallback) {
+                m_selectionChangedCallback();
+            }
+            Refresh();
+        } else if (m_dragUndoActive) {
             CommitUndoAction(m_dragUndoLabel);
         }
         m_dragging = false;
@@ -2093,6 +2447,7 @@ private:
         m_dragMode = DragMode::None;
         m_dragUndoActive = false;
         m_dragUndoLabel.clear();
+        m_lastPreviewDragNote = -1;
     }
 
     void OnLeftDoubleClick(wxMouseEvent &event) {
@@ -2164,6 +2519,8 @@ private:
                                                      &noteInfo);
                     m_selectedItemKind = PianoRollSelectionKind::Note;
                     m_selectedNote = static_cast<long>(noteCount - 1);
+                    m_selectedNotes.clear();
+                    m_selectedNotes.push_back(m_selectedNote);
                     m_selectedAutomationLane = -1;
                     m_selectedAutomationEvent = -1;
                 }
@@ -2185,14 +2542,21 @@ private:
         if (!m_document) {
             return;
         }
+        if (event.LeftIsDown() || m_dragging || HasCapture()) {
+            return;
+        }
         logicalPoint = CalcUnscrolledPosition(event.GetPosition());
         hitNote = HitTestNote(logicalPoint);
         if (hitNote >= 0) {
-            m_selectedItemKind = PianoRollSelectionKind::Note;
-            m_selectedNote = hitNote;
+            if (!IsNoteSelected(hitNote)) {
+                SelectSingleNote(hitNote);
+            } else {
+                UpdatePrimarySelectedNote();
+            }
             m_selectedAutomationLane = -1;
             m_selectedAutomationEvent = -1;
         } else if (HitTestAutomation(logicalPoint, &automationHit)) {
+            m_selectedNotes.clear();
             m_selectedItemKind = PianoRollSelectionKind::Automation;
             m_selectedNote = -1;
             m_selectedAutomationLane = automationHit.laneIndex;
@@ -2228,49 +2592,96 @@ private:
             return;
         }
         logicalPoint = CalcUnscrolledPosition(event.GetPosition());
+        if (m_dragMode == DragMode::SelectBox && m_selectBoxActive) {
+            wxRect selectionRect;
+
+            m_selectBoxCurrent = logicalPoint;
+            selectionRect = NormalizeRect(m_selectBoxStart, m_selectBoxCurrent);
+            UpdateAreaSelection(selectionRect);
+            Refresh();
+            return;
+        }
         if (m_selectedItemKind == PianoRollSelectionKind::Note) {
-            if (m_selectedNote < 0 || !HasTrack()) {
+            if (m_selectedNote < 0 || !HasTrack() || m_dragOriginalNoteIndices.empty() || m_dragOriginalNotes.empty()) {
                 return;
             }
-            updatedNote = m_dragOriginalNote;
             if (m_dragMode == DragMode::Move) {
                 snappedTick = SnapTick(XToTick(logicalPoint.x));
                 snappedNote = YToNote(logicalPoint.y);
-                if (snappedTick >= m_dragStartTick) {
-                    updatedNote.startTick = m_dragOriginalNote.startTick + (snappedTick - m_dragStartTick);
-                } else {
-                    uint32_t deltaTicks;
+                for (size_t i = 0; i < m_dragOriginalNotes.size(); ++i) {
+                    BAERmfEditorNoteInfo movedNote;
+                    long noteIndex;
 
-                    deltaTicks = m_dragStartTick - snappedTick;
-                    updatedNote.startTick = (deltaTicks > m_dragOriginalNote.startTick) ? 0 : (m_dragOriginalNote.startTick - deltaTicks);
+                    movedNote = m_dragOriginalNotes[i];
+                    noteIndex = m_dragOriginalNoteIndices[i];
+                    if (noteIndex < 0) {
+                        continue;
+                    }
+                    if (snappedTick >= m_dragStartTick) {
+                        movedNote.startTick = m_dragOriginalNotes[i].startTick + (snappedTick - m_dragStartTick);
+                    } else {
+                        uint32_t deltaTicks;
+
+                        deltaTicks = m_dragStartTick - snappedTick;
+                        movedNote.startTick = (deltaTicks > m_dragOriginalNotes[i].startTick) ? 0 : (m_dragOriginalNotes[i].startTick - deltaTicks);
+                    }
+                    movedNote.note = static_cast<unsigned char>(std::clamp(static_cast<int>(m_dragOriginalNotes[i].note) + (snappedNote - m_dragStartNote), 0, 127));
+                    BAERmfEditorDocument_SetNoteInfo(m_document,
+                                                     static_cast<uint16_t>(m_selectedTrack),
+                                                     static_cast<uint32_t>(noteIndex),
+                                                     &movedNote);
                 }
-                updatedNote.note = static_cast<unsigned char>(std::clamp(static_cast<int>(m_dragOriginalNote.note) + (snappedNote - m_dragStartNote), 0, 127));
+                if (m_selectedNotes.size() == 1 && !m_dragOriginalNotes.empty()) {
+                    BAERmfEditorNoteInfo previewNote;
+
+                    previewNote = m_dragOriginalNotes.front();
+                    if (snappedTick >= m_dragStartTick) {
+                        previewNote.startTick = m_dragOriginalNotes.front().startTick + (snappedTick - m_dragStartTick);
+                    } else {
+                        uint32_t deltaTicks;
+
+                        deltaTicks = m_dragStartTick - snappedTick;
+                        previewNote.startTick = (deltaTicks > m_dragOriginalNotes.front().startTick)
+                                                    ? 0
+                                                    : (m_dragOriginalNotes.front().startTick - deltaTicks);
+                    }
+                    previewNote.note = static_cast<unsigned char>(std::clamp(static_cast<int>(m_dragOriginalNotes.front().note) + (snappedNote - m_dragStartNote), 0, 127));
+                    if (static_cast<int>(previewNote.note) != m_lastPreviewDragNote) {
+                        RequestSingleNotePreview(previewNote);
+                        m_lastPreviewDragNote = static_cast<int>(previewNote.note);
+                    }
+                }
             } else if (m_dragMode == DragMode::ResizeLeft) {
                 uint32_t originalEndTick;
                 uint32_t snappedStartTick;
                 uint32_t maxStartTick;
 
+                updatedNote = m_dragOriginalNote;
                 originalEndTick = m_dragOriginalNote.startTick + m_dragOriginalNote.durationTicks;
                 snappedStartTick = SnapTick(XToTick(logicalPoint.x));
                 maxStartTick = (originalEndTick > kSnapTicks) ? (originalEndTick - kSnapTicks) : 0;
                 updatedNote.startTick = std::min(snappedStartTick, maxStartTick);
                 updatedNote.durationTicks = std::max<uint32_t>(kSnapTicks, originalEndTick - updatedNote.startTick);
+                BAERmfEditorDocument_SetNoteInfo(m_document,
+                                                 static_cast<uint16_t>(m_selectedTrack),
+                                                 static_cast<uint32_t>(m_selectedNote),
+                                                 &updatedNote);
             } else if (m_dragMode == DragMode::ResizeRight) {
                 uint32_t snappedEndTick;
 
+                updatedNote = m_dragOriginalNote;
                 snappedEndTick = SnapTick(XToTick(logicalPoint.x));
                 if (snappedEndTick <= m_dragOriginalNote.startTick + kSnapTicks) {
                     snappedEndTick = m_dragOriginalNote.startTick + kSnapTicks;
                 }
                 updatedNote.durationTicks = snappedEndTick - m_dragOriginalNote.startTick;
-            }
-            if (BAERmfEditorDocument_SetNoteInfo(m_document,
+                BAERmfEditorDocument_SetNoteInfo(m_document,
                                                  static_cast<uint16_t>(m_selectedTrack),
                                                  static_cast<uint32_t>(m_selectedNote),
-                                                 &updatedNote) == BAE_NO_ERROR) {
-                UpdateVirtualSize();
-                Refresh();
+                                                 &updatedNote);
             }
+            UpdateVirtualSize();
+            Refresh();
             return;
         }
         if (m_selectedItemKind != PianoRollSelectionKind::Automation || !m_dragAutomationValid || m_selectedAutomationLane < 0 || m_selectedAutomationEvent < 0) {
@@ -2365,44 +2776,20 @@ private:
     }
 
     void OnMouseWheel(wxMouseEvent &event) {
-        if (event.AltDown() && !event.ControlDown()) {
-            int wheelDelta;
-            int wheelRotation;
-            int steps;
-            int linesPerStep;
-            int scrollPixelsX;
-            int scrollPixelsY;
-            int viewUnitsX;
-            int viewUnitsY;
-            int currentLeft;
-            int clientWidth;
-            int maxLeft;
-            int newLeft;
-            wxSize virtualSize;
+        wxPoint logicalPoint;
+        bool wheelOnRuler;
 
-            wheelDelta = event.GetWheelDelta();
-            wheelRotation = event.GetWheelRotation();
-            if (wheelDelta == 0 || wheelRotation == 0) {
+        logicalPoint = CalcUnscrolledPosition(event.GetPosition());
+        wheelOnRuler = IsPointInStickyRuler(logicalPoint) && logicalPoint.x >= kPianoRollLeftGutter;
+        if ((wheelOnRuler || event.AltDown()) && !event.ControlDown()) {
+            if (ScrollHorizontallyWithWheel(event, 2)) {
                 return;
             }
-            steps = wheelRotation / wheelDelta;
-            if (steps == 0) {
-                steps = (wheelRotation > 0) ? 1 : -1;
-            }
-            linesPerStep = std::max(1, event.GetLinesPerAction());
-            GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
-            if (scrollPixelsX <= 0) {
+        }
+        if (wheelOnRuler && !event.ControlDown()) {
+            if (ScrollHorizontallyWithWheel(event, 1)) {
                 return;
             }
-            GetViewStart(&viewUnitsX, &viewUnitsY);
-            currentLeft = viewUnitsX * scrollPixelsX;
-            clientWidth = std::max(1, GetClientSize().GetWidth());
-            virtualSize = GetVirtualSize();
-            maxLeft = std::max(0, virtualSize.GetWidth() - clientWidth);
-            newLeft = currentLeft - (steps * linesPerStep * scrollPixelsX * 2);
-            newLeft = std::clamp(newLeft, 0, maxLeft);
-            Scroll(newLeft / scrollPixelsX, viewUnitsY);
-            return;
         }
         if (event.ControlDown()) {
             ApplyZoomStep(event.GetWheelRotation(), event.GetPosition());
@@ -2448,6 +2835,24 @@ void PianoRollPanel_SetSelectionChangedCallback(PianoRollPanel *panel, std::func
 void PianoRollPanel_SetSeekRequestedCallback(PianoRollPanel *panel, std::function<void(uint32_t)> callback) {
     if (panel) {
         panel->SetSeekRequestedCallback(std::move(callback));
+    }
+}
+
+void PianoRollPanel_SetNotePreviewRequestedCallback(PianoRollPanel *panel,
+                                                    std::function<void(uint16_t,
+                                                                       unsigned char,
+                                                                       unsigned char,
+                                                                       uint32_t,
+                                                                       int)> callback) {
+    if (panel) {
+        panel->SetNotePreviewRequestedCallback(std::move(callback));
+    }
+}
+
+void PianoRollPanel_SetNotePreviewStopRequestedCallback(PianoRollPanel *panel,
+                                                        std::function<void()> callback) {
+    if (panel) {
+        panel->SetNotePreviewStopRequestedCallback(std::move(callback));
     }
 }
 

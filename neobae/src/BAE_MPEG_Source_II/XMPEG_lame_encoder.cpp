@@ -96,6 +96,8 @@ extern "C" void * MPG_EncodeNewStream(uint32_t encodeRate /* bits/sec total */, 
     /* Disable the Xing/Info VBR header frame — it decodes as silence and
      * shifts all audio forward by one extra MP3 frame (~1152 samples). */
     lame_set_bWriteVbrTag(gf, 0);
+    /* Keep output stream payload-only for embedded sample blobs. */
+    lame_set_write_id3tag_automatic(gf, 0);
 
     if(lame_init_params(gf) < 0){ BAE_PRINTF("audio: MPG_EncodeNewStream lame_init_params() failed\n"); lame_close(gf); delete s; return NULL; }
     s->gf = gf;

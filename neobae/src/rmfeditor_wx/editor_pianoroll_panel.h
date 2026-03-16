@@ -20,6 +20,14 @@ void PianoRollPanel_SetDocument(PianoRollPanel *panel, BAERmfEditorDocument *doc
 void PianoRollPanel_SetSelectedTrack(PianoRollPanel *panel, int trackIndex);
 void PianoRollPanel_SetSelectionChangedCallback(PianoRollPanel *panel, std::function<void()> callback);
 void PianoRollPanel_SetSeekRequestedCallback(PianoRollPanel *panel, std::function<void(uint32_t)> callback);
+void PianoRollPanel_SetNotePreviewRequestedCallback(PianoRollPanel *panel,
+                                                    std::function<void(uint16_t bank,
+                                                                       unsigned char program,
+                                                                       unsigned char note,
+                                                                       uint32_t durationTicks,
+                                                                       int trackIndex)> callback);
+void PianoRollPanel_SetNotePreviewStopRequestedCallback(PianoRollPanel *panel,
+                                                        std::function<void()> callback);
 void PianoRollPanel_SetUndoCallbacks(PianoRollPanel *panel,
                                      std::function<void(wxString const &)> beginCallback,
                                      std::function<void(wxString const &)> commitCallback,
