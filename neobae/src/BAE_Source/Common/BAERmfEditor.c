@@ -352,6 +352,7 @@ typedef struct BAERmfEditorSample
     unsigned char rootKey;
     unsigned char lowKey;
     unsigned char highKey;
+    int16_t splitVolume;       /* per-split miscParameter2 (volume), 0 = use default */
     uint32_t sourceCompressionType;
     uint32_t sourceCompressionSubType;
     BAESampleInfo sampleInfo;
@@ -361,6 +362,71 @@ typedef struct BAERmfEditorSample
     XPTR    originalSndData;   /* raw SND resource blob from RMF (for DONT_CHANGE) */
     int32_t originalSndSize;   /* byte count of originalSndData */
 } BAERmfEditorSample;
+
+/* ---------- Extended instrument data (ADSR, LFO, LPF, curves) ---------- */
+
+#define EDITOR_MAX_ADSR_STAGES 8  /* matches ADSR_STAGES from GenSnd.h */
+#define EDITOR_MAX_LFOS        6  /* matches MAX_LFOS */
+#define EDITOR_MAX_CURVES      4  /* matches MAX_CURVES */
+
+typedef struct EditorADSRStage
+{
+    int32_t level;
+    int32_t time;
+    int32_t flags;  /* FOUR_CHAR form: 'LINE', 'SUST', 'LAST', 'GOTO', 'GOST', 'RELS', or 0 */
+} EditorADSRStage;
+
+typedef struct EditorADSR
+{
+    uint32_t stageCount;
+    EditorADSRStage stages[EDITOR_MAX_ADSR_STAGES];
+} EditorADSR;
+
+typedef struct EditorLFO
+{
+    int32_t destination;  /* FOUR_CHAR: 'VOLU','PITC','SPAN','PAN ','LPFR','LPRE','LPAM' */
+    int32_t period;
+    int32_t waveShape;    /* FOUR_CHAR: 'SINE','TRIA','SQUA','SQU2','SAWT','SAW2' */
+    int32_t DC_feed;
+    int32_t level;
+    EditorADSR adsr;      /* per-LFO envelope */
+} EditorLFO;
+
+typedef struct EditorCurve
+{
+    int32_t tieFrom;
+    int32_t tieTo;
+    int16_t curveCount;
+    uint8_t from_Value[EDITOR_MAX_ADSR_STAGES];  /* MIDI 0-127 */
+    int16_t to_Scalar[EDITOR_MAX_ADSR_STAGES];
+} EditorCurve;
+
+typedef struct BAERmfEditorInstrumentExt
+{
+    XLongResourceID instID;
+    char           *displayName;      /* INST resource name */
+    XBOOL           hasExtendedData;  /* TRUE if loaded from an extended-format INST */
+    XBOOL           dirty;            /* TRUE if user modified via Set API */
+    unsigned char   flags1;           /* ZBF_ bitmask from InstrumentResource */
+    unsigned char   flags2;           /* ZBF_ bitmask from InstrumentResource */
+    char            panPlacement;     /* stereo pan from INST header */
+    int16_t         midiRootKey;      /* master root key from INST header */
+    int16_t         miscParameter2;   /* volume level (100 = default) */
+    XBOOL           hasDefaultMod;    /* TRUE if INST_DEFAULT_MOD unit was present */
+    int32_t         LPF_frequency;
+    int32_t         LPF_resonance;
+    int32_t         LPF_lowpassAmount;
+    EditorADSR      volumeADSR;
+    uint32_t        lfoCount;
+    EditorLFO       lfos[EDITOR_MAX_LFOS];
+    uint32_t        curveCount;
+    EditorCurve     curves[EDITOR_MAX_CURVES];
+    /* Raw INST resource blob for unmodified round-trip */
+    XPTR            originalInstData;
+    int32_t         originalInstSize;
+} BAERmfEditorInstrumentExt;
+
+/* ----------------------------------------------------------------------- */
 
 typedef struct BAERmfEditorResourceEntry
 {
@@ -406,6 +472,9 @@ struct BAERmfEditorDocument
     uint32_t debugOriginalMidiDataSize;
     XBOOL loadedFromRmf;
     XBOOL isPristine;
+    BAERmfEditorInstrumentExt *instrumentExts;
+    uint32_t instrumentExtCount;
+    uint32_t instrumentExtCapacity;
 };
 
 typedef struct ByteBuffer
@@ -504,6 +573,11 @@ static BAEResult PV_DebugCollectMidiStats(unsigned char const *data,
                                          BAEDebugMidiStats *outStats);
 static void PV_DebugReportMidiRoundTripDiff(BAERmfEditorDocument const *document,
                                             ByteBuffer const *generatedMidi);
+static void PV_ParseExtendedInstData(XPTR instData, int32_t instSize, BAERmfEditorInstrumentExt *ext);
+static BAERmfEditorInstrumentExt *PV_FindInstrumentExt(BAERmfEditorDocument *document, XLongResourceID instID);
+static BAEResult PV_AddInstrumentExt(BAERmfEditorDocument *document, BAERmfEditorInstrumentExt const *ext);
+static void PV_ClearInstrumentExts(BAERmfEditorDocument *document);
+static XPTR PV_SerializeExtendedInstTail(BAERmfEditorInstrumentExt const *ext, int32_t *outSize);
 static int PV_CompareCCEvents(void const *left, void const *right);
 static XBOOL PV_TrackHasMetaType(BAERmfEditorTrack const *track, unsigned char type);
 static BAERmfEditorCCEvent *PV_FindTrackCCEvent(BAERmfEditorTrack *track, unsigned char cc, uint32_t eventIndex, uint32_t *outActualIndex);
@@ -2962,6 +3036,39 @@ static void PV_DecodeResourceName(char const *rawName, char outName[256])
     XStrCpy(outName, rawName);
 }
 
+static BAEResult PV_GetEmbeddedSampleDisplayName(XFILE fileRef,
+                                                 XShortResourceID sndID,
+                                                 char outName[256])
+{
+    static XResourceType const kSampleTypes[] = { ID_CSND, ID_ESND, ID_SND };
+    uint32_t typeIndex;
+    char rawName[256];
+
+    if (!fileRef || !outName)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    outName[0] = 0;
+    for (typeIndex = 0; typeIndex < (uint32_t)(sizeof(kSampleTypes) / sizeof(kSampleTypes[0])); ++typeIndex)
+    {
+        rawName[0] = 0;
+        if (XGetFileResourceName(fileRef,
+                                 kSampleTypes[typeIndex],
+                                 (XLongResourceID)sndID,
+                                 rawName) != FALSE)
+        {
+            PV_DecodeResourceName(rawName, outName);
+            if (outName[0])
+            {
+                return BAE_NO_ERROR;
+            }
+        }
+    }
+
+    return BAE_RESOURCE_NOT_FOUND;
+}
+
 static BAEResult PV_AddEmbeddedSampleVariant(BAERmfEditorDocument *document,
                                              XFILE fileRef,
                                              XLongResourceID instID,
@@ -3108,6 +3215,435 @@ static BAEResult PV_AddEmbeddedSampleVariant(BAERmfEditorDocument *document,
     return BAE_NO_ERROR;
 }
 
+/* ---------- Instrument extended data helpers ---------- */
+
+#define EDITOR_KEY_SPLIT_FILE_SIZE 8  /* matches KEY_SPLIT_FILE_SIZE in GenPatch.c */
+
+static BAERmfEditorInstrumentExt *PV_FindInstrumentExt(BAERmfEditorDocument *document, XLongResourceID instID)
+{
+    uint32_t i;
+    for (i = 0; i < document->instrumentExtCount; i++)
+    {
+        if (document->instrumentExts[i].instID == instID)
+        {
+            return &document->instrumentExts[i];
+        }
+    }
+    return NULL;
+}
+
+static BAEResult PV_AddInstrumentExt(BAERmfEditorDocument *document, BAERmfEditorInstrumentExt const *ext)
+{
+    BAEResult result;
+    result = PV_GrowBuffer((void **)&document->instrumentExts,
+                           &document->instrumentExtCapacity,
+                           sizeof(BAERmfEditorInstrumentExt),
+                           document->instrumentExtCount + 1);
+    if (result != BAE_NO_ERROR)
+    {
+        return result;
+    }
+    document->instrumentExts[document->instrumentExtCount] = *ext;
+    document->instrumentExtCount++;
+    return BAE_NO_ERROR;
+}
+
+static void PV_ClearInstrumentExts(BAERmfEditorDocument *document)
+{
+    uint32_t i;
+    if (!document)
+    {
+        return;
+    }
+    for (i = 0; i < document->instrumentExtCount; i++)
+    {
+        PV_FreeString(&document->instrumentExts[i].displayName);
+        if (document->instrumentExts[i].originalInstData)
+        {
+            XDisposePtr(document->instrumentExts[i].originalInstData);
+            document->instrumentExts[i].originalInstData = NULL;
+        }
+    }
+    if (document->instrumentExts)
+    {
+        XDisposePtr(document->instrumentExts);
+        document->instrumentExts = NULL;
+    }
+    document->instrumentExtCount = 0;
+    document->instrumentExtCapacity = 0;
+}
+
+/* Parse an InstrumentResource blob into BAERmfEditorInstrumentExt.
+ * Mirrors PV_GetEnvelopeData() from GenPatch.c but stores FOUR_CHAR (LONG) form
+ * for ADSR flags, LFO destinations, and wave shapes (no translation). */
+static void PV_ParseExtendedInstData(XPTR instData, int32_t instSize, BAERmfEditorInstrumentExt *ext)
+{
+    unsigned char const *pBase;
+    unsigned char const *pEnd;
+    unsigned char flags1;
+    int16_t keySplitCount;
+    unsigned char const *pData;
+    unsigned char const *pUnit;
+    int32_t count, remaining;
+    uint16_t data;
+    int32_t unitCount, unitType, unitSubCount;
+    int32_t count2;
+
+    XSetMemory(ext, (int32_t)sizeof(*ext), 0);
+
+    if (!instData || instSize < 14)
+    {
+        return;
+    }
+
+    pBase = (unsigned char const *)instData;
+    pEnd = pBase + instSize;
+
+    /* Read header fields via byte offsets (same as save path enum) */
+    ext->panPlacement = (char)pBase[4];
+    ext->flags1 = pBase[5];
+    ext->flags2 = pBase[6];
+    ext->midiRootKey = (int16_t)XGetShort((void *)(pBase + 2));
+    ext->miscParameter2 = (int16_t)XGetShort((void *)(pBase + 10));
+    flags1 = ext->flags1;
+    keySplitCount = (int16_t)XGetShort((void *)(pBase + 12));
+
+    /* Default ADSR: one TERMINATE stage at VOLUME_RANGE (4096) */
+    ext->volumeADSR.stageCount = 1;
+    ext->volumeADSR.stages[0].level = VOLUME_RANGE;
+    ext->volumeADSR.stages[0].time = 0;
+    ext->volumeADSR.stages[0].flags = ADSR_TERMINATE_LONG;
+
+    if (!(flags1 & ZBF_extendedFormat))
+    {
+        /* No extended data in this INST */
+        return;
+    }
+
+    /* Walk past key split data to find the 0x8000 tremolo end marker */
+    pData = pBase + 12 + 2 + (keySplitCount * EDITOR_KEY_SPLIT_FILE_SIZE);
+    remaining = (int32_t)(pEnd - pData);
+
+    pUnit = NULL;
+    for (count = 0; count < remaining - 1; count++)
+    {
+        data = (uint16_t)XGetShort((void *)&pData[count]);
+        if (data == 0x8000)
+        {
+            int32_t strLen1, strLen2;
+            count += 4;  /* skip past end token and extra word */
+            if (count >= remaining) break;
+            strLen1 = (int32_t)pData[count] + 1;       /* first pascal string length */
+            if (count + strLen1 >= remaining) break;
+            strLen2 = (int32_t)pData[count + strLen1] + 1; /* second pascal string length */
+            if (count + strLen1 + strLen2 > remaining) break;
+            pUnit = &pData[count + strLen1 + strLen2];
+            break;
+        }
+    }
+
+    if (!pUnit || pUnit + 13 > pEnd)
+    {
+        return;
+    }
+
+    ext->hasExtendedData = TRUE;
+    pUnit += 12;  /* reserved global space */
+
+    unitCount = *pUnit;
+    pUnit++;
+
+    if (unitCount <= 0)
+    {
+        return;
+    }
+
+    for (count = 0; count < unitCount; count++)
+    {
+        if (pUnit + 4 > pEnd)
+        {
+            break;
+        }
+        unitType = (int32_t)(XGetLong((void *)pUnit) & 0x5F5F5F5F);
+        pUnit += 4;
+
+        switch (unitType)
+        {
+            case INST_EXPONENTIAL_CURVE:
+                if (ext->curveCount >= EDITOR_MAX_CURVES)
+                {
+                    goto bail;
+                }
+                if (pUnit + 8 > pEnd) goto bail;
+                {
+                    EditorCurve *pCurve = &ext->curves[ext->curveCount];
+                    ext->curveCount++;
+                    pCurve->tieFrom = (int32_t)(XGetLong((void *)pUnit) & 0x5F5F5F5F);
+                    pUnit += 4;
+                    pCurve->tieTo = (int32_t)(XGetLong((void *)pUnit) & 0x5F5F5F5F);
+                    pUnit += 4;
+                    if (pUnit >= pEnd) goto bail;
+                    unitSubCount = *pUnit++;
+                    if (unitSubCount > EDITOR_MAX_ADSR_STAGES) goto bail;
+                    pCurve->curveCount = (int16_t)unitSubCount;
+                    for (count2 = 0; count2 < unitSubCount; count2++)
+                    {
+                        if (pUnit + 3 > pEnd) goto bail;
+                        pCurve->from_Value[count2] = *pUnit++;
+                        pCurve->to_Scalar[count2] = (int16_t)XGetShort((void *)pUnit);
+                        pUnit += 2;
+                    }
+                }
+                break;
+
+            case INST_ADSR_ENVELOPE:
+                if (pUnit >= pEnd) goto bail;
+                unitSubCount = *pUnit++;
+                if (unitSubCount > EDITOR_MAX_ADSR_STAGES) goto bail;
+                ext->volumeADSR.stageCount = (uint32_t)unitSubCount;
+                for (count2 = 0; count2 < unitSubCount; count2++)
+                {
+                    if (pUnit + 12 > pEnd) goto bail;
+                    ext->volumeADSR.stages[count2].level = (int32_t)XGetLong((void *)pUnit);
+                    pUnit += 4;
+                    ext->volumeADSR.stages[count2].time = (int32_t)XGetLong((void *)pUnit);
+                    pUnit += 4;
+                    ext->volumeADSR.stages[count2].flags = (int32_t)(XGetLong((void *)pUnit) & 0x5F5F5F5F);
+                    pUnit += 4;
+                }
+                break;
+
+            case INST_LOW_PASS_FILTER:
+                if (pUnit + 12 > pEnd) goto bail;
+                ext->LPF_frequency = (int32_t)XGetLong((void *)pUnit);
+                pUnit += 4;
+                ext->LPF_resonance = (int32_t)XGetLong((void *)pUnit);
+                pUnit += 4;
+                ext->LPF_lowpassAmount = (int32_t)XGetLong((void *)pUnit);
+                pUnit += 4;
+                break;
+
+            case INST_DEFAULT_MOD:
+                /* Just a flag, no data follows */
+                ext->hasDefaultMod = TRUE;
+                break;
+
+            /* LFO types */
+            case INST_PITCH_LFO:
+            case INST_VOLUME_LFO:
+            case INST_STEREO_PAN_LFO:
+            case INST_STEREO_PAN_NAME2:
+            case INST_LOW_PASS_AMOUNT:
+            case INST_LPF_DEPTH:
+            case INST_LPF_FREQUENCY:
+                if (ext->lfoCount >= EDITOR_MAX_LFOS) goto bail;
+                if (pUnit >= pEnd) goto bail;
+                unitSubCount = *pUnit++;
+                if (unitSubCount > EDITOR_MAX_ADSR_STAGES) goto bail;
+                {
+                    EditorLFO *pLFO = &ext->lfos[ext->lfoCount];
+                    pLFO->destination = unitType;  /* already LONG form */
+                    pLFO->adsr.stageCount = (uint32_t)unitSubCount;
+                    for (count2 = 0; count2 < unitSubCount; count2++)
+                    {
+                        if (pUnit + 12 > pEnd) goto bail;
+                        pLFO->adsr.stages[count2].level = (int32_t)XGetLong((void *)pUnit);
+                        pUnit += 4;
+                        pLFO->adsr.stages[count2].time = (int32_t)XGetLong((void *)pUnit);
+                        pUnit += 4;
+                        pLFO->adsr.stages[count2].flags = (int32_t)(XGetLong((void *)pUnit) & 0x5F5F5F5F);
+                        pUnit += 4;
+                    }
+                    if (pUnit + 16 > pEnd) goto bail;
+                    pLFO->period = (int32_t)XGetLong((void *)pUnit);
+                    pUnit += 4;
+                    pLFO->waveShape = (int32_t)XGetLong((void *)pUnit);
+                    pUnit += 4;
+                    pLFO->DC_feed = (int32_t)XGetLong((void *)pUnit);
+                    pUnit += 4;
+                    pLFO->level = (int32_t)XGetLong((void *)pUnit);
+                    pUnit += 4;
+                    ext->lfoCount++;
+                }
+                break;
+
+            default:
+                /* Unknown unit type — can't safely skip (unknown size), bail */
+                goto bail;
+        }
+    }
+
+bail:
+    return;
+}
+
+/* Serialize the extended instrument data into a byte buffer that can be appended
+ * after the INST header + key splits + tremolo tail. Returns allocated buffer
+ * (caller must XDisposePtr) and writes size to *outSize. Returns NULL on empty. */
+static XPTR PV_SerializeExtendedInstTail(BAERmfEditorInstrumentExt const *ext, int32_t *outSize)
+{
+    /* Compute needed size:
+     * 12 reserved + 1 unitCount
+     * + ADSR: 4 tag + 1 count + stageCount*12
+     * + LPF: 4 tag + 12
+     * + per LFO: 4 tag + 1 count + stageCount*12 + 16
+     * + per Curve: 4 tag + 4+4 + 1 count + curveCount*3
+     */
+    int32_t size;
+    int32_t unitCount;
+    uint32_t i;
+    unsigned char *buf;
+    unsigned char *p;
+
+    *outSize = 0;
+    unitCount = 0;
+    /* 10 reserved bytes (not 12): the parser navigates to the descriptorFlags
+     * position (2 bytes before our tail) and reads 12 bytes as "reserved global".
+     * Those 2 descriptorFlags bytes + our 10 reserved bytes = 12 total. */
+    size = 10 + 1;  /* reserved + unitCount byte */
+
+    /* Always write ADSR if there are stages */
+    if (ext->volumeADSR.stageCount > 0)
+    {
+        size += 4 + 1 + (int32_t)(ext->volumeADSR.stageCount * 12);
+        unitCount++;
+    }
+
+    /* INST_DEFAULT_MOD: just a 4-byte tag, no payload */
+    if (ext->hasDefaultMod)
+    {
+        size += 4;
+        unitCount++;
+    }
+
+    /* LPF if any value is non-zero */
+    if (ext->LPF_frequency != 0 || ext->LPF_resonance != 0 || ext->LPF_lowpassAmount != 0)
+    {
+        size += 4 + 12;
+        unitCount++;
+    }
+
+    /* LFOs */
+    for (i = 0; i < ext->lfoCount; i++)
+    {
+        size += 4 + 1 + (int32_t)(ext->lfos[i].adsr.stageCount * 12) + 16;
+        unitCount++;
+    }
+
+    /* Curves */
+    for (i = 0; i < ext->curveCount; i++)
+    {
+        size += 4 + 4 + 4 + 1 + (int32_t)(ext->curves[i].curveCount * 3);
+        unitCount++;
+    }
+
+    if (unitCount == 0)
+    {
+        return NULL;
+    }
+
+    buf = (unsigned char *)XNewPtr(size);
+    if (!buf)
+    {
+        return NULL;
+    }
+    XSetMemory(buf, size, 0);
+    p = buf;
+
+    /* 10 bytes reserved global (2 from descriptorFlags + 10 here = 12 for the parser) */
+    p += 10;
+
+    /* unit count */
+    *p++ = (unsigned char)unitCount;
+
+    /* ADSR envelope */
+    if (ext->volumeADSR.stageCount > 0)
+    {
+        XPutLong(p, (uint32_t)INST_ADSR_ENVELOPE);
+        p += 4;
+        *p++ = (unsigned char)ext->volumeADSR.stageCount;
+        for (i = 0; i < ext->volumeADSR.stageCount; i++)
+        {
+            XPutLong(p, (uint32_t)ext->volumeADSR.stages[i].level);
+            p += 4;
+            XPutLong(p, (uint32_t)ext->volumeADSR.stages[i].time);
+            p += 4;
+            XPutLong(p, (uint32_t)ext->volumeADSR.stages[i].flags);
+            p += 4;
+        }
+    }
+
+    /* INST_DEFAULT_MOD (disables auto mod-wheel curve) */
+    if (ext->hasDefaultMod)
+    {
+        XPutLong(p, (uint32_t)INST_DEFAULT_MOD);
+        p += 4;
+    }
+
+    /* LPF */
+    if (ext->LPF_frequency != 0 || ext->LPF_resonance != 0 || ext->LPF_lowpassAmount != 0)
+    {
+        XPutLong(p, (uint32_t)INST_LOW_PASS_FILTER);
+        p += 4;
+        XPutLong(p, (uint32_t)ext->LPF_frequency);
+        p += 4;
+        XPutLong(p, (uint32_t)ext->LPF_resonance);
+        p += 4;
+        XPutLong(p, (uint32_t)ext->LPF_lowpassAmount);
+        p += 4;
+    }
+
+    /* LFOs */
+    for (i = 0; i < ext->lfoCount; i++)
+    {
+        uint32_t j;
+        EditorLFO const *lfo = &ext->lfos[i];
+        XPutLong(p, (uint32_t)lfo->destination);
+        p += 4;
+        *p++ = (unsigned char)lfo->adsr.stageCount;
+        for (j = 0; j < lfo->adsr.stageCount; j++)
+        {
+            XPutLong(p, (uint32_t)lfo->adsr.stages[j].level);
+            p += 4;
+            XPutLong(p, (uint32_t)lfo->adsr.stages[j].time);
+            p += 4;
+            XPutLong(p, (uint32_t)lfo->adsr.stages[j].flags);
+            p += 4;
+        }
+        XPutLong(p, (uint32_t)lfo->period);
+        p += 4;
+        XPutLong(p, (uint32_t)lfo->waveShape);
+        p += 4;
+        XPutLong(p, (uint32_t)lfo->DC_feed);
+        p += 4;
+        XPutLong(p, (uint32_t)lfo->level);
+        p += 4;
+    }
+
+    /* Curves */
+    for (i = 0; i < ext->curveCount; i++)
+    {
+        int32_t j;
+        EditorCurve const *curve = &ext->curves[i];
+        XPutLong(p, (uint32_t)INST_EXPONENTIAL_CURVE);
+        p += 4;
+        XPutLong(p, (uint32_t)curve->tieFrom);
+        p += 4;
+        XPutLong(p, (uint32_t)curve->tieTo);
+        p += 4;
+        *p++ = (unsigned char)curve->curveCount;
+        for (j = 0; j < curve->curveCount; j++)
+        {
+            *p++ = curve->from_Value[j];
+            XPutShort(p, (uint16_t)curve->to_Scalar[j]);
+            p += 2;
+        }
+    }
+
+    *outSize = size;
+    return (XPTR)buf;
+}
+
 /* Extract INST + SND resources from an open RMF resource file and add them
    as editable samples in the document. Includes all key-split variants. */
 static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE fileRef)
@@ -3167,6 +3703,7 @@ static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE 
             {
                 KeySplit split;
                 unsigned char splitRootForLoad;
+                char sampleName[256];
 
                 XGetKeySplitFromPtr(inst, splitIndex, &split);
                 if (useSoundModifierAsRootKey)
@@ -3185,10 +3722,17 @@ static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE 
                      * PV_AddEmbeddedSampleVariant falls back to sdi.baseKey. */
                     splitRootForLoad = 0;
                 }
+
+                sampleName[0] = 0;
+                if (PV_GetEmbeddedSampleDisplayName(fileRef, split.sndResourceID, sampleName) != BAE_NO_ERROR)
+                {
+                    XStrCpy(sampleName, instName);
+                }
+
                 if (PV_AddEmbeddedSampleVariant(document,
                                                 fileRef,
                                                 instID,
-                                                instName,
+                                                sampleName,
                                                 program,
                                                 split.sndResourceID,
                                                 splitRootForLoad,
@@ -3198,11 +3742,17 @@ static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE 
                     BAE_STDERR("[RMF] INST ID=%ld split=%d failed to load sndID=%d\n",
                                (long)instID, (int)splitIndex, (int)split.sndResourceID);
                 }
+                else
+                {
+                    /* Store per-split volume (miscParameter2) on the newly added sample */
+                    document->samples[document->sampleCount - 1].splitVolume = split.miscParameter2;
+                }
             }
         }
         else
         {
             unsigned char nonSplitRootForLoad;
+            char sampleName[256];
             if (useSoundModifierAsRootKey)
             {
                 /* miscParameter1 holds the root key override for non-split instruments */
@@ -3214,10 +3764,17 @@ static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE 
                  * PV_AddEmbeddedSampleVariant falls back to sdi.baseKey. */
                 nonSplitRootForLoad = 0;
             }
+
+            sampleName[0] = 0;
+            if (PV_GetEmbeddedSampleDisplayName(fileRef, baseSndID, sampleName) != BAE_NO_ERROR)
+            {
+                XStrCpy(sampleName, instName);
+            }
+
             if (PV_AddEmbeddedSampleVariant(document,
                                             fileRef,
                                             instID,
-                                            instName,
+                                            sampleName,
                                             program,
                                             baseSndID,
                                             nonSplitRootForLoad,
@@ -3227,8 +3784,41 @@ static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE 
                 BAE_STDERR("[RMF] INST ID=%ld failed to load base sndID=%d\n",
                            (long)instID, (int)baseSndID);
             }
+            else
+            {
+                /* Store header miscParameter2 as the split volume for non-split instruments */
+                document->samples[document->sampleCount - 1].splitVolume =
+                    (int16_t)XGetShort(&inst->miscParameter2);
+            }
         }
         }
+
+        /* Parse and store extended instrument data (ADSR, LPF, LFO, curves) */
+        if (!PV_FindInstrumentExt(document, instID))
+        {
+            BAERmfEditorInstrumentExt extData;
+            PV_ParseExtendedInstData(instData, instSize, &extData);
+            extData.instID = instID;
+            extData.dirty = FALSE;
+            extData.displayName = instName[0] ? PV_DuplicateString(instName) : NULL;
+            /* Keep raw blob for bit-perfect round-trip of unmodified instruments */
+            extData.originalInstData = XNewPtr(instSize);
+            if (extData.originalInstData)
+            {
+                XBlockMove(instData, extData.originalInstData, instSize);
+                extData.originalInstSize = instSize;
+            }
+            if (PV_AddInstrumentExt(document, &extData) != BAE_NO_ERROR)
+            {
+                PV_FreeString(&extData.displayName);
+                if (extData.originalInstData)
+                {
+                    XDisposePtr(extData.originalInstData);
+                    extData.originalInstData = NULL;
+                }
+            }
+        }
+
         XDisposePtr(instData);
     }
 }
@@ -4839,6 +5429,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
         uint32_t leaderFrames;
         XLongResourceID instID;
         BAERmfEditorSample const *leaderSample;
+        BAERmfEditorInstrumentExt const *extForInst;
         char pascalName[256];
         BAEResult result;
 
@@ -4889,7 +5480,10 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
         }
 
         leaderSample = &document->samples[leaderIndex];
-        result = PV_CreatePascalName(leaderSample->displayName ? leaderSample->displayName : leaderSample->sourcePath,
+    extForInst = PV_FindInstrumentExt((BAERmfEditorDocument *)document, instID);
+        result = PV_CreatePascalName((extForInst && extForInst->displayName && extForInst->displayName[0])
+                                        ? extForInst->displayName
+                                        : (leaderSample->displayName ? leaderSample->displayName : leaderSample->sourcePath),
                                      pascalName);
         if (result != BAE_NO_ERROR)
         {
@@ -4900,6 +5494,13 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
 
         {
             InstrumentResource instrument;
+
+            /* If we have the original INST blob and no edits were made, write it
+             * verbatim for bit-perfect round-trip preservation. We must still update
+             * the SND resource IDs and root keys in the blob since those may have
+             * been reassigned during save. Skip this shortcut for now and always
+             * rebuild so that SND ID remapping stays correct. If the ext data is
+             * unmodified, we still append the serialized extended tail. */
 
             if (splitCount > 1)
             {
@@ -4924,6 +5525,8 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 uint32_t *instSampleIndices;
                 uint32_t collected;
                 uint32_t i;
+                unsigned char writeFlags1;
+                unsigned char writeFlags2;
 
                 instSampleIndices = (uint32_t *)XNewPtr((int32_t)(splitCount * sizeof(uint32_t)));
                 if (!instSampleIndices)
@@ -4968,48 +5571,81 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 }
 
                 instSize = (int32_t)(kInstOffset_keySplitData + (int32_t)(collected * kKeySplitFileSize) + kInstTailSize);
-                instBytes = (XBYTE *)XNewPtr(instSize);
-                if (!instBytes)
+
+                /* Build flags: preserve original flags and OR in required bits */
+                writeFlags1 = ZBF_useSampleRate;
+                writeFlags2 = ZBF_useSoundModifierAsRootKey;
+                if (extForInst)
                 {
-                    XDisposePtr((XPTR)instSampleIndices);
-                    XDisposePtr((XPTR)sampleSndIDs);
-                    XDisposePtr((XPTR)sampleInstIDs);
-                    return BAE_MEMORY_ERR;
-                }
-                XSetMemory(instBytes, instSize, 0);
-
-                XPutShort(instBytes + kInstOffset_sndResourceID, (uint16_t)sampleSndIDs[leaderIndex]);
-                XPutShort(instBytes + kInstOffset_midiRootKey, 60);
-                instBytes[kInstOffset_panPlacement] = 0;
-                instBytes[kInstOffset_flags1] = ZBF_useSampleRate; /* engine must scale pitch for actual sample rate */
-                /* useSoundModifierAsRootKey: encode rootKey in miscParameter1 so playback
-                 * doesn't rely on the SND's baseMidiPitch (unreliable for FLAC/VORBIS). */
-                instBytes[kInstOffset_flags2] = ZBF_useSoundModifierAsRootKey;
-                instBytes[kInstOffset_smodResourceID] = 0;
-                XPutShort(instBytes + kInstOffset_miscParameter1, (uint16_t)leaderSample->rootKey);
-                XPutShort(instBytes + kInstOffset_miscParameter2, 100);
-                XPutShort(instBytes + kInstOffset_keySplitCount, (uint16_t)collected);
-
-                for (i = 0; i < collected; ++i)
-                {
-                    BAERmfEditorSample const *splitSample;
-                    XBYTE *splitPtr;
-
-                    splitSample = &document->samples[instSampleIndices[i]];
-                    splitPtr = instBytes + kInstOffset_keySplitData + (i * kKeySplitFileSize);
-                    splitPtr[0] = (XBYTE)splitSample->lowKey;
-                    splitPtr[1] = (XBYTE)splitSample->highKey;
-                    XPutShort(splitPtr + 2, (uint16_t)sampleSndIDs[instSampleIndices[i]]);
-                    XPutShort(splitPtr + 4, (uint16_t)splitSample->rootKey);
-                    XPutShort(splitPtr + 6, 100);
+                    writeFlags1 |= extForInst->flags1;
+                    writeFlags2 |= extForInst->flags2;
                 }
 
-                tailOffset = (int32_t)(kInstOffset_keySplitData + (int32_t)(collected * kKeySplitFileSize));
-                XPutShort(instBytes + tailOffset + 0, 0);      /* tremoloCount */
-                XPutShort(instBytes + tailOffset + 2, 0x8000); /* tremoloEnd */
-                XPutShort(instBytes + tailOffset + 4, 0);      /* reserved_3 */
-                XPutShort(instBytes + tailOffset + 6, 0);      /* descriptorName */
-                XPutShort(instBytes + tailOffset + 8, 0);      /* descriptorFlags */
+                /* Check if we need to append extended format data */
+                {
+                    XPTR extTail = NULL;
+                    int32_t extTailSize = 0;
+                    if (extForInst && (extForInst->hasExtendedData || extForInst->dirty))
+                    {
+                        extTail = PV_SerializeExtendedInstTail(extForInst, &extTailSize);
+                        if (extTail && extTailSize > 0)
+                        {
+                            writeFlags1 |= ZBF_extendedFormat;
+                        }
+                    }
+
+                    instBytes = (XBYTE *)XNewPtr(instSize + extTailSize);
+                    if (!instBytes)
+                    {
+                        if (extTail) XDisposePtr(extTail);
+                        XDisposePtr((XPTR)instSampleIndices);
+                        XDisposePtr((XPTR)sampleSndIDs);
+                        XDisposePtr((XPTR)sampleInstIDs);
+                        return BAE_MEMORY_ERR;
+                    }
+                    XSetMemory(instBytes, instSize + extTailSize, 0);
+
+                    XPutShort(instBytes + kInstOffset_sndResourceID, (uint16_t)sampleSndIDs[leaderIndex]);
+                    XPutShort(instBytes + kInstOffset_midiRootKey, extForInst ? extForInst->midiRootKey : 60);
+                    instBytes[kInstOffset_panPlacement] = extForInst ? (XBYTE)extForInst->panPlacement : 0;
+                    instBytes[kInstOffset_flags1] = writeFlags1;
+                    instBytes[kInstOffset_flags2] = writeFlags2;
+                    instBytes[kInstOffset_smodResourceID] = 0;
+                    /* For split instruments, header miscParameter1/2 are typically 0 —
+                     * each split carries its own rootKey and volume in the split data. */
+                    XPutShort(instBytes + kInstOffset_miscParameter1, 0);
+                    XPutShort(instBytes + kInstOffset_miscParameter2, 0);
+                    XPutShort(instBytes + kInstOffset_keySplitCount, (uint16_t)collected);
+
+                    for (i = 0; i < collected; ++i)
+                    {
+                        BAERmfEditorSample const *splitSample;
+                        XBYTE *splitPtr;
+
+                        splitSample = &document->samples[instSampleIndices[i]];
+                        splitPtr = instBytes + kInstOffset_keySplitData + (i * kKeySplitFileSize);
+                        splitPtr[0] = (XBYTE)splitSample->lowKey;
+                        splitPtr[1] = (XBYTE)splitSample->highKey;
+                        XPutShort(splitPtr + 2, (uint16_t)sampleSndIDs[instSampleIndices[i]]);
+                        XPutShort(splitPtr + 4, (uint16_t)splitSample->rootKey);
+                        XPutShort(splitPtr + 6, splitSample->splitVolume ? (uint16_t)splitSample->splitVolume : 100);
+                    }
+
+                    tailOffset = (int32_t)(kInstOffset_keySplitData + (int32_t)(collected * kKeySplitFileSize));
+                    XPutShort(instBytes + tailOffset + 0, 0);      /* tremoloCount */
+                    XPutShort(instBytes + tailOffset + 2, 0x8000); /* tremoloEnd */
+                    XPutShort(instBytes + tailOffset + 4, 0);      /* reserved_3 */
+                    XPutShort(instBytes + tailOffset + 6, 0);      /* descriptorName */
+                    XPutShort(instBytes + tailOffset + 8, 0);      /* descriptorFlags */
+
+                    /* Append extended data tail if present */
+                    if (extTail && extTailSize > 0)
+                    {
+                        XBlockMove(extTail, instBytes + instSize, extTailSize);
+                        instSize += extTailSize;
+                    }
+                    if (extTail) XDisposePtr(extTail);
+                }
 
                 BAE_STDERR("[RMF Save] INST id=%ld splitCount=%u using split map leaderSample=%u leaderFrames=%u\n",
                            (long)instID,
@@ -5030,27 +5666,81 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 continue;
             }
 
-            XSetMemory(&instrument, sizeof(instrument), 0);
-            XPutShort(&instrument.sndResourceID, (uint16_t)sampleSndIDs[leaderIndex]);
-            XPutShort(&instrument.midiRootKey, 60);
-            instrument.flags1 = ZBF_useSampleRate; /* engine must scale pitch for actual sample rate */
-            /* useSoundModifierAsRootKey: encode rootKey in miscParameter1 so playback
-             * doesn't rely on the SND's baseMidiPitch (unreliable for FLAC/VORBIS). */
-            instrument.flags2 = ZBF_useSoundModifierAsRootKey;
-            XPutShort(&instrument.miscParameter1, (uint16_t)leaderSample->rootKey);
-            XPutShort(&instrument.miscParameter2, 100);
-            XPutShort(&instrument.keySplitCount, 0);
-            XPutShort(&instrument.tremoloCount, 0);
-            XPutShort(&instrument.tremoloEnd, 0x8000);
-            BAE_STDERR("[RMF Save] INST id=%ld fallback midiRootKey=%d sampleRootKey=%u\n",
-                       (long)instID,
-                       60,
-                       (unsigned)leaderSample->rootKey);
-            if (XAddFileResource(fileRef, ID_INST, instID, pascalName, &instrument, (int32_t)sizeof(instrument)) != 0)
+            /* Single-sample (no key splits) path */
             {
-                XDisposePtr((XPTR)sampleSndIDs);
-                XDisposePtr((XPTR)sampleInstIDs);
-                return BAE_FILE_IO_ERROR;
+                unsigned char writeFlags1;
+                unsigned char writeFlags2;
+                XPTR extTail = NULL;
+                int32_t extTailSize = 0;
+
+                writeFlags1 = ZBF_useSampleRate;
+                writeFlags2 = ZBF_useSoundModifierAsRootKey;
+                if (extForInst)
+                {
+                    writeFlags1 |= extForInst->flags1;
+                    writeFlags2 |= extForInst->flags2;
+                }
+                if (extForInst && (extForInst->hasExtendedData || extForInst->dirty))
+                {
+                    extTail = PV_SerializeExtendedInstTail(extForInst, &extTailSize);
+                    if (extTail && extTailSize > 0)
+                    {
+                        writeFlags1 |= ZBF_extendedFormat;
+                    }
+                }
+
+                XSetMemory(&instrument, sizeof(instrument), 0);
+                XPutShort(&instrument.sndResourceID, (uint16_t)sampleSndIDs[leaderIndex]);
+                XPutShort(&instrument.midiRootKey, extForInst ? extForInst->midiRootKey : 60);
+                instrument.panPlacement = extForInst ? extForInst->panPlacement : 0;
+                instrument.flags1 = writeFlags1;
+                instrument.flags2 = writeFlags2;
+                XPutShort(&instrument.miscParameter1, (uint16_t)leaderSample->rootKey);
+                XPutShort(&instrument.miscParameter2, leaderSample->splitVolume ? (uint16_t)leaderSample->splitVolume : 100);
+                XPutShort(&instrument.keySplitCount, 0);
+                XPutShort(&instrument.tremoloCount, 0);
+                XPutShort(&instrument.tremoloEnd, 0x8000);
+
+                if (extTail && extTailSize > 0)
+                {
+                    /* Must write as byte buffer to append extended tail */
+                    int32_t totalSize = (int32_t)sizeof(instrument) + extTailSize;
+                    XBYTE *instBuf = (XBYTE *)XNewPtr(totalSize);
+                    if (!instBuf)
+                    {
+                        XDisposePtr(extTail);
+                        XDisposePtr((XPTR)sampleSndIDs);
+                        XDisposePtr((XPTR)sampleInstIDs);
+                        return BAE_MEMORY_ERR;
+                    }
+                    XBlockMove(&instrument, instBuf, (int32_t)sizeof(instrument));
+                    XBlockMove(extTail, instBuf + sizeof(instrument), extTailSize);
+                    XDisposePtr(extTail);
+                    BAE_STDERR("[RMF Save] INST id=%ld midiRootKey=%d sampleRootKey=%u (extended, %ld bytes)\n",
+                               (long)instID, 60, (unsigned)leaderSample->rootKey, (long)totalSize);
+                    if (XAddFileResource(fileRef, ID_INST, instID, pascalName, instBuf, totalSize) != 0)
+                    {
+                        XDisposePtr((XPTR)instBuf);
+                        XDisposePtr((XPTR)sampleSndIDs);
+                        XDisposePtr((XPTR)sampleInstIDs);
+                        return BAE_FILE_IO_ERROR;
+                    }
+                    XDisposePtr((XPTR)instBuf);
+                }
+                else
+                {
+                    if (extTail) XDisposePtr(extTail);
+                    BAE_STDERR("[RMF Save] INST id=%ld fallback midiRootKey=%d sampleRootKey=%u\n",
+                               (long)instID,
+                               60,
+                               (unsigned)leaderSample->rootKey);
+                    if (XAddFileResource(fileRef, ID_INST, instID, pascalName, &instrument, (int32_t)sizeof(instrument)) != 0)
+                    {
+                        XDisposePtr((XPTR)sampleSndIDs);
+                        XDisposePtr((XPTR)sampleInstIDs);
+                        return BAE_FILE_IO_ERROR;
+                    }
+                }
             }
         }
     }
@@ -5310,6 +6000,7 @@ BAEResult BAERmfEditorDocument_Delete(BAERmfEditorDocument *document)
         XDisposePtr(document->samples);
     }
     PV_ClearTempoEvents(document);
+    PV_ClearInstrumentExts(document);
     PV_FreeOriginalResources(document);
     PV_FreeDebugOriginalMidiData(document);
     XDisposePtr(document);
@@ -6455,6 +7146,7 @@ BAEResult BAERmfEditorDocument_GetSampleInfo(BAERmfEditorDocument const *documen
     outSampleInfo->rootKey = sample->rootKey;
     outSampleInfo->lowKey = sample->lowKey;
     outSampleInfo->highKey = sample->highKey;
+    outSampleInfo->splitVolume = sample->splitVolume;
     outSampleInfo->sampleInfo = sample->sampleInfo;
     outSampleInfo->compressionType = sample->targetCompressionType;
     outSampleInfo->hasOriginalData = (sample->originalSndData != NULL) ? TRUE : FALSE;
@@ -6490,6 +7182,7 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
     sample->rootKey = sampleInfo->rootKey;
     sample->lowKey = sampleInfo->lowKey;
     sample->highKey = sampleInfo->highKey;
+    sample->splitVolume = sampleInfo->splitVolume;
 
     /* Propagate rootKey and loop points into the waveform and sampleInfo so
      * that the save path, preview, and subsequent GetSampleInfo all agree. */
@@ -6942,6 +7635,218 @@ BAEResult BAERmfEditorDocument_ExportSampleToFile(BAERmfEditorDocument const *do
     return (opErr == NO_ERR) ? BAE_NO_ERROR : BAE_FILE_IO_ERROR;
 }
 
+/* ---------- Extended instrument data API ---------- */
+
+BAEResult BAERmfEditorDocument_GetInstIDForSample(BAERmfEditorDocument const *document,
+                                                  uint32_t sampleIndex,
+                                                  uint32_t *outInstID)
+{
+    if (!document || !outInstID || sampleIndex >= document->sampleCount)
+    {
+        return BAE_PARAM_ERR;
+    }
+    *outInstID = (uint32_t)document->samples[sampleIndex].instID;
+    return BAE_NO_ERROR;
+}
+
+static void PV_CopyEditorADSRToInfo(EditorADSR const *src, BAERmfEditorADSRInfo *dst)
+{
+    uint32_t i;
+    dst->stageCount = src->stageCount;
+    for (i = 0; i < src->stageCount && i < EDITOR_MAX_ADSR_STAGES; i++)
+    {
+        dst->stages[i].level = src->stages[i].level;
+        dst->stages[i].time = src->stages[i].time;
+        dst->stages[i].flags = src->stages[i].flags;
+    }
+}
+
+static void PV_CopyInfoToEditorADSR(BAERmfEditorADSRInfo const *src, EditorADSR *dst)
+{
+    uint32_t i;
+    dst->stageCount = src->stageCount;
+    if (dst->stageCount > EDITOR_MAX_ADSR_STAGES)
+    {
+        dst->stageCount = EDITOR_MAX_ADSR_STAGES;
+    }
+    for (i = 0; i < dst->stageCount; i++)
+    {
+        dst->stages[i].level = src->stages[i].level;
+        dst->stages[i].time = src->stages[i].time;
+        dst->stages[i].flags = src->stages[i].flags;
+    }
+}
+
+BAEResult BAERmfEditorDocument_GetInstrumentExtInfo(BAERmfEditorDocument const *document,
+                                                    uint32_t instID,
+                                                    BAERmfEditorInstrumentExtInfo *outInfo)
+{
+    BAERmfEditorInstrumentExt *ext;
+    uint32_t i;
+
+    if (!document || !outInfo)
+    {
+        return BAE_PARAM_ERR;
+    }
+    XSetMemory(outInfo, (int32_t)sizeof(*outInfo), 0);
+    outInfo->instID = instID;
+
+    ext = PV_FindInstrumentExt((BAERmfEditorDocument *)document, (XLongResourceID)instID);
+    if (!ext)
+    {
+        /* No ext data stored — return defaults */
+        outInfo->displayName = NULL;
+        outInfo->hasExtendedData = FALSE;
+        outInfo->midiRootKey = 60;
+        outInfo->miscParameter2 = 100;
+        outInfo->volumeADSR.stageCount = 1;
+        outInfo->volumeADSR.stages[0].level = VOLUME_RANGE;
+        outInfo->volumeADSR.stages[0].time = 0;
+        outInfo->volumeADSR.stages[0].flags = ADSR_TERMINATE_LONG;
+        return BAE_NO_ERROR;
+    }
+
+    outInfo->displayName = ext->displayName;
+    outInfo->hasExtendedData = ext->hasExtendedData;
+    outInfo->flags1 = ext->flags1;
+    outInfo->flags2 = ext->flags2;
+    outInfo->panPlacement = ext->panPlacement;
+    outInfo->midiRootKey = ext->midiRootKey;
+    outInfo->miscParameter2 = ext->miscParameter2;
+    outInfo->hasDefaultMod = ext->hasDefaultMod;
+    outInfo->LPF_frequency = ext->LPF_frequency;
+    outInfo->LPF_resonance = ext->LPF_resonance;
+    outInfo->LPF_lowpassAmount = ext->LPF_lowpassAmount;
+    PV_CopyEditorADSRToInfo(&ext->volumeADSR, &outInfo->volumeADSR);
+    outInfo->lfoCount = ext->lfoCount;
+    for (i = 0; i < ext->lfoCount && i < EDITOR_MAX_LFOS; i++)
+    {
+        outInfo->lfos[i].destination = ext->lfos[i].destination;
+        outInfo->lfos[i].period = ext->lfos[i].period;
+        outInfo->lfos[i].waveShape = ext->lfos[i].waveShape;
+        outInfo->lfos[i].DC_feed = ext->lfos[i].DC_feed;
+        outInfo->lfos[i].level = ext->lfos[i].level;
+        PV_CopyEditorADSRToInfo(&ext->lfos[i].adsr, &outInfo->lfos[i].adsr);
+    }
+    outInfo->curveCount = ext->curveCount;
+    for (i = 0; i < ext->curveCount && i < EDITOR_MAX_CURVES; i++)
+    {
+        int32_t j;
+        outInfo->curves[i].tieFrom = ext->curves[i].tieFrom;
+        outInfo->curves[i].tieTo = ext->curves[i].tieTo;
+        outInfo->curves[i].curveCount = ext->curves[i].curveCount;
+        for (j = 0; j < ext->curves[i].curveCount && j < EDITOR_MAX_ADSR_STAGES; j++)
+        {
+            outInfo->curves[i].from_Value[j] = ext->curves[i].from_Value[j];
+            outInfo->curves[i].to_Scalar[j] = ext->curves[i].to_Scalar[j];
+        }
+    }
+    return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorDocument_SetInstrumentExtInfo(BAERmfEditorDocument *document,
+                                                    uint32_t instID,
+                                                    BAERmfEditorInstrumentExtInfo const *info)
+{
+    BAERmfEditorInstrumentExt *ext;
+    uint32_t i;
+
+    if (!document || !info)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    ext = PV_FindInstrumentExt(document, (XLongResourceID)instID);
+    if (!ext)
+    {
+        /* Create a new entry */
+        BAERmfEditorInstrumentExt newExt;
+        BAEResult result;
+        XSetMemory(&newExt, (int32_t)sizeof(newExt), 0);
+        newExt.instID = (XLongResourceID)instID;
+        result = PV_AddInstrumentExt(document, &newExt);
+        if (result != BAE_NO_ERROR)
+        {
+            return result;
+        }
+        ext = PV_FindInstrumentExt(document, (XLongResourceID)instID);
+        if (!ext)
+        {
+            return BAE_GENERAL_ERR;
+        }
+    }
+
+    {
+        BAEResult nameResult;
+        nameResult = PV_SetDocumentString(&ext->displayName, info->displayName);
+        if (nameResult != BAE_NO_ERROR)
+        {
+            return nameResult;
+        }
+    }
+
+    ext->hasExtendedData = info->hasExtendedData;
+    ext->dirty = TRUE;
+    ext->flags1 = info->flags1;
+    ext->flags2 = info->flags2;
+    ext->panPlacement = info->panPlacement;
+    ext->midiRootKey = info->midiRootKey;
+    ext->miscParameter2 = info->miscParameter2;
+    ext->hasDefaultMod = info->hasDefaultMod;
+    ext->LPF_frequency = info->LPF_frequency;
+    ext->LPF_resonance = info->LPF_resonance;
+    ext->LPF_lowpassAmount = info->LPF_lowpassAmount;
+    PV_CopyInfoToEditorADSR(&info->volumeADSR, &ext->volumeADSR);
+    ext->lfoCount = info->lfoCount;
+    if (ext->lfoCount > EDITOR_MAX_LFOS)
+    {
+        ext->lfoCount = EDITOR_MAX_LFOS;
+    }
+    for (i = 0; i < ext->lfoCount; i++)
+    {
+        ext->lfos[i].destination = info->lfos[i].destination;
+        ext->lfos[i].period = info->lfos[i].period;
+        ext->lfos[i].waveShape = info->lfos[i].waveShape;
+        ext->lfos[i].DC_feed = info->lfos[i].DC_feed;
+        ext->lfos[i].level = info->lfos[i].level;
+        PV_CopyInfoToEditorADSR(&info->lfos[i].adsr, &ext->lfos[i].adsr);
+    }
+    ext->curveCount = info->curveCount;
+    if (ext->curveCount > EDITOR_MAX_CURVES)
+    {
+        ext->curveCount = EDITOR_MAX_CURVES;
+    }
+    for (i = 0; i < ext->curveCount; i++)
+    {
+        int32_t j;
+        ext->curves[i].tieFrom = info->curves[i].tieFrom;
+        ext->curves[i].tieTo = info->curves[i].tieTo;
+        ext->curves[i].curveCount = info->curves[i].curveCount;
+        if (ext->curves[i].curveCount > EDITOR_MAX_ADSR_STAGES)
+        {
+            ext->curves[i].curveCount = EDITOR_MAX_ADSR_STAGES;
+        }
+        for (j = 0; j < ext->curves[i].curveCount; j++)
+        {
+            ext->curves[i].from_Value[j] = info->curves[i].from_Value[j];
+            ext->curves[i].to_Scalar[j] = info->curves[i].to_Scalar[j];
+        }
+    }
+
+    /* Discard raw blob since we've been modified */
+    if (ext->originalInstData)
+    {
+        XDisposePtr(ext->originalInstData);
+        ext->originalInstData = NULL;
+        ext->originalInstSize = 0;
+    }
+
+    PV_MarkDocumentDirty(document);
+    return BAE_NO_ERROR;
+}
+
+/* --------------------------------------------------------------- */
+
 BAEResult BAERmfEditorDocument_CopySamplesFrom(BAERmfEditorDocument *dest,
                                                BAERmfEditorDocument const *src)
 {
@@ -6972,6 +7877,7 @@ static BAEResult PV_CopySampleEntry(BAERmfEditorDocument *dest,
     dstSample->rootKey = srcSample->rootKey;
     dstSample->lowKey = srcSample->lowKey;
     dstSample->highKey = srcSample->highKey;
+    dstSample->splitVolume = srcSample->splitVolume;
     dstSample->sourceCompressionType = srcSample->sourceCompressionType;
     dstSample->sourceCompressionSubType = srcSample->sourceCompressionSubType;
     dstSample->targetCompressionType = srcSample->targetCompressionType;
@@ -7399,4 +8305,23 @@ BAEResult BAERmfEditorDocument_SaveAsMidi(BAERmfEditorDocument *document,
     XFileClose(fileRef);
     PV_ByteBufferDispose(&midiData);
     return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorDocument_DebugReportMidiRoundTripDiff(BAERmfEditorDocument *document)
+{
+    ByteBuffer midiData;
+    BAEResult result;
+
+    if (!document)
+    {
+        return BAE_PARAM_ERR;
+    }
+    XSetMemory(&midiData, sizeof(midiData), 0);
+    result = PV_BuildMidiFile(document, &midiData);
+    if (result == BAE_NO_ERROR)
+    {
+        PV_DebugReportMidiRoundTripDiff(document, &midiData);
+    }
+    PV_ByteBufferDispose(&midiData);
+    return result;
 }

@@ -432,6 +432,10 @@ ifeq ($(RMFINFO),1)
 	# libNeoBAE srcs + rmfinfo.c
 	SRC_BIN	:= $(SRC) src/rmfinfo/rmfinfo.c
 else
+ifeq ($(INSTDUMP),1)
+	# libNeoBAE srcs + instdump.c
+	SRC_BIN	:= $(SRC) src/rmfinfo/instdump.c
+else
 ifeq ($(RMF2MID),1)
 	# libNeoBAE srcs + rmf2mid.c
 	SRC_BIN	:= $(SRC) src/rmf2mid/rmf2mid.c
@@ -443,13 +447,14 @@ else
 		ifeq ($(NBSTUDIO),1)
 			SRC_BIN := $(SRC) \
 				src/rmfeditor_wx/editor_main.cpp \
-				src/rmfeditor_wx/editor_instrument_dialog.cpp \
+				src/rmfeditor_wx/editor_instrument_ext_dialog.cpp \
 				src/rmfeditor_wx/editor_pianoroll_panel.cpp
 		else
 			# playbae = libNeoBAE srcs + playbae.c
 			SRC_BIN	:= $(SRC) src/playbae/playbae.c
 		endif
 	endif
+endif
 endif
 endif
 endif

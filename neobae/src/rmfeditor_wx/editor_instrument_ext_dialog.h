@@ -1,0 +1,62 @@
+#pragma once
+
+#include <stdint.h>
+
+#include <string>
+#include <functional>
+#include <vector>
+
+#include <wx/string.h>
+
+extern "C" {
+#include "NeoBAE.h"
+}
+
+class wxWindow;
+
+struct InstrumentExtEditorResult {
+    BAERmfEditorInstrumentExtInfo extInfo;
+    bool extInfoModified;
+    /* Sample edits are communicated via outSampleIndices/outEditedSamples
+     * from the embedded sample tab (same structs as the old dialog). */
+};
+
+/* Show the combined instrument editor dialog with Instrument and Samples tabs,
+ * plus a piano keyboard for preview. Returns true if user clicked OK or Apply
+ * (and changes should be committed). */
+bool ShowInstrumentExtEditorDialog(
+    wxWindow *parent,
+    BAERmfEditorDocument *document,
+    uint32_t primarySampleIndex,
+    BAERmfEditorInstrumentExtInfo const *initialExtInfo,
+    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char)> playCallback,
+    std::function<void()> stopCallback,
+    std::function<bool(uint32_t, wxString const &)> replaceCallback,
+    std::function<bool(uint32_t, wxString const &)> exportCallback,
+    /* Output: sample edits (same as existing dialog) */
+    std::vector<uint32_t> *outSampleIndices,
+    std::vector<struct InstrumentEditorEditedSample> *outEditedSamples);
+
+
+struct InstrumentEditorEditedSample {
+    wxString displayName;
+    wxString sourcePath;
+    unsigned char program;
+    unsigned char rootKey;
+    unsigned char lowKey;
+    unsigned char highKey;
+    int16_t splitVolume;
+    BAESampleInfo sampleInfo;
+    BAERmfEditorCompressionType compressionType;
+    bool hasOriginalData;
+};
+
+bool ShowInstrumentEditorDialog(wxWindow *parent,
+                                BAERmfEditorDocument const *document,
+                                uint32_t primarySampleIndex,
+                                std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char)> playCallback,
+                                std::function<void()> stopCallback,
+                                std::function<bool(uint32_t, wxString const &)> replaceCallback,
+                                std::function<bool(uint32_t, wxString const &)> exportCallback,
+                                std::vector<uint32_t> *outSampleIndices,
+                                std::vector<InstrumentEditorEditedSample> *outEditedSamples);    

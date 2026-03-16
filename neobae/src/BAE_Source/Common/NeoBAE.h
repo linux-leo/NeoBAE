@@ -2905,10 +2905,72 @@ typedef struct BAERmfEditorSampleInfo
     unsigned char rootKey;
     unsigned char lowKey;
     unsigned char highKey;
+    int16_t splitVolume;     /* per-split volume (miscParameter2), 0 = use default (100) */
     BAESampleInfo sampleInfo;
     BAERmfEditorCompressionType compressionType; /* target compression for saving */
     BAE_BOOL hasOriginalData;                    /* TRUE if DONT_CHANGE is available */
 } BAERmfEditorSampleInfo;
+
+/* ---------- Extended instrument data (ADSR, LFO, LPF, curves) ---------- */
+
+#define BAE_EDITOR_MAX_ADSR_STAGES 8
+#define BAE_EDITOR_MAX_LFOS        6
+#define BAE_EDITOR_MAX_CURVES      4
+
+typedef struct BAERmfEditorADSRStageInfo
+{
+    int32_t level;
+    int32_t time;
+    int32_t flags;  /* FOUR_CHAR: 'LINE', 'SUST', 'LAST', 'GOTO', 'GOST', 'RELS', or 0 (OFF) */
+} BAERmfEditorADSRStageInfo;
+
+typedef struct BAERmfEditorADSRInfo
+{
+    uint32_t stageCount;
+    BAERmfEditorADSRStageInfo stages[BAE_EDITOR_MAX_ADSR_STAGES];
+} BAERmfEditorADSRInfo;
+
+typedef struct BAERmfEditorLFOInfo
+{
+    int32_t destination;  /* FOUR_CHAR: 'VOLU','PITC','SPAN','PAN ','LPFR','LPRE','LPAM' */
+    int32_t period;
+    int32_t waveShape;    /* FOUR_CHAR: 'SINE','TRIA','SQUA','SQU2','SAWT','SAW2' */
+    int32_t DC_feed;
+    int32_t level;
+    BAERmfEditorADSRInfo adsr;
+} BAERmfEditorLFOInfo;
+
+typedef struct BAERmfEditorCurveInfo
+{
+    int32_t tieFrom;
+    int32_t tieTo;
+    int16_t curveCount;
+    unsigned char from_Value[BAE_EDITOR_MAX_ADSR_STAGES];
+    int16_t to_Scalar[BAE_EDITOR_MAX_ADSR_STAGES];
+} BAERmfEditorCurveInfo;
+
+typedef struct BAERmfEditorInstrumentExtInfo
+{
+    uint32_t instID;
+    char const *displayName; /* INST resource name shown in instrument list/editor */
+    BAE_BOOL hasExtendedData;
+    unsigned char flags1;  /* ZBF_ bitmask from InstrumentResource flags1 */
+    unsigned char flags2;  /* ZBF_ bitmask from InstrumentResource flags2 */
+    char panPlacement;     /* stereo pan from INST header */
+    int16_t midiRootKey;   /* master root key from INST header */
+    int16_t miscParameter2; /* volume level (100 = default) */
+    BAE_BOOL hasDefaultMod; /* TRUE if INST_DEFAULT_MOD present (disables auto mod-wheel curve) */
+    int32_t LPF_frequency;
+    int32_t LPF_resonance;
+    int32_t LPF_lowpassAmount;
+    BAERmfEditorADSRInfo volumeADSR;
+    uint32_t lfoCount;
+    BAERmfEditorLFOInfo lfos[BAE_EDITOR_MAX_LFOS];
+    uint32_t curveCount;
+    BAERmfEditorCurveInfo curves[BAE_EDITOR_MAX_CURVES];
+} BAERmfEditorInstrumentExtInfo;
+
+/* ----------------------------------------------------------------------- */
 
 BAERmfEditorDocument *BAERmfEditorDocument_New(void);
 BAERmfEditorDocument *BAERmfEditorDocument_LoadFromFile(BAEPathName filePath);
@@ -2997,6 +3059,16 @@ BAEResult BAERmfEditorDocument_GetSampleCodecDescription(BAERmfEditorDocument co
 BAEResult BAERmfEditorDocument_ExportSampleToFile(BAERmfEditorDocument const *document,
                                                   uint32_t sampleIndex,
                                                   BAEPathName filePath);
+/* Extended instrument data API */
+BAEResult BAERmfEditorDocument_GetInstIDForSample(BAERmfEditorDocument const *document,
+                                                  uint32_t sampleIndex,
+                                                  uint32_t *outInstID);
+BAEResult BAERmfEditorDocument_GetInstrumentExtInfo(BAERmfEditorDocument const *document,
+                                                    uint32_t instID,
+                                                    BAERmfEditorInstrumentExtInfo *outInfo);
+BAEResult BAERmfEditorDocument_SetInstrumentExtInfo(BAERmfEditorDocument *document,
+                                                    uint32_t instID,
+                                                    BAERmfEditorInstrumentExtInfo const *info);
 BAEResult BAERmfEditorDocument_CopyTempoMapFrom(BAERmfEditorDocument *dest,
                                                 BAERmfEditorDocument const *src);
 BAEResult BAERmfEditorDocument_GetTempoEventCount(BAERmfEditorDocument const *document,
@@ -3060,6 +3132,7 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
                                          BAEPathName filePath);
 BAEResult BAERmfEditorDocument_SaveAsMidi(BAERmfEditorDocument *document,
                                           BAEPathName filePath);
+BAEResult BAERmfEditorDocument_DebugReportMidiRoundTripDiff(BAERmfEditorDocument *document);
 BAEResult BAERmfEditorDocument_Validate(BAERmfEditorDocument *document);
 BAE_BOOL BAERmfEditorDocument_RequiresZmf(BAERmfEditorDocument const *document);
 

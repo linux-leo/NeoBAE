@@ -16,25 +16,40 @@
 - ~~Allow import of supported compressed samples (mp3, ogg, flac, vorbis, opus)~~
 - ~~MIDI event timing is not preserved properly~~
 - ~~MIDI data is incorrectly stored and exported~~
-- Instrument configuration
-  - ADSR
-  - LFO
-  - envelope filters
-  - interpolation
-- Replace tempfile RMF preview playback with in-memory ZMF playback
+- ~~Instrument configuration (ADSR, LFO, Envelope filters, Interpolation, etc)~~
+- ~~Sample split volumes were not respected in the output file~~
+- ~~Preview does not respect sample split volume~~
+- ~~Preview missing instrument issue~~
+- ~~Add 'duration' to note edit dialog~~
+- ~~Make preview use export plath for unification~~
+- ~~Editor export should export the compressed sample, in its original format (not just .wav)~~
+- ~~Instrument dialog piano plays notes outside of the splits when it shouldnt.~~
+- ~~Dragging over piano can cause noteoff to not fire~~
+- ~~Sample names are not correct, they use instrument names instead~~
+- ~~The Instrument dialog piano adjusts the range based on rootkey but does not update the key positions, making them incorrect~~
+- ~~Instrument name is lost when clicking OK on Instrument Editor Dialog~~
+- Add a delete sample button to the sample editor with confirmation
+- ~~Add a "New Sample" button somewhere in the instrument dialog, let it create a empty sample like the Add Sample context menu~~
+- Add 'duration' to event edit dialogs
+- ~~Remove "Add Sample" from context menu. Replace "Delete Sample" with "Delete Instrument"~~
+- "Add Instrument" should default to first unused program
+- There are some instances where Bank 2 still shows as Bank 256 (eg note edit dialog)
+- ~~Replace tempfile RMF preview playback with in-memory ZMF playback~~
+- Make RMF refuse to play if it has ZMF codecs
 - Piano roll should center vertical on MIDI content not just scroll to bottom
-- Metadata Editor
+- Add preview playback volume slider (0-100, default 100), apply it to samples too, but only for previews
+- Add ini save system to store preview playback volume on exit, and restore it on load
+- Metadata editor, and loss of metadata
 
 # Future
 - SESSIONS! Savable and loadable workspace sessions.
-  - Session data should embed all resources (samples, midi, settings)
+  - Session data should embed all resources (instruments, samples, midi, settings)
   - Should not rely on original files
   - Should be compressed before saving and decompressed when loading
      - Use zlib since we already depend on it via dependancy chain
   - Possible file extension: `.nbs`
 - Resizable tracks
 - Advanced note editor (channel, filters, etc)
-- Add 'duration' to note/event edit dialogs
 - Allow configuration of SysEx and 'non-standard' CC commands
 - Start from nothing (currently the editor requires you to load a file)
 - Enhanced Exporting
