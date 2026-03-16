@@ -55,11 +55,12 @@
                 <data android:pathPattern=".*\\.midi" />
                 <data android:pathPattern=".*\\.kar" />
                 <data android:pathPattern=".*\\.rmf" />
+                <data android:pathPattern=".*\\.zmf" />
                 <data android:pathPattern=".*\\.xmf" />
                 <data android:pathPattern=".*\\.mxmf" />
                 <data android:pathPattern=".*\\.rmi" />
             </intent-filter>
-            
+
             <!-- MIDI file extensions (uppercase) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -72,11 +73,12 @@
                 <data android:pathPattern=".*\\.MIDI" />
                 <data android:pathPattern=".*\\.KAR" />
                 <data android:pathPattern=".*\\.RMF" />
+                <data android:pathPattern=".*\\.ZMF" />
                 <data android:pathPattern=".*\\.XMF" />
                 <data android:pathPattern=".*\\.MXMF" />
                 <data android:pathPattern=".*\\.RMI" />
             </intent-filter>
-            
+
             <!-- MIDI file extensions (mixed case) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -89,6 +91,7 @@
                 <data android:pathPattern=".*\\.Midi" />
                 <data android:pathPattern=".*\\.Kar" />
                 <data android:pathPattern=".*\\.Rmf" />
+                <data android:pathPattern=".*\\.Zmf" />
                 <data android:pathPattern=".*\\.Xmf" />
                 <data android:pathPattern=".*\\.Mxmf" />
                 <data android:pathPattern=".*\\.Rmi" />

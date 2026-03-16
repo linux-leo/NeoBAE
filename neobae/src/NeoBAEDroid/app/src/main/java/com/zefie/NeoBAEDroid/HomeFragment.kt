@@ -87,7 +87,7 @@ class HomeFragment : Fragment() {
         
         // Valid music file extensions
         private val AUDIO_EXTENSIONS = listOf("wav", "ogg", "flac", "au", "mp2", "mp3", "aif", "aiff")
-        private val SONG_EXTENSIONS = listOf("mid", "midi", "kar", "rmf", "xmf", "mxmf", "rmi")
+        private val SONG_EXTENSIONS = listOf("mid", "midi", "kar", "rmf", "zmf", "xmf", "mxmf", "rmi")
         
         // Valid sound bank file extensions
         val BANK_EXTENSIONS = setOf("sf2", "hsb", "sf3", "sfo", "dls")
@@ -1180,7 +1180,7 @@ class HomeFragment : Fragment() {
         // Guard against intermittent bank unloads across track changes on Android.
         // Only do this for MIDI-ish song types (banks don't affect decoded audio files).
         val ext = targetFile.extension.lowercase()
-        val isSongType = ext in setOf("mid", "midi", "kar", "rmf", "xmf", "mxmf", "rmi")
+        val isSongType = ext in setOf("mid", "midi", "kar", "rmf", "zmf", "xmf", "mxmf", "rmi")
         if (!isSongType) return
 
         if (Mixer.getMixer() == null) return

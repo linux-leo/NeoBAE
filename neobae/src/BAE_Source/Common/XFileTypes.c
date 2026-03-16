@@ -9,7 +9,8 @@
 **
 **  Supports:
 **  - MIDI (.mid) - "MThd" header
-**  - RMF (.rmf) - "IREZ" header  
+**  - RMF (.rmf) - "IREZ" header
+**  - ZMF (.zmf) - "ZREZ" header (RMF with modern codecs)
 **  - RMI (.rmi) - RIFF container with embedded MIDI
 **  - XMF/MXMF (.xmf/.mxmf) - "XMF_" header
 **  - WAV (.wav) - RIFF WAVE container
@@ -34,6 +35,7 @@
 // Magic byte signatures for different file types
 #define BAE_FOURCC_MIDI     0x4D546864  // "MThd" - Standard MIDI File
 #define BAE_FOURCC_RMF      0x4952455A  // "IREZ" - Rich Music Format
+#define BAE_FOURCC_ZMF      0x5A52455A  // "ZREZ" - ZMF (RMF with modern codecs)
 #define BAE_FOURCC_XMF      0x584D465F  // "XMF_" - eXtensible Music Format
 #define BAE_FOURCC_RIFF     0x52494646  // "RIFF" - Resource Interchange File Format
 #define BAE_FOURCC_FORM     0x464F524D  // "FORM" - IFF FORM container (AIFF)
@@ -313,7 +315,7 @@ BAEFileType X_DetermineFileTypeByPath(const char *filePath)
     // Check for MIDI/music file extensions
     else if (strcmp(extLower, ".mid") == 0 || strcmp(extLower, ".midi") == 0)
         return BAE_MIDI_TYPE;
-    else if (strcmp(extLower, ".rmf") == 0)
+    else if (strcmp(extLower, ".rmf") == 0 || strcmp(extLower, ".zmf") == 0)
         return BAE_RMF;
     else if (strcmp(extLower, ".rmi") == 0)
         return BAE_RMI;        
@@ -466,6 +468,7 @@ BAEFileType X_DetermineFileTypeByData(const unsigned char *data, int32_t length)
             return BAE_MIDI_TYPE;
             
         case BAE_FOURCC_RMF:
+        case BAE_FOURCC_ZMF:
             return BAE_RMF;
 #if USE_XMF_SUPPORT == TRUE            
         case BAE_FOURCC_XMF:

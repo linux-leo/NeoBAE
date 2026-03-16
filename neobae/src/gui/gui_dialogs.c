@@ -208,7 +208,7 @@ static const char AUDIO_EXT_FILTER[] =
     {
         char pattern[512];
         /* include the always-available patterns plus the compiled-in ones */
-        snprintf(pattern, sizeof(pattern), "*.mid;*.midi;*.kar;*.rmi;*.rmf;%s", AUDIO_EXT_FILTER);
+        snprintf(pattern, sizeof(pattern), "*.mid;*.midi;*.kar;*.rmi;*.rmf;*.zmf;%s", AUDIO_EXT_FILTER);
         /* Remove possible duplicate separators if AUDIO_EXT_FILTER is empty */
         APPEND_STR(pattern);
     }
@@ -216,7 +216,7 @@ static const char AUDIO_EXT_FILTER[] =
 #if USE_XMF_SUPPORT == TRUE && _USING_FLUIDSYNTH == TRUE
     APPEND_STR("XMF Files"); APPEND_STR("*.xmf;*.mxmf");
 #endif
-    APPEND_STR("RMF Files"); APPEND_STR("*.rmf");    
+    APPEND_STR("RMF Files"); APPEND_STR("*.rmf;*.zmf");    
     APPEND_STR("Audio Files");
     {
         char audioPattern[512];
@@ -244,7 +244,7 @@ static const char AUDIO_EXT_FILTER[] =
     return NULL;
 #elif defined(__APPLE__)
     static const char AUDIO_TYPE_LIST[] =
-        "\"mid\", \"midi\", \"kar\", \"rmi\", \"rmf\""
+        "\"mid\", \"midi\", \"kar\", \"rmi\", \"rmf\", \"zmf\""
 #if USE_FLAC_DECODER == TRUE
         ", \"flac\""
 #endif

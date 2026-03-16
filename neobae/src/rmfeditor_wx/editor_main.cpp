@@ -1623,7 +1623,7 @@ private:
                             "Open RMF or MIDI",
                             wxEmptyString,
                             wxEmptyString,
-                            "RMF and MIDI files (*.rmf;*.mid;*.midi)|*.rmf;*.mid;*.midi|RMF files (*.rmf)|*.rmf|MIDI files (*.mid;*.midi)|*.mid;*.midi|All files (*.*)|*.*",
+                            "RMF and MIDI files (*.rmf;*.zmf;*.mid;*.midi)|*.rmf;*.zmf;*.mid;*.midi|RMF files (*.rmf;*.zmf)|*.rmf;*.zmf|MIDI files (*.mid;*.midi)|*.mid;*.midi|All files (*.*)|*.*",
                             wxFD_OPEN | wxFD_FILE_MUST_EXIST);
         if (dialog.ShowModal() == wxID_OK) {
             LoadDocument(dialog.GetPath());
@@ -1635,7 +1635,7 @@ private:
                             "Save As RMF",
                             wxEmptyString,
                             wxEmptyString,
-                            "RMF files (*.rmf)|*.rmf",
+                            "RMF files (*.rmf;*.zmf)|*.rmf;*.zmf",
                             wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
         BAERmfEditorDocument *saveDoc;
         bool saveCurrentTrack;

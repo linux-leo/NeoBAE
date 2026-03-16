@@ -1369,7 +1369,7 @@ XBOOL XFileIsValidResource(XFILE file)
         XFileSetPosition(file, 0L);     // at start
         if (XFileRead(file, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
         {
-            if (XGetLong(&map.mapID) == XFILERESOURCE_ID)
+            if (XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
             {
                 if (XGetLong(&map.version) == 0)
                 {
@@ -1437,7 +1437,7 @@ XFILE XFileOpenResourceFromMemory(XPTR pResource, uint32_t resourceLength, XBOOL
                 XFileSetPosition(pReference, 0L);        // at start
                 if (XFileRead(pReference, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
                 {
-                    if (XGetLong(&map.mapID) != XFILERESOURCE_ID)
+                    if (!XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
                     {
                         err = 2;
                     }
@@ -1541,7 +1541,7 @@ XFILE XFileOpenResource(XFILENAME *file, XBOOL readOnly)
                 XFileSetPosition(pReference, 0L);        // at start
                 if (XFileRead(pReference, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
                 {
-                    if (XGetLong(&map.mapID) != XFILERESOURCE_ID)
+                    if (!XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
                     {
                         err = -1;
                     }
@@ -1893,7 +1893,7 @@ static XFILE_CACHED_ITEM * PV_XGetNamedCacheEntry(XFILE fileRef, XResourceType r
             XFileSetPosition(fileRef, 0L);      // at start
             if (XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
             {
-                if (XGetLong(&map.mapID) == XFILERESOURCE_ID)
+                if (XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
                 {
                     next = sizeof(XFILERESOURCEMAP);
                     total = XGetLong(&map.totalResources);
@@ -2035,7 +2035,7 @@ char *  XGetResourceNameOnly(XFILE fileRef, XResourceType resourceType, XLongRes
             XFileSetPosition(fileRef, 0L);      // at start
             if (XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
             {
-                if (XGetLong(&map.mapID) == XFILERESOURCE_ID)
+                if (XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
                 {
                     next = sizeof(XFILERESOURCEMAP);
                     total = XGetLong(&map.totalResources);
@@ -2193,7 +2193,7 @@ XERR XReadPartialFileResource(XFILE fileRef, XResourceType resourceType, XLongRe
             XFileSetPosition(fileRef, 0L);      // at start
             if (XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
             {
-                if (XGetLong(&map.mapID) == XFILERESOURCE_ID)
+                if (XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
                 {
                     next = sizeof(XFILERESOURCEMAP);
                     total = XGetLong(&map.totalResources);
@@ -2388,7 +2388,7 @@ XPTR XGetFileResource(XFILE fileRef, XResourceType resourceType, XLongResourceID
             XFileSetPosition(fileRef, 0L);      // at start
             if (XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
             {
-                if (XGetLong(&map.mapID) == XFILERESOURCE_ID)
+                if (XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
                 {
                     next = sizeof(XFILERESOURCEMAP);
                     total = XGetLong(&map.totalResources);
@@ -2651,7 +2651,7 @@ XFILERESOURCECACHE * XCreateAccessCache(XFILE fileRef)
     {
         return NULL;
     }
-    if (XGetLong(&map.mapID) != XFILERESOURCE_ID)
+    if (!XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
     {
         return NULL;
     }
@@ -2803,7 +2803,7 @@ deleteanyways:
             XFileSetPosition(fileRef, 0L);      // at start
             if (XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
             {
-                if (XGetLong(&map.mapID) == XFILERESOURCE_ID)
+                if (XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
                 {
                     next = sizeof(XFILERESOURCEMAP);
                     total = XGetLong(&map.totalResources);
@@ -2940,7 +2940,7 @@ int32_t XCountFileResourcesOfType(XFILE fileRef, XResourceType theType)
                 XFileSetPosition(fileRef, 0L);      // at start
                 if (XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
                 {
-                    if (XGetLong(&map.mapID) == XFILERESOURCE_ID)
+                    if (XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
                     {
                         next = sizeof(XFILERESOURCEMAP);
                         total = XGetLong(&map.totalResources);
@@ -3112,7 +3112,7 @@ XERR XGetUniqueFileResourceID(XFILE fileRef, XResourceType resourceType, XLongRe
             err = XFileSetPosition(fileRef, 0L);        // at start
             if (XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
             {
-                if (XGetLong(&map.mapID) == XFILERESOURCE_ID)
+                if (XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
                 {
                     next = sizeof(XFILERESOURCEMAP);
                     total = XGetLong(&map.totalResources);
@@ -3368,7 +3368,7 @@ XERR XAddFileResource(XFILE fileRef, XResourceType resourceType,
             XFileSetPosition(fileRef, 0L);      // at start
             if (XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
             {
-                if (XGetLong(&map.mapID) == XFILERESOURCE_ID)
+                if (XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
                 {
                     XFileSetPosition(fileRef, XFileGetLength(fileRef));                     // at end
     
@@ -3541,7 +3541,7 @@ XPTR XGetNamedResource(XResourceType resourceType, void *cName, int32_t *pReturn
                     XFileSetPosition(fileRef, 0L);      // at start
                     if (XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
                     {
-                        if (XGetLong(&map.mapID) == XFILERESOURCE_ID)
+                        if (XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
                         {
                             next = sizeof(XFILERESOURCEMAP);
                             total = XGetLong(&map.totalResources);

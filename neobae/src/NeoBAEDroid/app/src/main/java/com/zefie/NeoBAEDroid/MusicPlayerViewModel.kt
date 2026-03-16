@@ -655,7 +655,7 @@ class MusicPlayerViewModel : ViewModel() {
         }
         
         val validExtensions = appContext?.let { HomeFragment.getMusicExtensions(it) }
-            ?: setOf("mid", "midi", "kar", "rmf", "rmi")
+            ?: setOf("mid", "midi", "kar", "rmf", "zmf", "rmi")
         val result = mutableListOf<PlaylistItem>()
         
         // Recursively scan directory for music files only (no folders)

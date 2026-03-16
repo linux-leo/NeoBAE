@@ -409,7 +409,7 @@ static char playFileString[512];
 static void init_playFileString(void)
 {
    /* Build the human-friendly file type list at runtime (can't call strcat at file-scope). */
-   strcpy(playFileString, "Play a file (MIDI, RMF, WAV, AIFF");
+   strcpy(playFileString, "Play a file (MIDI, RMF/ZMF, WAV, AIFF");
 #if USE_XMF_SUPPORT == TRUE && _USING_FLUIDSYNTH == TRUE
    strcat(playFileString, ", XMF/MXMF");
 #endif

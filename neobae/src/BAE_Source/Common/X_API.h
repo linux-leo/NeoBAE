@@ -706,9 +706,14 @@ struct XBankToken
 };
 typedef struct XBankToken XBankToken;
 
-#define XFILERESOURCE_ID    FOUR_CHAR('I','R','E','Z')  // IREZ
-#define XFILECACHE_ID       FOUR_CHAR('C','A','C','H')  // CACH
-#define XFILETRASH_ID       FOUR_CHAR('T','R','S','H')  // TRSH
+#define XFILERESOURCE_ID        FOUR_CHAR('I','R','E','Z')  // IREZ (classic RMF)
+#define XFILERESOURCE_ZMF_ID    FOUR_CHAR('Z','R','E','Z')  // ZREZ (ZMF: RMF with modern codecs)
+#define XFILECACHE_ID           FOUR_CHAR('C','A','C','H')  // CACH
+#define XFILETRASH_ID           FOUR_CHAR('T','R','S','H')  // TRSH
+
+// Check if a mapID is a valid resource file (either IREZ or ZREZ)
+#define XFILERESOURCE_ID_IS_VALID(id) \
+    ((id) == XFILERESOURCE_ID || (id) == XFILERESOURCE_ZMF_ID)
 
 struct XFILERESOURCEMAP
 {

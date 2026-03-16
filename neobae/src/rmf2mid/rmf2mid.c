@@ -206,10 +206,10 @@ int main(int argc, char *argv[])
     }
     fclose(test_file);
     
-    if (!(header[0] == 0x49 && header[1] == 0x52 && 
-          header[2] == 0x45 && header[3] == 0x5A))
+    if (!(header[1] == 0x52 && header[2] == 0x45 && header[3] == 0x5A &&
+          (header[0] == 0x49 || header[0] == 0x5A)))
     {
-        fprintf(stderr, "Error: '%s' is not a valid RMF file (missing IREZ header)\n", input_rmf);
+        fprintf(stderr, "Error: '%s' is not a valid RMF/ZMF file (missing IREZ/ZREZ header)\n", input_rmf);
         BAE_Cleanup();
         return 1;
     }

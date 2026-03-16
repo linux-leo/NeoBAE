@@ -387,7 +387,7 @@ static BAEResult PV_CaptureOriginalResourcesFromFile(BAERmfEditorDocument *docum
 
     if (XFileSetPosition(fileRef, 0L) != 0 ||
         XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) != 0 ||
-        XGetLong(&map.mapID) != XFILERESOURCE_ID)
+        !XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
     {
         return BAE_BAD_FILE;
     }
@@ -2001,7 +2001,7 @@ static BAEResult PV_GetAvailableResourceID(XFILE fileRef,
     nextID = (startingID > 0) ? startingID : 1;
     if (XFileSetPosition(fileRef, 0L) != 0 ||
         XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) != 0 ||
-        XGetLong(&map.mapID) != XFILERESOURCE_ID)
+        !XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
     {
         return BAE_FILE_IO_ERROR;
     }
@@ -2048,7 +2048,7 @@ static BAEResult PV_GetAvailableResourceID(XFILE fileRef,
     return BAE_NO_ERROR;
 }
 
-static BAEResult PV_EnsureResourceFileReady(XFILE fileRef)
+static BAEResult PV_EnsureResourceFileReady(XFILE fileRef, int32_t resourceID)
 {
     XFILERESOURCEMAP map;
 
@@ -2061,7 +2061,7 @@ static BAEResult PV_EnsureResourceFileReady(XFILE fileRef)
         return BAE_FILE_IO_ERROR;
     }
     XFileFreeResourceCache(fileRef);
-    XPutLong(&map.mapID, XFILERESOURCE_ID);
+    XPutLong(&map.mapID, resourceID);
     XPutLong(&map.version, 1);
     XPutLong(&map.totalResources, 0);
     if (XFileSetPosition(fileRef, 0L) != 0)
@@ -2075,7 +2075,7 @@ static BAEResult PV_EnsureResourceFileReady(XFILE fileRef)
     return BAE_NO_ERROR;
 }
 
-static BAEResult PV_PrepareResourceFilePath(XFILENAME *name)
+static BAEResult PV_PrepareResourceFilePath(XFILENAME *name, int32_t resourceID)
 {
     XFILE fileRef;
     XFILERESOURCEMAP map;
@@ -2090,7 +2090,7 @@ static BAEResult PV_PrepareResourceFilePath(XFILENAME *name)
     if (fileRef)
     {
         if (XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0 &&
-            XGetLong(&map.mapID) == XFILERESOURCE_ID)
+            XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
         {
             isValid = TRUE;
         }
@@ -2110,7 +2110,7 @@ static BAEResult PV_PrepareResourceFilePath(XFILENAME *name)
         XFileClose(fileRef);
         return BAE_FILE_IO_ERROR;
     }
-    XPutLong(&map.mapID, XFILERESOURCE_ID);
+    XPutLong(&map.mapID, resourceID);
     XPutLong(&map.version, 1);
     XPutLong(&map.totalResources, 0);
     if (XFileSetPosition(fileRef, 0L) != 0 ||
@@ -3119,9 +3119,11 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 XPutShort(instBytes + kInstOffset_midiRootKey, 60);
                 instBytes[kInstOffset_panPlacement] = 0;
                 instBytes[kInstOffset_flags1] = ZBF_useSampleRate; /* engine must scale pitch for actual sample rate */
-                instBytes[kInstOffset_flags2] = 0;
+                /* useSoundModifierAsRootKey: encode rootKey in miscParameter1 so playback
+                 * doesn't rely on the SND's baseMidiPitch (unreliable for FLAC/VORBIS). */
+                instBytes[kInstOffset_flags2] = ZBF_useSoundModifierAsRootKey;
                 instBytes[kInstOffset_smodResourceID] = 0;
-                XPutShort(instBytes + kInstOffset_miscParameter1, 60);
+                XPutShort(instBytes + kInstOffset_miscParameter1, (uint16_t)leaderSample->rootKey);
                 XPutShort(instBytes + kInstOffset_miscParameter2, 100);
                 XPutShort(instBytes + kInstOffset_keySplitCount, (uint16_t)collected);
 
@@ -3169,8 +3171,11 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             XPutShort(&instrument.sndResourceID, (uint16_t)sampleSndIDs[leaderIndex]);
             XPutShort(&instrument.midiRootKey, 60);
             instrument.flags1 = ZBF_useSampleRate; /* engine must scale pitch for actual sample rate */
+            /* useSoundModifierAsRootKey: encode rootKey in miscParameter1 so playback
+             * doesn't rely on the SND's baseMidiPitch (unreliable for FLAC/VORBIS). */
+            instrument.flags2 = ZBF_useSoundModifierAsRootKey;
             XPutShort(&instrument.miscParameter1, (uint16_t)leaderSample->rootKey);
-            XPutShort(&instrument.miscParameter2, 256);
+            XPutShort(&instrument.miscParameter2, 100);
             XPutShort(&instrument.keySplitCount, 0);
             XPutShort(&instrument.tremoloCount, 0);
             XPutShort(&instrument.tremoloEnd, 0x8000);
@@ -4961,11 +4966,25 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
     ByteBuffer midiData;
     char midiName[256];
     BAEResult result;
+    int32_t resourceID;
+    const char *ext;
 
     if (!document || !filePath)
     {
         return BAE_PARAM_ERR;
     }
+
+    /* Choose ZREZ header for .zmf files, IREZ for everything else */
+    ext = strrchr(filePath, '.');
+    if (ext && (strcmp(ext, ".zmf") == 0 || strcmp(ext, ".ZMF") == 0))
+    {
+        resourceID = XFILERESOURCE_ZMF_ID;
+    }
+    else
+    {
+        resourceID = XFILERESOURCE_ID;
+    }
+
     result = BAERmfEditorDocument_Validate(document);
     BAE_STDERR("[RMF Save] Validate result=%d, trackCount=%u\n", (int)result, document->trackCount);
     if (result != BAE_NO_ERROR)
@@ -4981,7 +5000,7 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
         return result;
     }
     XConvertPathToXFILENAME(filePath, &name);
-    result = PV_PrepareResourceFilePath(&name);
+    result = PV_PrepareResourceFilePath(&name, resourceID);
     BAE_STDERR("[RMF Save] PrepareResourceFilePath result=%d\n", (int)result);
     if (result != BAE_NO_ERROR)
     {
@@ -4995,7 +5014,7 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
         PV_ByteBufferDispose(&midiData);
         return BAE_FILE_IO_ERROR;
     }
-    result = PV_EnsureResourceFileReady(fileRef);
+    result = PV_EnsureResourceFileReady(fileRef, resourceID);
     BAE_STDERR("[RMF Save] EnsureResourceFileReady result=%d\n", (int)result);
     if (result != BAE_NO_ERROR)
     {

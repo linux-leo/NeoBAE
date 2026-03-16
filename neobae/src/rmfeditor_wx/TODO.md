@@ -2,13 +2,17 @@
 - ~~sample preview is too 'hot' or 'squelchy' when in memory mode (not using temp files)~~
 - ~~MP3 encoded samples still have initial silence~~
 - ~~MP3 encoded samples still display initial silence in waveform~~
-- rootKey is not stored when using FLAC or VORBIS samples
+- ~~rootKey is not stored when using FLAC or VORBIS samples~~
 - ~~Detect and show current sample compression (read-only label)~~
 - ~~FLAC and VORBIS do not decode correctly in RMF (preview or final)~~
 - ~~Exporting samples should export in their original (un)compressed format~~
 - ~~We are embedding samples twice~~
+- ~~Create a new format (zmf) for RMFs with OGG/FLAC/OPUS samples (IREZ -> ZREZ)~~
+- ~~Editor should be able to save in both RMF and ZMF formats~~
+- Force editor to ZMF format if using FLAC/Vorbis samples
+- Allow import of supported compressed samples (mp3, ogg, flac, vorbis)
 - Implement OPUS samples
-- Create a new format (zmf) for RMFs with OGG/FLAC/OPUS samples (IREZ -> ZREZ)
+
 - Replace tempfile RMF preview playback with in-memory playback
 - Piano roll should center vertical on MIDI content not just scroll to bottom
 - Metadata Editor

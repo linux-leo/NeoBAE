@@ -558,24 +558,26 @@ static int inspect_rmf_file(const char *filename, RmfInspectionReport *report,
     return 1;
 }
 
-// Check if file has RMF magic header (IREZ)
+// Check if file has RMF/ZMF magic header (IREZ or ZREZ)
 int is_rmf_file(const char *filename)
 {
     FILE *file = fopen(filename, "rb");
     if (!file) {
         return 0;
     }
-    
+
     unsigned char header[4];
     if (fread(header, 1, 4, file) != 4) {
         fclose(file);
         return 0;
     }
     fclose(file);
-    
-    // Check for RMF magic bytes "IREZ" (0x49524552A in big-endian)
-    return (header[0] == 0x49 && header[1] == 0x52 && 
-            header[2] == 0x45 && header[3] == 0x5A);
+
+    // Check for RMF magic bytes "IREZ" or ZMF magic bytes "ZREZ"
+    if (header[1] == 0x52 && header[2] == 0x45 && header[3] == 0x5A) {
+        return (header[0] == 0x49 || header[0] == 0x5A);  // 'I' or 'Z'
+    }
+    return 0;
 }
 
 // Escape a string for JSON output
