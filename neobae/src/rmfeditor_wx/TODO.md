@@ -60,3 +60,4 @@
   - It should also allow exporting of each selected channel to a seperate RMF files (eg `user_selected_name[chX].rmf`)
 - Instrument "stealing"
   - Import an instrument from the loaded HSB bank into NBStudio's instrument list
+- MIDI In (record to track)

@@ -3,7 +3,9 @@
     "libflac",
     "libogg",
     "libvorbis",
-    "wxwidgets",
-    "mp3lame"
+	"opus",
+	"opusfile",
+    "mp3lame",
+    "wxwidgets"
   ]
 }

@@ -891,8 +891,11 @@ int32_t BAE_FileCreate(void *fileName)
 {
 #if USE_WIN32_FILE_IO == 0
     int     file;
-
+#ifdef _WIN32
+    file = _open((char*)fileName, _O_RDWR | _O_CREAT | _O_TRUNC, _S_IREAD | _S_IWRITE);
+#else
     file = _creat((char *)fileName, _S_IREAD | _S_IWRITE | _O_RDWR | _O_TRUNC);
+#endif
     if (file != -1)
     {
         _close(file);
