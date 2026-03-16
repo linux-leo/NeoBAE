@@ -369,6 +369,15 @@ const char *BAE_GetFeatureString()
         first = FALSE;
     }
 
+#if USE_ZMF_SUPPORT == TRUE
+    const char *zmf = "ZMF File Support";
+    if (zmf && zmf[0])
+    {
+        snprintf(featBuf + strlen(featBuf), sizeof(featBuf) - strlen(featBuf), "%s%s", first ? "" : ", ", zmf);
+        first = FALSE;
+    }
+#endif
+
     // Built-in patches
 #if _BUILT_IN_PATCHES == TRUE
     const char *patches = "Built-in Patches";
@@ -510,6 +519,26 @@ const char *BAE_GetFeatureString()
     if (vorbis && vorbis[0])
     {
         snprintf(featBuf + strlen(featBuf), sizeof(featBuf) - strlen(featBuf), "%s%s", first ? "" : ", ", vorbis);
+        first = FALSE;
+    }
+
+    // If nothing was added, return an empty string
+    if (featBuf[0] == '\0')
+        featBuf[0] = '\0';
+
+    // Opus support
+#if USE_OPUS_DECODER == TRUE && USE_OPUS_ENCODER == TRUE
+    const char *opus = "Full Opus Support";
+#elif USE_OPUS_DECODER == TRUE && USE_OPUS_ENCODER != TRUE
+    const char *opus = "Opus Decoder Support";
+#elif USE_OPUS_DECODER != TRUE && USE_OPUS_ENCODER == TRUE
+    const char *opus = "Opus Encoder Support";
+#else
+    const char *opus = "No Opus Support";
+#endif
+    if (opus && opus[0])
+    {
+        snprintf(featBuf + strlen(featBuf), sizeof(featBuf) - strlen(featBuf), "%s%s", first ? "" : ", ", opus);
         first = FALSE;
     }
 
@@ -1098,7 +1127,7 @@ AudioFileType BAE_TranslateBAEFileType(BAEFileType fileType)
         haeFileType = FILE_VORBIS_TYPE;
         break;
 #endif
-#if USE_OPUS_DECODER == TRUE
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
     case BAE_OPUS_TYPE:
         haeFileType = FILE_OPUS_TYPE;
         break;
@@ -3682,6 +3711,53 @@ BAEResult BAEMixer_StartOutputToFile(BAEMixer theMixer,
     break;
 #endif
 
+#if USE_OPUS_ENCODER == TRUE
+    case BAE_OPUS_TYPE:
+    {
+        if (theModifiers & BAE_USE_16)
+        {
+            mWritingToFileReference = (void *)XFileOpenForWrite(&theFile, TRUE);
+            if (mWritingToFileReference)
+            {
+                XDWORD channels = (theModifiers & BAE_USE_STEREO) ? 2 : 1;
+
+                extern uint32_t BAE_TranslateOpusTypeToBitrate(BAECompressionType ct);
+                extern void *XInitOpusEncoder(UINT32 sample_rate, UINT32 channels, UINT32 bitrate);
+                extern long XWriteOpusHeader(void *encoder_handle, XFILE output_file);
+
+                uint32_t bitrate = BAE_TranslateOpusTypeToBitrate(compressionType);
+                mWritingEncoder = XInitOpusEncoder(GM_ConvertFromOutputRateToRate((Rate)theRate), channels, bitrate);
+                if (mWritingEncoder)
+                {
+                    (void)XWriteOpusHeader(mWritingEncoder, (XFILE)mWritingToFileReference);
+
+                    GM_StopHardwareSoundManager(NULL);
+                    mWritingToFile = TRUE;
+                }
+                else
+                {
+                    BAE_STDERR("audio: XInitOpusEncoder FAILED\n");
+                    theErr = BAD_FILE;
+                    if (mWritingToFileReference)
+                    {
+                        XFileClose((XFILE)mWritingToFileReference);
+                        mWritingToFileReference = NULL;
+                    }
+                }
+            }
+            else
+            {
+                theErr = BAD_FILE;
+            }
+        }
+        else
+        {
+            theErr = PARAM_ERR;
+        }
+    }
+    break;
+#endif
+
 #if USE_FLAC_ENCODER == TRUE
     case BAE_FLAC_TYPE:
 #endif    
@@ -3829,6 +3905,19 @@ void BAEMixer_StopOutputToFile(void)
             }
             break;
 #else
+            break;
+#endif
+#if USE_OPUS_ENCODER == TRUE
+        case BAE_OPUS_TYPE:
+            BAE_PRINTF("audio: BAEMixer_StopOutputToFile freeing opus encoder=%p\n", mWritingEncoder);
+            if (mWritingEncoder)
+            {
+                extern long XFlushOpusEncoder(void *encoder_handle, XFILE output_file);
+                extern void XCloseOpusEncoder(void *encoder_handle);
+                (void)XFlushOpusEncoder(mWritingEncoder, (XFILE)mWritingToFileReference);
+                XCloseOpusEncoder(mWritingEncoder);
+                mWritingEncoder = NULL;
+            }
             break;
 #endif
         case BAE_WAVE_TYPE:
@@ -4116,6 +4205,25 @@ BAEResult BAEMixer_ServiceAudioOutputToFile(BAEMixer theMixer)
                     }
 
                     if (written < 0)
+                    {
+                        theErr = BAD_FILE;
+                    }
+                }
+                break;
+#endif
+
+#if USE_OPUS_ENCODER == TRUE
+                case BAE_OPUS_TYPE:
+                {
+                    uint32_t framesToProcess = (uint32_t)(mWritingDataBlockSize / sampleSize / channels);
+                    extern long XEncodeOpusData(void *encoder_handle, const INT16 *pcm_interleaved, long frames, XFILE output_file);
+
+                    BAE_BuildMixerSlice(NULL, mWritingDataBlock, mWritingDataBlockSize, framesToProcess);
+
+                    if (XEncodeOpusData(mWritingEncoder,
+                                        (const INT16 *)mWritingDataBlock,
+                                        (long)framesToProcess,
+                                        (XFILE)mWritingToFileReference) < 0)
                     {
                         theErr = BAD_FILE;
                     }
@@ -10552,6 +10660,30 @@ float BAE_TranslateVorbisTypeToQuality(BAECompressionType ct)
         return 0.95f; // near transparent
     default:
         return 0.4f; // safe default
+    }
+}
+#endif
+
+#if USE_OPUS_ENCODER == TRUE
+// Translate OPUS compression enum to total stream bitrate in bits/sec.
+uint32_t BAE_TranslateOpusTypeToBitrate(BAECompressionType ct)
+{
+    switch (ct)
+    {
+    case BAE_COMPRESSION_OPUS_16:
+        return 16000;
+    case BAE_COMPRESSION_OPUS_32:
+        return 32000;
+    case BAE_COMPRESSION_OPUS_64:
+        return 64000;
+    case BAE_COMPRESSION_OPUS_96:
+        return 96000;
+    case BAE_COMPRESSION_OPUS_128:
+        return 128000;
+    case BAE_COMPRESSION_OPUS_256:
+        return 256000;
+    default:
+        return 128000;
     }
 }
 #endif

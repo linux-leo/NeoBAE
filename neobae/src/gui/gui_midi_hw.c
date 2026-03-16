@@ -3,6 +3,7 @@
 #include "gui_midi_hw.h"
 #include "gui_midi.h"
 #include "NeoBAE.h"
+#include "X_Formats.h"
 
 #if SUPPORT_MIDI_HW == TRUE
 #include "BAE_API.h"
@@ -113,6 +114,9 @@ bool g_pcm_flac_recording = false;
 #if USE_VORBIS_ENCODER == TRUE
 bool g_pcm_vorbis_recording = false;
 #endif
+#if USE_OPUS_ENCODER == TRUE
+bool g_pcm_opus_recording = false;
+#endif
 FILE *g_pcm_wav_fp = NULL;
 uint64_t g_pcm_wav_data_bytes = 0;
 int g_pcm_wav_channels = 2;
@@ -138,6 +142,15 @@ static char g_pcm_vorbis_output_path[1024] = {0};
 static int g_pcm_vorbis_bitrate = 128000;
 #include "vorbis/vorbisenc.h"
 #include "ogg/ogg.h"
+#endif
+
+#if USE_OPUS_ENCODER == TRUE
+// Opus recording state
+static void *g_pcm_opus_accumulated_samples = NULL;
+static uint32_t g_pcm_opus_accumulated_frames = 0;
+static uint32_t g_pcm_opus_max_accumulated_frames = 0;
+static char g_pcm_opus_output_path[1024] = {0};
+static int g_pcm_opus_bitrate = 128000;
 #endif
 
 // ===== MIDI Event Callback =====
@@ -1144,5 +1157,181 @@ void pcm_vorbis_write_samples(int16_t *left, int16_t *right, int frames)
     g_pcm_vorbis_accumulated_frames += frames;
 }
 #endif // USE_VORBIS_ENCODER
+
+#if USE_OPUS_ENCODER == TRUE
+// Opus recording functions
+bool pcm_opus_start(const char *path, int channels, int sample_rate, int bits, int bitrate)
+{
+    BAE_PRINTF("Opus recording start attempt: %s (%d Hz, %d ch, %d bits, %d bps)\n", path, sample_rate, channels, bits, bitrate);
+
+    if (!path)
+    {
+        BAE_PRINTF("Opus recording: null path\n");
+        return false;
+    }
+
+    if (g_pcm_opus_recording)
+    {
+        BAE_PRINTF("Opus recording: already recording\n");
+        return false;
+    }
+
+    // Store recording parameters
+    g_pcm_wav_channels = channels;
+    g_pcm_wav_sample_rate = sample_rate;
+    g_pcm_wav_bits = bits;
+    g_pcm_opus_bitrate = bitrate;
+
+    safe_strncpy(g_pcm_opus_output_path, path, sizeof(g_pcm_opus_output_path) - 1);
+    g_pcm_opus_output_path[sizeof(g_pcm_opus_output_path) - 1] = '\0';
+
+    // Allocate buffer for accumulating samples (2 minutes max)
+    g_pcm_opus_max_accumulated_frames = sample_rate * 120;
+    g_pcm_opus_accumulated_samples = malloc(g_pcm_opus_max_accumulated_frames * channels * (bits / 8));
+    if (!g_pcm_opus_accumulated_samples)
+    {
+        BAE_PRINTF("Opus recording: failed to allocate %u bytes for buffer\n",
+                   (unsigned)(g_pcm_opus_max_accumulated_frames * channels * (bits / 8)));
+        return false;
+    }
+
+    g_pcm_opus_accumulated_frames = 0;
+    g_pcm_opus_recording = true;
+
+    // Register callback to capture audio from the audio callback
+    BAE_Platform_SetOpusRecorderCallback(pcm_opus_write_samples);
+
+    set_status_message("Opus recording started");
+    BAE_PRINTF("Opus recording started: %s (%d Hz, %d ch, %d bits, %d bps)\n", path, sample_rate, channels, bits, bitrate);
+    return true;
+}
+
+void pcm_opus_finalize(void)
+{
+    if (!g_pcm_opus_recording || !g_pcm_opus_accumulated_samples)
+        return;
+
+    BAE_PRINTF("Opus finalize: %u frames accumulated\n", g_pcm_opus_accumulated_frames);
+
+    if (g_pcm_opus_accumulated_frames == 0)
+    {
+        set_status_message("No Opus audio data to save");
+        BAE_Platform_ClearOpusRecorderCallback();
+        if (g_pcm_opus_accumulated_samples)
+        {
+            free(g_pcm_opus_accumulated_samples);
+            g_pcm_opus_accumulated_samples = NULL;
+        }
+        g_pcm_opus_recording = false;
+        g_midi_recording = false;
+        return;
+    }
+
+    if (g_pcm_wav_bits == 16)
+    {
+        GM_Waveform src;
+        XPTR encoded = NULL;
+        uint32_t encodedBytes = 0;
+        OPErr err;
+
+        XSetMemory(&src, sizeof(src), 0);
+        src.compressionType = (XDWORD)C_NONE;
+        src.channels = (XBYTE)g_pcm_wav_channels;
+        src.bitSize = (XBYTE)g_pcm_wav_bits;
+        src.sampledRate = ((XFIXED)g_pcm_wav_sample_rate) << 16L;
+        src.waveFrames = g_pcm_opus_accumulated_frames;
+        src.theWaveform = (XPTR)g_pcm_opus_accumulated_samples;
+
+        err = XEncodeOpusToMemory(&src, (uint32_t)g_pcm_opus_bitrate, &encoded, &encodedBytes);
+        if (err == NO_ERR && encoded && encodedBytes > 0)
+        {
+            FILE *fp = fopen(g_pcm_opus_output_path, "wb");
+            if (fp)
+            {
+                size_t wrote = fwrite(encoded, 1, encodedBytes, fp);
+                fclose(fp);
+                if (wrote == encodedBytes)
+                {
+                    set_status_message("Opus recording saved");
+                }
+                else
+                {
+                    set_status_message("Opus file write failed");
+                }
+            }
+            else
+            {
+                set_status_message("Opus file creation failed");
+            }
+            XDisposePtr(encoded);
+        }
+        else
+        {
+            set_status_message("Opus encoding failed");
+            if (encoded)
+            {
+                XDisposePtr(encoded);
+            }
+        }
+    }
+    else
+    {
+        set_status_message("Opus recorder supports 16-bit PCM only");
+    }
+
+    // Clear the audio callback
+    BAE_Platform_ClearOpusRecorderCallback();
+
+    // Clean up
+    if (g_pcm_opus_accumulated_samples)
+    {
+        free(g_pcm_opus_accumulated_samples);
+        g_pcm_opus_accumulated_samples = NULL;
+    }
+    g_pcm_opus_accumulated_frames = 0;
+    g_pcm_opus_recording = false;
+    g_midi_recording = false;
+}
+
+void pcm_opus_write_samples(int16_t *left, int16_t *right, int frames)
+{
+    if (!g_pcm_opus_recording || !g_pcm_opus_accumulated_samples || frames <= 0)
+        return;
+
+    if (g_pcm_opus_accumulated_frames + (uint32_t)frames > g_pcm_opus_max_accumulated_frames)
+    {
+        static int warned = 0;
+        if (!warned)
+        {
+            set_status_message("Opus buffer full, recording may be truncated");
+            warned = 1;
+        }
+        return;
+    }
+
+    // Append samples to accumulation buffer
+    int16_t *dest = (int16_t *)g_pcm_opus_accumulated_samples +
+                    (g_pcm_opus_accumulated_frames * g_pcm_wav_channels);
+
+    if (g_pcm_wav_channels == 1)
+    {
+        int16_t *src = left ? left : right;
+        for (int i = 0; i < frames; i++)
+        {
+            dest[i] = src[i];
+        }
+    }
+    else
+    {
+        for (int i = 0; i < frames; i++)
+        {
+            dest[i * 2] = left ? left[i] : 0;
+            dest[i * 2 + 1] = right ? right[i] : 0;
+        }
+    }
+
+    g_pcm_opus_accumulated_frames += (uint32_t)frames;
+}
+#endif // USE_OPUS_ENCODER
 
 #endif // SUPPORT_MIDI_HW

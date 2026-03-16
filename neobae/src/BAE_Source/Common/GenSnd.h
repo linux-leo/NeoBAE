@@ -2264,7 +2264,7 @@ typedef int32_t UNIT_TYPE;
         ,
         FILE_VORBIS_TYPE
 #endif
-#if USE_OPUS_DECODER == TRUE
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
         ,
         FILE_OPUS_TYPE
 #endif

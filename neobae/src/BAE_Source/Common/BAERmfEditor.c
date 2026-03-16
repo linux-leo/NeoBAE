@@ -44,7 +44,11 @@ static uint32_t PV_GetStoredCompressionSubTypeFromSnd(XPTR sndData,
     {
         return (uint32_t)CS_DEFAULT;
     }
-    if (compressionType != (uint32_t)C_VORBIS)
+    if (compressionType != (uint32_t)C_VORBIS
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
+        && compressionType != (uint32_t)C_OPUS
+#endif
+    )
     {
         return (uint32_t)CS_DEFAULT;
     }
@@ -53,7 +57,7 @@ static uint32_t PV_GetStoredCompressionSubTypeFromSnd(XPTR sndData,
     {
         return (uint32_t)CS_DEFAULT;
     }
-    if ((uint32_t)XGetLong(&header3->sndBuffer.subType) != (uint32_t)C_VORBIS)
+    if ((uint32_t)XGetLong(&header3->sndBuffer.subType) != (uint32_t)compressionType)
     {
         return (uint32_t)CS_DEFAULT;
     }
@@ -70,6 +74,12 @@ static uint32_t PV_GetStoredCompressionSubTypeFromSnd(XPTR sndData,
         case CS_VORBIS_32K:
         case CS_VORBIS_64K:
         case CS_VORBIS_96K:
+        case CS_OPUS_16K:
+        case CS_OPUS_32K:
+        case CS_OPUS_64K:
+        case CS_OPUS_96K:
+        case CS_OPUS_128K:
+        case CS_OPUS_256K:
             return subType;
         default:
             break;
@@ -88,7 +98,11 @@ static void PV_StoreCompressionSubTypeInSnd(XPTR sndData,
     {
         return;
     }
-    if (compressionType != C_VORBIS)
+    if (compressionType != C_VORBIS
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
+        && compressionType != C_OPUS
+#endif
+    )
     {
         return;
     }
@@ -98,7 +112,7 @@ static void PV_StoreCompressionSubTypeInSnd(XPTR sndData,
     {
         return;
     }
-    if ((uint32_t)XGetLong(&header3->sndBuffer.subType) != (uint32_t)C_VORBIS)
+    if ((uint32_t)XGetLong(&header3->sndBuffer.subType) != (uint32_t)compressionType)
     {
         return;
     }
@@ -2989,7 +3003,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
         {
             /* Map BAERmfEditorCompressionType -> SndCompressionType + sub-type.
              * MPEG bitrates each have their own SndCompressionType constant;
-             * Vorbis uses C_VORBIS with a sub-type to select the quality tier;
+             * Vorbis/Opus use a subtype to select target bitrate tier;
              * FLAC and ADPCM use a single type constant with CS_DEFAULT sub-type. */
             SndCompressionType compType;
             SndCompressionSubType compSubType;
@@ -3031,6 +3045,32 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                     compSubType = CS_DEFAULT;
                     break;
 #endif /* USE_FLAC_ENCODER && USE_FLAC_DECODER */
+#if USE_OPUS_ENCODER == TRUE && (USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE)
+                case BAE_EDITOR_COMPRESSION_OPUS_16K:
+                    compType    = C_OPUS;
+                    compSubType = CS_OPUS_16K;
+                    break;
+                case BAE_EDITOR_COMPRESSION_OPUS_32K:
+                    compType    = C_OPUS;
+                    compSubType = CS_OPUS_32K;
+                    break;
+                case BAE_EDITOR_COMPRESSION_OPUS_64K:
+                    compType    = C_OPUS;
+                    compSubType = CS_OPUS_64K;
+                    break;
+                case BAE_EDITOR_COMPRESSION_OPUS_96K:
+                    compType    = C_OPUS;
+                    compSubType = CS_OPUS_96K;
+                    break;
+                case BAE_EDITOR_COMPRESSION_OPUS_128K:
+                    compType    = C_OPUS;
+                    compSubType = CS_OPUS_128K;
+                    break;
+                case BAE_EDITOR_COMPRESSION_OPUS_256K:
+                    compType    = C_OPUS;
+                    compSubType = CS_OPUS_256K;
+                    break;
+#endif
                 case BAE_EDITOR_COMPRESSION_PCM:
                 default:
                     compType    = C_NONE;
@@ -4828,6 +4868,35 @@ BAEResult BAERmfEditorDocument_GetSampleCodecDescription(BAERmfEditorDocument co
                 break;
         }
     }
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
+    else if (sample->sourceCompressionType == (uint32_t)C_OPUS)
+    {
+        switch ((SndCompressionSubType)sample->sourceCompressionSubType)
+        {
+            case CS_OPUS_16K:
+                PV_CopyStringBounded(outCodec, outCodecSize, "Ogg Opus 16k");
+                break;
+            case CS_OPUS_32K:
+                PV_CopyStringBounded(outCodec, outCodecSize, "Ogg Opus 32k");
+                break;
+            case CS_OPUS_64K:
+                PV_CopyStringBounded(outCodec, outCodecSize, "Ogg Opus 64k");
+                break;
+            case CS_OPUS_96K:
+                PV_CopyStringBounded(outCodec, outCodecSize, "Ogg Opus 96k");
+                break;
+            case CS_OPUS_128K:
+                PV_CopyStringBounded(outCodec, outCodecSize, "Ogg Opus 128k");
+                break;
+            case CS_OPUS_256K:
+                PV_CopyStringBounded(outCodec, outCodecSize, "Ogg Opus 256k");
+                break;
+            default:
+                PV_CopyStringBounded(outCodec, outCodecSize, "Ogg Opus");
+                break;
+        }
+    }
+#endif
     else
     {
         XGetCompressionName((int32_t)sample->sourceCompressionType, outCodec);
@@ -4865,7 +4934,7 @@ BAEResult BAERmfEditorDocument_ExportSampleToFile(BAERmfEditorDocument const *do
     }
 
     /* For compressed formats with an original SND blob, extract and write the
-     * raw bitstream directly: FLAC → .flac, Vorbis → .ogg, MPEG → .mp3.
+     * raw bitstream directly: FLAC -> .flac, Vorbis -> .ogg, Opus -> .opus, MPEG -> .mp3.
      * The blob is laid out as XSndHeader3 (int16_t format tag + XSoundHeader3),
      * with the compressed bitstream at sndBuffer.sampleArea[0]. */
     if (sample->originalSndData && sample->originalSndSize > (int32_t)sizeof(XSndHeader3))
@@ -4884,6 +4953,11 @@ BAEResult BAERmfEditorDocument_ExportSampleToFile(BAERmfEditorDocument const *do
         case C_VORBIS:
             isCompressed = TRUE;
             break;
+#endif
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
+    case C_OPUS:
+        isCompressed = TRUE;
+        break;
 #endif
 #if USE_MPEG_DECODER != 0
         case C_MPEG_32:  case C_MPEG_40:  case C_MPEG_48:  case C_MPEG_56:
@@ -5107,11 +5181,21 @@ BAE_BOOL BAERmfEditorDocument_RequiresZmf(BAERmfEditorDocument const *document)
             case BAE_EDITOR_COMPRESSION_VORBIS_64K:
             case BAE_EDITOR_COMPRESSION_VORBIS_96K:
             case BAE_EDITOR_COMPRESSION_FLAC:
+            case BAE_EDITOR_COMPRESSION_OPUS_16K:
+            case BAE_EDITOR_COMPRESSION_OPUS_32K:
+            case BAE_EDITOR_COMPRESSION_OPUS_64K:
+            case BAE_EDITOR_COMPRESSION_OPUS_96K:
+            case BAE_EDITOR_COMPRESSION_OPUS_128K:
+            case BAE_EDITOR_COMPRESSION_OPUS_256K:
                 return TRUE;
             case BAE_EDITOR_COMPRESSION_DONT_CHANGE:
                 /* Original data may contain a modern codec */
                 if (sample->sourceCompressionType == (uint32_t)C_FLAC ||
-                    sample->sourceCompressionType == (uint32_t)C_VORBIS)
+                    sample->sourceCompressionType == (uint32_t)C_VORBIS
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
+                    || sample->sourceCompressionType == (uint32_t)C_OPUS
+#endif
+                )
                 {
                     return TRUE;
                 }

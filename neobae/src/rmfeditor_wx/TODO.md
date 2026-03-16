@@ -11,9 +11,12 @@
 - ~~Editor should be able to save in both RMF and ZMF formats~~
 - ~~Force editor to ZMF format if using FLAC/Vorbis samples~~
 - ~~Store and show exact quality setting (eg VORBIS 32kbps, 64kbps, etc)~~
-- Implement OPUS samples, and OPUS also triggers ZMF format
-- Allow import of supported compressed samples (mp3, ogg, flac, vorbis, opus)
-- Replace tempfile RMF preview playback with in-memory playback
+- ~~Implement OPUS samples, and OPUS also triggers ZMF format~~
+- ~~Add OPUS 16k and 32k options to engine and sample editor~~
+- Allow import of supported compressed samples (mp3, ogg, flac, vorbis, opus).
+  - Custom samples will change the meaning of "Don't Change" for the compression.
+  - We won't know the exact quality setting but thats OK, so long as we know the codec.
+- Replace tempfile RMF preview playback with in-memory ZMF playback
 - Piano roll should center vertical on MIDI content not just scroll to bottom
 - Metadata Editor
 

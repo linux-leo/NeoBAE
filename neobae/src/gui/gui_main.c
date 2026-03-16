@@ -4837,31 +4837,47 @@ int main(int argc, char *argv[])
 
                         // Single song export
                         // When export button clicked, open save dialog using extension depending on codec
-                        int export_dialog_type = 0; // Default to WAV
+                        int export_dialog_type = 0; // 0=WAV, 1=FLAC, 2=MP3, 3=OGG/Opus
+                        BAECompressionType compression = BAE_COMPRESSION_NONE;
 
-                        // Determine export type based on codec index
-                        if (g_exportCodecIndex == 0)
+                        if (g_exportCodecIndex >= 0 && g_exportCodecIndex < g_exportCompressionCount)
                         {
-                            export_dialog_type = 0; // WAV
+                            compression = g_exportCompressionMap[g_exportCodecIndex];
+                        }
+
+                        if (compression == BAE_COMPRESSION_NONE)
+                        {
+                            export_dialog_type = 0;
                         }
 #if USE_FLAC_ENCODER == TRUE
-                        else if (g_exportCodecIndex == 1)
+                        else if (compression == BAE_COMPRESSION_LOSSLESS)
                         {
-                            export_dialog_type = 1; // FLAC
+                            export_dialog_type = 1;
                         }
 #endif
 #if USE_MPEG_ENCODER == TRUE
-                        else if (g_exportCodecIndex == 2 || g_exportCodecIndex == 3 || g_exportCodecIndex == 4 || g_exportCodecIndex == 5)
+                        else if (compression >= BAE_COMPRESSION_MPEG_32 && compression <= BAE_COMPRESSION_MPEG_320)
                         {
-                            export_dialog_type = 2; // MP3
+                            export_dialog_type = 2;
                         }
 #endif
 #if USE_VORBIS_ENCODER == TRUE
-                        else
+                        else if (compression >= BAE_COMPRESSION_VORBIS_96 && compression <= BAE_COMPRESSION_VORBIS_320)
                         {
-                            export_dialog_type = 3; // Vorbis
+                            export_dialog_type = 3;
                         }
 #endif
+#if USE_OPUS_ENCODER == TRUE
+                        else if (compression >= BAE_COMPRESSION_OPUS_16 && compression <= BAE_COMPRESSION_OPUS_256)
+                        {
+                            export_dialog_type = 4;
+                        }
+#endif
+                        else {
+                            // Default to WAV if something's wrong with the mapping
+                            export_dialog_type = 0;
+                        }
+
                         char *export_file = save_export_dialog(export_dialog_type);
                         if (export_file)
                         {
@@ -4869,15 +4885,21 @@ int main(int argc, char *argv[])
                             size_t L = strlen(export_file);
                             const char *expected_ext = NULL;
 
-                            if (export_dialog_type == 1)
+                            if (compression == BAE_COMPRESSION_LOSSLESS)
                             {
                                 expected_ext = ".flac";
                             }
-                            else if (export_dialog_type == 2)
+                            else if (compression >= BAE_COMPRESSION_MPEG_32 && compression <= BAE_COMPRESSION_MPEG_320)
                             {
                                 expected_ext = ".mp3";
                             }
-                            else if (export_dialog_type == 3)
+#if USE_OPUS_ENCODER == TRUE
+                            else if (compression >= BAE_COMPRESSION_OPUS_16 && compression <= BAE_COMPRESSION_OPUS_256)
+                            {
+                                expected_ext = ".opus";
+                            }
+#endif
+                            else if (compression >= BAE_COMPRESSION_VORBIS_96 && compression <= BAE_COMPRESSION_VORBIS_320)
                             {
                                 expected_ext = ".ogg";
                             }
@@ -4902,13 +4924,6 @@ int main(int argc, char *argv[])
 
                             // Start export using selected codec mapping
                             // Map our index to BAEMixer compression enums using table
-                            BAECompressionType compression = BAE_COMPRESSION_NONE;
-#if USE_MPEG_ENCODER != FALSE
-                            if (g_exportCodecIndex >= 0 && g_exportCodecIndex < g_exportCompressionCount)
-                            {
-                                compression = g_exportCompressionMap[g_exportCodecIndex];
-                            }
-#endif
                             if (!g_bae.song_loaded || g_bae.is_audio_file)
                             {
                                 set_status_message("Cannot export: No MIDI/RMF loaded");
@@ -4939,6 +4954,12 @@ int main(int argc, char *argv[])
                                 else if (compression >= BAE_COMPRESSION_VORBIS_96 && compression <= BAE_COMPRESSION_VORBIS_320)
                                 {
                                     export_file_type = BAE_VORBIS_TYPE;
+                                }
+#endif
+#if USE_OPUS_ENCODER == TRUE
+                                else if (compression >= BAE_COMPRESSION_OPUS_16 && compression <= BAE_COMPRESSION_OPUS_256)
+                                {
+                                    export_file_type = BAE_OPUS_TYPE;
                                 }
 #endif
 
@@ -5105,6 +5126,9 @@ int main(int argc, char *argv[])
                             case MIDI_RECORD_FORMAT_VORBIS:
                                 export_dialog_type = 3; // OGG/Vorbis
                                 break;
+                            case MIDI_RECORD_FORMAT_OPUS:
+                                export_dialog_type = 4; // OPUS
+                                break;                                
                             default:
                                 export_dialog_type = 0; // fallback to WAV
                                 break;
@@ -5244,6 +5268,36 @@ int main(int argc, char *argv[])
                                     }
                                 }
 #endif
+#if USE_OPUS_ENCODER == TRUE
+                                else if (format_info.type == MIDI_RECORD_FORMAT_OPUS)
+                                {
+                                    // Map Opus bitrate to compression type
+                                    switch (format_info.bitrate)
+                                    {
+                                    case 16000:
+                                        compression = BAE_COMPRESSION_OPUS_16;
+                                        break;
+                                    case 32000:
+                                        compression = BAE_COMPRESSION_OPUS_32;
+                                        break;
+                                    case 64000:
+                                        compression = BAE_COMPRESSION_OPUS_64;
+                                        break;
+                                    case 96000:
+                                        compression = BAE_COMPRESSION_OPUS_96;
+                                        break;
+                                    case 128000:
+                                        compression = BAE_COMPRESSION_OPUS_128;
+                                        break;
+                                    case 256000:
+                                        compression = BAE_COMPRESSION_OPUS_256;
+                                        break;
+                                    default:
+                                        compression = BAE_COMPRESSION_OPUS_128;
+                                        break;
+                                    }
+                                }
+#endif
 
                                 if (export_file)
                                 {
@@ -5360,7 +5414,7 @@ int main(int argc, char *argv[])
 #endif
                                     else
                                     {
-                                        // MP3 or Vorbis selected - check format type
+                                        // MP3, Vorbis, or Opus selected - check format type
                                         if (format_info.type == MIDI_RECORD_FORMAT_MP3)
                                         {
 #if USE_MPEG_ENCODER != FALSE
@@ -5472,6 +5526,66 @@ int main(int argc, char *argv[])
                                             }
 #else
                                         set_status_message("Vorbis export not supported in this build");
+                                        free(export_file);
+#endif
+                                        }
+                                        else if (format_info.type == MIDI_RECORD_FORMAT_OPUS)
+                                        {
+#if USE_OPUS_ENCODER == TRUE
+                                            // Use our own PCM Opus writer for real-time recording
+                                            int opus_channels = 2;
+                                            int opus_sr = g_sample_rate_hz > 0 ? g_sample_rate_hz : 44100;
+                                            int bitrate = format_info.bitrate;
+                                            bool started = pcm_opus_start(export_file, opus_channels, opus_sr, 16, bitrate);
+                                            if (!started)
+                                            {
+                                                set_status_message("Failed to open Opus file for recording");
+                                                free(export_file);
+                                            }
+                                            else
+                                            {
+                                                // If not in MIDI-in mode, start/seek/preroll the target song to drive engine audio.
+                                                if (!g_midi_input_enabled)
+                                                {
+                                                    if (target)
+                                                    {
+                                                        BAESong_Stop(target, FALSE);
+                                                        BAESong_SetMicrosecondPosition(target, 0);
+                                                        BAESong_Preroll(target);
+                                                    }
+                                                    BAEResult rs = target ? BAESong_Start(target, 0) : BAE_NO_ERROR;
+                                                    if (rs != BAE_NO_ERROR)
+                                                    {
+                                                        set_status_message("Failed to start song for Opus recording");
+                                                        pcm_opus_finalize();
+                                                        free(export_file);
+                                                    }
+                                                    else
+                                                    {
+                                                        g_bae.is_playing = true;
+                                                        g_pcm_opus_recording = true;
+                                                        g_midi_recording = true;
+                                                        g_exporting = false; // use our own writer
+                                                        safe_strncpy(g_export_path, export_file, sizeof(g_export_path) - 1);
+                                                        g_export_path[sizeof(g_export_path) - 1] = '\0';
+                                                        set_status_message("Opus recording started");
+                                                        free(export_file);
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    // MIDI-in mode: do not change engine playback; just enable PCM writer.
+                                                    g_pcm_opus_recording = true;
+                                                    g_midi_recording = true;
+                                                    g_exporting = false; // use our own writer
+                                                    safe_strncpy(g_export_path, export_file, sizeof(g_export_path) - 1);
+                                                    g_export_path[sizeof(g_export_path) - 1] = '\0';
+                                                    set_status_message("Opus recording started");
+                                                    free(export_file);
+                                                }
+                                            }
+#else
+                                        set_status_message("Opus export not supported in this build");
                                         free(export_file);
 #endif
                                         }
@@ -5592,6 +5706,26 @@ int main(int argc, char *argv[])
                         }
 #else
             set_status_message("Vorbis not supported in this build");
+#endif
+                    }
+                    else if (stop_format_info.type == MIDI_RECORD_FORMAT_OPUS)
+                    {
+#if USE_OPUS_ENCODER == TRUE
+                        // Opus: if using our PCM writer, finalize it
+                        if (g_pcm_opus_recording)
+                        {
+                            pcm_opus_finalize();
+                        }
+                        else if (g_exporting)
+                        {
+                            bae_stop_wav_export(); // Generic export stop function
+                        }
+                        else
+                        {
+                            set_status_message("No Opus export in progress");
+                        }
+#else
+            set_status_message("Opus not supported in this build");
 #endif
                     }
                     else

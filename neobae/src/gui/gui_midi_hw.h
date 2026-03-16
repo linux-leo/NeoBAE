@@ -61,6 +61,9 @@ extern bool g_pcm_flac_recording;
 #if USE_VORBIS_ENCODER == TRUE
 extern bool g_pcm_vorbis_recording;
 #endif
+#if USE_OPUS_ENCODER == TRUE
+extern bool g_pcm_opus_recording;
+#endif
 extern FILE *g_pcm_wav_fp;
 extern uint64_t g_pcm_wav_data_bytes;
 extern int g_pcm_wav_channels;
@@ -93,6 +96,12 @@ void pcm_flac_write_samples(int16_t *left, int16_t *right, int frames);
 bool pcm_vorbis_start(const char *path, int channels, int sample_rate, int bits, int bitrate);
 void pcm_vorbis_finalize(void);
 void pcm_vorbis_write_samples(int16_t *left, int16_t *right, int frames);
+#endif
+
+#if USE_OPUS_ENCODER == TRUE
+bool pcm_opus_start(const char *path, int channels, int sample_rate, int bits, int bitrate);
+void pcm_opus_finalize(void);
+void pcm_opus_write_samples(int16_t *left, int16_t *right, int frames);
 #endif
 
 #endif // SUPPORT_MIDI_HW

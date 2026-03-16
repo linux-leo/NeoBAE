@@ -11,12 +11,13 @@
 
 #include "X_API.h"
 
-#if USE_OPUS_DECODER == TRUE
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#if USE_OPUS_DECODER == TRUE
 
 // Opus decoder functions
 XBOOL XIsOpusFile(XFILE file);
@@ -26,10 +27,23 @@ OPErr XGetOpusFileInfo(void *decoder_handle, UINT32 *samples, UINT32 *sample_rat
 long XDecodeOpusFile(void *decoder_handle, void *buffer, long buffer_size);
 void XCloseOpusFile(void *decoder_handle);
 
+#endif // USE_OPUS_DECODER
+
+#if USE_OPUS_ENCODER == TRUE
+
+// Opus encoder functions
+void* XInitOpusEncoder(UINT32 sample_rate, UINT32 channels, UINT32 bitrate);
+long XWriteOpusHeader(void *encoder_handle, XFILE output_file);
+long XEncodeOpusData(void *encoder_handle, const INT16 *pcm_interleaved, long frames, XFILE output_file);
+long XFlushOpusEncoder(void *encoder_handle, XFILE output_file);
+void XCloseOpusEncoder(void *encoder_handle);
+
+#endif // USE_OPUS_ENCODER
+
 #ifdef __cplusplus
 }
 #endif
 
-#endif // USE_OPUS_DECODER
+#endif // USE_OPUS_DECODER || USE_OPUS_ENCODER
 
 #endif // __X_OPUS_FILES__

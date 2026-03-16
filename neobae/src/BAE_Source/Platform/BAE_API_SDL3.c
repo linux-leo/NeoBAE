@@ -65,6 +65,11 @@ typedef void (*VorbisRecorderCallback)(int16_t *left, int16_t *right, int frames
 static VorbisRecorderCallback g_vorbis_recorder_callback = NULL;
 #endif
 
+#if USE_OPUS_ENCODER == TRUE
+typedef void (*OpusRecorderCallback)(int16_t *left, int16_t *right, int frames);
+static OpusRecorderCallback g_opus_recorder_callback = NULL;
+#endif
+
 // MP3 encoder state (same structure copied; rename SDL primitives where changed)
 typedef struct MP3EncState_s
 {
@@ -184,6 +189,10 @@ static void SDLCALL audio_stream_callback(void *userdata, SDL_AudioStream *strea
             if (g_vorbis_recorder_callback && g_bits == 16)
             { uint32_t framesCB=(uint32_t)frames; int16_t *samples=(int16_t*)g_sliceStatic; if (g_channels==1){ g_vorbis_recorder_callback(samples,samples,framesCB);} else if (g_channels==2){ static int16_t *l2=NULL,*r2=NULL; static uint32_t tf2=0; if(framesCB>tf2){ int16_t *nl2=(int16_t*)malloc(framesCB*sizeof(int16_t)); int16_t *nr2=(int16_t*)malloc(framesCB*sizeof(int16_t)); if(nl2&&nr2){ free(l2); free(r2); l2=nl2; r2=nr2; tf2=framesCB;} else { free(nl2); free(nr2);} } if(l2&&r2){ for(uint32_t i=0;i<framesCB;i++){ l2[i]=samples[i*2]; r2[i]=samples[i*2+1]; } g_vorbis_recorder_callback(l2,r2,framesCB);} } }
 #endif
+#if USE_OPUS_ENCODER == TRUE
+            if (g_opus_recorder_callback && g_bits == 16)
+            { uint32_t framesCB=(uint32_t)frames; int16_t *samples=(int16_t*)g_sliceStatic; if (g_channels==1){ g_opus_recorder_callback(samples,samples,framesCB);} else if (g_channels==2){ static int16_t *l3=NULL,*r3=NULL; static uint32_t tf3=0; if(framesCB>tf3){ int16_t *nl3=(int16_t*)malloc(framesCB*sizeof(int16_t)); int16_t *nr3=(int16_t*)malloc(framesCB*sizeof(int16_t)); if(nl3&&nr3){ free(l3); free(r3); l3=nl3; r3=nr3; tf3=framesCB;} else { free(nl3); free(nr3);} } if(l3&&r3){ for(uint32_t i=0;i<framesCB;i++){ l3[i]=samples[i*2]; r3[i]=samples[i*2+1]; } g_opus_recorder_callback(l3,r3,framesCB);} } }
+#endif
 #if USE_MPEG_ENCODER == TRUE
             if (g_mp3enc && g_mp3enc->accepting)
             { MP3EncState *s=g_mp3enc; uint32_t framesCB=(uint32_t)frames; if(framesCB){ static int16_t *scratch=NULL; static uint32_t scratchFrames=0; int16_t *temp=NULL; if(g_bits==16) temp=(int16_t*)g_sliceStatic; else { if(scratchFrames<framesCB){ free(scratch); scratch=(int16_t*)malloc(framesCB*s->channels*sizeof(int16_t)); scratchFrames=scratch?framesCB:0; } if(!scratch){ s->droppedFrames+=framesCB; goto mp3_done; } const uint8_t *src8=(const uint8_t*)g_sliceStatic; for(uint32_t i=0;i<framesCB*s->channels;i++) scratch[i]=((int)src8[i]-128)<<8; temp=scratch; } SDL_LockMutex(s->mtx); uint32_t space=s->ringFrames - s->usedFrames; uint32_t toWrite=(framesCB<=space)?framesCB:space; if(toWrite>0){ uint32_t first=toWrite; uint32_t cont=s->ringFrames - s->writePos; if(first>cont) first=cont; memcpy(s->ring + s->writePos * s->channels, temp, first * s->channels * sizeof(int16_t)); s->writePos = (s->writePos + first) % s->ringFrames; s->usedFrames += first; uint32_t remain=toWrite-first; if(remain){ memcpy(s->ring + s->writePos * s->channels, temp + first * s->channels, remain * s->channels * sizeof(int16_t)); s->writePos = (s->writePos + remain) % s->ringFrames; s->usedFrames += remain; } SDL_SignalCondition(s->cond); } else { s->droppedFrames += framesCB; } SDL_UnlockMutex(s->mtx); } mp3_done: ; }
@@ -220,6 +229,10 @@ void BAE_Platform_ClearFlacRecorderCallback(void){ g_flac_recorder_callback = NU
 #if USE_VORBIS_ENCODER == TRUE
 void BAE_Platform_SetVorbisRecorderCallback(void (*callback)(int16_t *left, int16_t *right, int frames)) { g_vorbis_recorder_callback = (VorbisRecorderCallback)callback; }
 void BAE_Platform_ClearVorbisRecorderCallback(void){ g_vorbis_recorder_callback = NULL; }
+#endif
+#if USE_OPUS_ENCODER == TRUE
+void BAE_Platform_SetOpusRecorderCallback(void (*callback)(int16_t *left, int16_t *right, int frames)) { g_opus_recorder_callback = (OpusRecorderCallback)callback; }
+void BAE_Platform_ClearOpusRecorderCallback(void){ g_opus_recorder_callback = NULL; }
 #endif
 
 // ---- System setup / cleanup ----

@@ -57,7 +57,7 @@ static void *export_thread_proc(void *param);
 #endif
 
 // Export file tracking
-int g_export_file_type = BAE_WAVE_TYPE; // BAE_WAVE_TYPE or BAE_MPEG_TYPE
+int g_export_file_type = BAE_WAVE_TYPE; // active export type (WAV/FLAC/MP3/Vorbis/Opus)
 uint32_t g_export_last_device_samples = 0;
 int g_export_stable_loops = 0;
 static const uint32_t EXPORT_MPEG_STABLE_THRESHOLD = 8; // matches playbae heuristic
@@ -112,7 +112,13 @@ const char *g_exportCodecNames[] = {
     "96kbps Vorbis",
     "128kbps Vorbis",
     "256kbps Vorbis",
-    "320kbps Vorbis"
+    "320kbps Vorbis",
+#endif
+#if defined(USE_OPUS_ENCODER) && USE_OPUS_ENCODER == TRUE
+    "64kbps Opus",
+    "96kbps Opus",
+    "128kbps Opus",
+    "256kbps Opus"
 #endif
 };
 
@@ -139,10 +145,16 @@ const BAECompressionType g_exportCompressionMap[] = {
     BAE_COMPRESSION_VORBIS_256,
     BAE_COMPRESSION_VORBIS_320,
 #endif
+#if defined(USE_OPUS_ENCODER) && USE_OPUS_ENCODER == TRUE
+    BAE_COMPRESSION_OPUS_64,
+    BAE_COMPRESSION_OPUS_96,
+    BAE_COMPRESSION_OPUS_128,
+    BAE_COMPRESSION_OPUS_256,
+#endif
     BAE_COMPRESSION_TYPE_COUNT
 };
 
-#if USE_MPEG_ENCODER == TRUE || USE_FLAC_ENCODER == TRUE
+#if USE_MPEG_ENCODER == TRUE || USE_FLAC_ENCODER == TRUE || USE_VORBIS_ENCODER == TRUE || USE_OPUS_ENCODER == TRUE
 const int g_exportCompressionCount = (int)(sizeof(g_exportCompressionMap) / sizeof(g_exportCompressionMap[0]));
 #else
 const int g_exportCompressionCount = 1; // only WAV
@@ -168,7 +180,13 @@ const char *g_midiRecordFormatNames[] = {
     "96kbps Vorbis",
     "128kbps Vorbis",
     "256kbps Vorbis",
-    "320kbps Vorbis"
+    "320kbps Vorbis",
+#endif
+#if defined(USE_OPUS_ENCODER) && USE_OPUS_ENCODER == TRUE
+    "64kbps Opus",
+    "96kbps Opus",
+    "128kbps Opus",
+    "256kbps Opus"
 #endif
 };
 const int g_midiRecordFormatCount = sizeof(g_midiRecordFormatNames) / sizeof(g_midiRecordFormatNames[0]);
@@ -219,6 +237,18 @@ MidiRecordFormatInfo get_midi_record_format_info(int index) {
         info.extension = ".ogg";
         int vorbis_bitrates[] = {96, 128, 256, 320};
         info.bitrate = vorbis_bitrates[index - current_index] * 1000; // convert to bps
+        return info;
+    }
+    current_index += 4;
+#endif
+
+#if defined(USE_OPUS_ENCODER) && USE_OPUS_ENCODER == TRUE
+    // Opus formats: 64, 96, 128, 256
+    if (index >= current_index && index < current_index + 4) {
+        info.type = MIDI_RECORD_FORMAT_OPUS;
+        info.extension = ".opus";
+        int opus_bitrates[] = {64, 96, 128, 256};
+        info.bitrate = opus_bitrates[index - current_index] * 1000; // convert to bps
         return info;
     }
 #endif
@@ -490,14 +520,35 @@ bool bae_start_mpeg_export(const char *output_file, int codec_index)
     g_midi_output_suppressed_during_seek = false;
 #endif
 
-    // Determine output type: default MPEG, but switch to Vorbis if selected compression is Vorbis
-    BAEFileType outType = BAE_MPEG_TYPE;
+    // Determine output type from selected compression
+    BAEFileType outType = BAE_WAVE_TYPE;
     BAECompressionType comp = g_exportCompressionMap[codec_index];
+
+#if USE_FLAC_ENCODER == TRUE
+    if (comp == BAE_COMPRESSION_LOSSLESS)
+    {
+        outType = BAE_FLAC_TYPE;
+    }
+#endif
+
+#if USE_MPEG_ENCODER == TRUE
+    if (comp >= BAE_COMPRESSION_MPEG_32 && comp <= BAE_COMPRESSION_MPEG_320)
+    {
+        outType = BAE_MPEG_TYPE;
+    }
+#endif
     
 #if USE_VORBIS_ENCODER == TRUE
     if (comp == BAE_COMPRESSION_VORBIS_96 || comp == BAE_COMPRESSION_VORBIS_128 || comp == BAE_COMPRESSION_VORBIS_256 || comp == BAE_COMPRESSION_VORBIS_320)
     {
         outType = BAE_VORBIS_TYPE;
+    }
+#endif
+
+#if USE_OPUS_ENCODER == TRUE
+    if (comp >= BAE_COMPRESSION_OPUS_16 && comp <= BAE_COMPRESSION_OPUS_256)
+    {
+        outType = BAE_OPUS_TYPE;
     }
 #endif
 
@@ -510,7 +561,7 @@ bool bae_start_mpeg_export(const char *output_file, int codec_index)
     if (result != BAE_NO_ERROR)
     {
         char msg[128];
-        snprintf(msg, sizeof(msg), "MP3 export failed to start (%d)", result);
+        snprintf(msg, sizeof(msg), "Export failed to start (%d)", result);
         set_status_message(msg);
         return false;
     }
@@ -529,7 +580,7 @@ bool bae_start_mpeg_export(const char *output_file, int codec_index)
     if (result != BAE_NO_ERROR)
     {
         char msg[128];
-        snprintf(msg, sizeof(msg), "Song start failed during MP3 export (%d)", result);
+        snprintf(msg, sizeof(msg), "Song start failed during export (%d)", result);
         set_status_message(msg);
         BAEMixer_StopOutputToFile();
         return false;
@@ -576,7 +627,7 @@ bool bae_start_mpeg_export(const char *output_file, int codec_index)
     }
 
     g_exporting = true;
-    g_export_file_type = BAE_MPEG_TYPE;
+    g_export_file_type = outType;
     g_export_realtime_mode = false; // MPEG export typically runs at full speed
 
 #ifdef SUPPORT_MIDI_HW
@@ -652,8 +703,8 @@ bool bae_start_mpeg_export(const char *output_file, int codec_index)
     g_export_thread = (HANDLE)_beginthreadex(NULL, 0, export_thread_proc, NULL, 0, &g_export_thread_id);
     if (g_export_thread == NULL)
     {
-        BAE_PRINTF("Failed to create MPEG export thread\n");
-        set_status_message("Failed to create MPEG export thread");
+        BAE_PRINTF("Failed to create export thread\n");
+        set_status_message("Failed to create export thread");
         BAEMixer_StopOutputToFile();
         g_exporting = false;
         return false;
@@ -662,8 +713,8 @@ bool bae_start_mpeg_export(const char *output_file, int codec_index)
     g_export_thread_active = true;
     if (pthread_create(&g_export_thread, NULL, export_thread_proc, NULL) != 0)
     {
-        BAE_PRINTF("Failed to create MPEG export thread\n");
-        set_status_message("Failed to create MPEG export thread");
+        BAE_PRINTF("Failed to create export thread\n");
+        set_status_message("Failed to create export thread");
         BAEMixer_StopOutputToFile();
         g_exporting = false;
         g_export_thread_active = false;
@@ -671,7 +722,7 @@ bool bae_start_mpeg_export(const char *output_file, int codec_index)
     }
 #endif
 
-    set_status_message("MP3 export started");
+    set_status_message("Export started");
     return true;
 }
 #endif // USE_MPEG_ENCODER
@@ -1012,7 +1063,7 @@ static void *export_thread_proc(void *param)
 }
 
 // File dialog for save export
-char *save_export_dialog(int export_type) // 0=WAV, 1=FLAC, 2=MP3, 3=OGG
+char *save_export_dialog(int export_type) // 0=WAV, 1=FLAC, 2=MP3, 3=OGG, 4=OPUS
 {
 #ifdef _WIN32
     char fileBuf[1024] = {0};
@@ -1034,7 +1085,12 @@ char *save_export_dialog(int export_type) // 0=WAV, 1=FLAC, 2=MP3, 3=OGG
     {
         ofn.lpstrFilter = "OGG Files\0*.ogg\0All Files\0*.*\0";
         ofn.lpstrDefExt = "ogg";
-    }    
+    } 
+    else if (export_type == 4)
+    {
+        ofn.lpstrFilter = "OPUS Files\0*.opus\0All Files\0*.*\0";
+        ofn.lpstrDefExt = "opus";
+    }        
     else
     {
         ofn.lpstrFilter = "WAV Files\0*.wav\0All Files\0*.*\0";
@@ -1060,6 +1116,7 @@ char *save_export_dialog(int export_type) // 0=WAV, 1=FLAC, 2=MP3, 3=OGG
     if (export_type == 1)      { ext = "flac"; title = "Save FLAC Export"; }
     else if (export_type == 2) { ext = "mp3";  title = "Save MP3 Export"; }
     else if (export_type == 3) { ext = "ogg";  title = "Save OGG Export"; }
+    else if (export_type == 4) { ext = "opus"; title = "Save Opus Export"; }
     else                       { ext = "wav";  title = "Save WAV Export"; }
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
@@ -1108,6 +1165,11 @@ char *save_export_dialog(int export_type) // 0=WAV, 1=FLAC, 2=MP3, 3=OGG
         "kdialog --getsavefilename . '*.ogg' 2>/dev/null",
         "yad --file-selection --save --title='Save OGG Export' 2>/dev/null",
         NULL};
+    const char *cmds_opus[] = {
+        "zenity --file-selection --save --title='Save Opus Export' --file-filter='Opus Files | *.opus' 2>/dev/null",
+        "kdialog --getsavefilename . '*.opus' 2>/dev/null",
+        "yad --file-selection --save --title='Save Opus Export' 2>/dev/null",
+        NULL};
     const char **use_cmds;
     if (export_type == 1)
     {
@@ -1120,6 +1182,10 @@ char *save_export_dialog(int export_type) // 0=WAV, 1=FLAC, 2=MP3, 3=OGG
     else if (export_type == 3)
     {
         use_cmds = cmds_ogg;
+    }
+    else if (export_type == 4)
+    {
+        use_cmds = cmds_opus;
     }
     else
     {

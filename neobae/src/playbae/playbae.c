@@ -409,7 +409,10 @@ static char playFileString[512];
 static void init_playFileString(void)
 {
    /* Build the human-friendly file type list at runtime (can't call strcat at file-scope). */
-   strcpy(playFileString, "Play a file (MIDI, RMF/ZMF, WAV, AIFF");
+   strcpy(playFileString, "Play a file (MIDI, RMF, WAV, AIFF");
+#if USE_ZMF_SUPPORT == TRUE
+   strcat(playFileString, ", ZMF");
+#endif
 #if USE_XMF_SUPPORT == TRUE && _USING_FLUIDSYNTH == TRUE
    strcat(playFileString, ", XMF/MXMF");
 #endif
@@ -443,7 +446,7 @@ char const usageStringFmt[] =
     "                 -rv {set default reverb type}\n"
     "                 -nf {disable fade-out when stopping via time limit or CTRL-C}\n"
     "                 -q  {quiet mode}\n"
-    "                 -b  {CBR bitrate kbps for MP3 export (default 128)}\n"
+   "                 -b  {target bitrate kbps for MP3/Opus export (default 128)}\n"
     "                 -h  {displays this message then exits}\n"
 #ifdef SUPPORT_BAESCRIPT
     "                 --script {path to BAEScript file for MIDI manipulation}\n"
@@ -2181,6 +2184,50 @@ int main(int argc, char *argv[])
                return 1;
 #endif
             }            
+            else if (PV_IsFileExtension(parmFile, ".opus"))
+            {
+#if defined(USE_OPUS_ENCODER) && (USE_OPUS_ENCODER != 0)
+               BAECompressionType cType = BAE_COMPRESSION_OPUS_128;
+               int totalReq = gMP3BitrateKbps;
+               struct
+               {
+                  int rate;
+                  BAECompressionType ct;
+               } mapTbl[] = {{16, BAE_COMPRESSION_OPUS_16}, {32, BAE_COMPRESSION_OPUS_32}, {64, BAE_COMPRESSION_OPUS_64}, {96, BAE_COMPRESSION_OPUS_96}, {128, BAE_COMPRESSION_OPUS_128}, {256, BAE_COMPRESSION_OPUS_256}};
+               int bestDiff = 100000;
+               if (totalReq < 16)
+                  totalReq = 16;
+               if (totalReq > 320)
+                  totalReq = 320;
+               for (size_t i = 0; i < sizeof(mapTbl) / sizeof(mapTbl[0]); ++i)
+               {
+                  int d = abs(mapTbl[i].rate - totalReq);
+                  if (d < bestDiff)
+                  {
+                     bestDiff = d;
+                     cType = mapTbl[i].ct;
+                  }
+               }
+
+               err = BAEMixer_StartOutputToFile(theMixer, (BAEPathName)parmFile, BAE_OPUS_TYPE, cType);
+               if (err)
+               {
+                  playbae_printf("Error %d starting Ogg Opus export: %s\n", err, parmFile);
+                  BAEMixer_Delete(theMixer);
+                  return 1;
+               }
+               else
+               {
+                  gWriteToFile = TRUE;
+                  gWriteToFileType = BAE_OPUS_TYPE;
+                  playbae_printf("Writing Ogg Opus to %s\n", parmFile);
+               }
+#else
+               playbae_printf("Opus encoder not built. Rebuild with OPUS_ENC=1, e.g.: make clean && make OPUS_ENC=1\n");
+               BAEMixer_Delete(theMixer);
+               return 1;
+#endif
+            }
             else
             {
                // default/wav path

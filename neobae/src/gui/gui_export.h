@@ -34,12 +34,13 @@ typedef enum {
     MIDI_RECORD_FORMAT_WAV = 1,
     MIDI_RECORD_FORMAT_FLAC = 2,
     MIDI_RECORD_FORMAT_MP3 = 3,
-    MIDI_RECORD_FORMAT_VORBIS = 4
+    MIDI_RECORD_FORMAT_VORBIS = 4,
+    MIDI_RECORD_FORMAT_OPUS = 5
 } MidiRecordFormatType;
 
 typedef struct {
     MidiRecordFormatType type;
-    int bitrate;  // for MP3/Vorbis
+    int bitrate;  // for MP3/Vorbis/Opus, ignored for MIDI/WAV/FLAC
     const char* extension;
 } MidiRecordFormatInfo;
 
@@ -66,7 +67,7 @@ bool bae_start_mpeg_export(const char *output_file, int codec_index);
 void bae_stop_wav_export(void);
 void bae_signal_export_stop(void);
 void bae_service_wav_export(void);
-char *save_export_dialog(int export_type); // 0=WAV, 1=FLAC, 2=MP3, 3=OGG
+char *save_export_dialog(int export_type); // 0=WAV, 1=FLAC, 2=MP3, 3=OGG, 4=OPUS
 char *save_midi_dialog(void);
 
 #endif // GUI_EXPORT_H

@@ -2,20 +2,30 @@
 /*
 **  XOpusFiles.c
 **
-**  Integration of libopusfile for Ogg Opus audio file support in miniBAE
+**  Integration of libopus/libopusfile for Ogg Opus audio file support in miniBAE
 **
-**  This file provides decoding support for Ogg Opus audio files
-**  using the reference libopusfile implementation.
+**  This file provides decoding support for Ogg Opus audio files and
+**  encoding support for Ogg Opus export/sample workflows.
 */
 /*****************************************************************************/
 
 #include "X_API.h"
+#include "X_Formats.h"
 #include "GenSnd.h"
 #include "GenPriv.h"
 
+#include <stdlib.h>
+
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
+#include <opus/opus.h>
+#include <ogg/ogg.h>
+#endif
+
 #if USE_OPUS_DECODER == TRUE
 #include <opusfile.h>
-#include <opus/opus.h>
+#endif
+
+#if USE_OPUS_DECODER == TRUE
 
 // Structure to hold Opus decoder state
 typedef struct {
@@ -29,9 +39,9 @@ static int opus_read_func(void *stream, unsigned char *ptr, int nbytes)
 {
     XFILE file = (XFILE)stream;
     XERR err;
-    
+
     if (nbytes == 0) return 0;
-    
+
     /* XFileRead returns 0 on success, -1 on failure */
     err = XFileRead(file, ptr, nbytes);
     if (err == 0) {
@@ -45,7 +55,7 @@ static int opus_seek_func(void *stream, opus_int64 offset, int whence)
 {
     XFILE file = (XFILE)stream;
     int32_t new_pos;
-    
+
     switch (whence) {
         case SEEK_SET:
             new_pos = (int32_t)offset;
@@ -59,7 +69,7 @@ static int opus_seek_func(void *stream, opus_int64 offset, int whence)
         default:
             return -1;
     }
-    
+
     if (XFileSetPosition(file, new_pos) == 0) {
         return 0;
     } else {
@@ -79,10 +89,7 @@ static OpusFileCallbacks opus_callbacks = {
     opus_tell_func,
     NULL  // close_func - we handle closing ourselves
 };
-#endif
 
-
-#if USE_OPUS_DECODER == TRUE
 
 // Check if file is an Ogg Opus file
 XBOOL XIsOpusFile(XFILE file)
@@ -90,23 +97,23 @@ XBOOL XIsOpusFile(XFILE file)
     OggOpusFile *of;
     int error;
     long pos;
-    
+
     if (file == NULL) return FALSE;
-    
+
     // Save current position
     pos = XFileGetPosition(file);
-    
+
     // Try to open as Opus file
     of = op_open_callbacks(file, &opus_callbacks, NULL, 0, &error);
-    
+
     // Restore position
     XFileSetPosition(file, pos);
-    
+
     if (of != NULL) {
         op_free(of);
         return TRUE;
     }
-    
+
     return FALSE;
 }
 
@@ -115,43 +122,43 @@ void* XOpenOpusFile(XFILE file)
 {
     XOpusDecoder *decoder;
     int error;
-    
+
     if (file == NULL) return NULL;
-    
+
     decoder = (XOpusDecoder *)XNewPtr(sizeof(XOpusDecoder));
     if (decoder == NULL) return NULL;
-    
+
     decoder->of = op_open_callbacks(file, &opus_callbacks, NULL, 0, &error);
     if (decoder->of == NULL) {
         XDisposePtr(decoder);
         return NULL;
     }
-    
+
     decoder->is_open = TRUE;
     return decoder;
 }
 
 // Get Opus file information
-OPErr XGetOpusFileInfo(void *decoder_handle, UINT32 *samples, UINT32 *sample_rate, 
+OPErr XGetOpusFileInfo(void *decoder_handle, UINT32 *samples, UINT32 *sample_rate,
                       UINT32 *channels, UINT32 *bit_depth)
 {
     XOpusDecoder *decoder = (XOpusDecoder *)decoder_handle;
     const OpusHead *head;
-    
+
     if (decoder == NULL || decoder->of == NULL || !decoder->is_open) {
         return PARAM_ERR;
     }
-    
+
     head = op_head(decoder->of, -1);
     if (head == NULL) {
         return BAD_FILE;
     }
-    
+
     *channels = head->channel_count;
     *sample_rate = 48000;  // Opus always decodes to 48kHz
     *samples = (UINT32)op_pcm_total(decoder->of, -1);
     *bit_depth = 16;  // Opus decodes to 16-bit PCM
-    
+
     return NO_ERR;
 }
 
@@ -161,19 +168,19 @@ long XDecodeOpusFile(void *decoder_handle, void *buffer, long buffer_size)
     XOpusDecoder *decoder = (XOpusDecoder *)decoder_handle;
     int samples_read;
     long bytes_read;
-    
+
     if (decoder == NULL || decoder->of == NULL || !decoder->is_open) {
         return 0;
     }
-    
+
     // op_read returns number of samples read per channel
     // We need to convert to bytes (16-bit samples)
     samples_read = op_read(decoder->of, (opus_int16 *)buffer, buffer_size / 2, NULL);
-    
+
     if (samples_read < 0) {
         return 0;  // Error
     }
-    
+
     bytes_read = samples_read * 2;  // 16-bit samples
     return bytes_read;
 }
@@ -182,7 +189,7 @@ long XDecodeOpusFile(void *decoder_handle, void *buffer, long buffer_size)
 void XCloseOpusFile(void *decoder_handle)
 {
     XOpusDecoder *decoder = (XOpusDecoder *)decoder_handle;
-    
+
     if (decoder != NULL) {
         if (decoder->of != NULL && decoder->is_open) {
             op_free(decoder->of);
@@ -193,3 +200,696 @@ void XCloseOpusFile(void *decoder_handle)
 }
 
 #endif // USE_OPUS_DECODER
+
+#if USE_OPUS_ENCODER == TRUE
+
+typedef struct {
+    unsigned char *data;
+    uint32_t size;
+    uint32_t capacity;
+} XOpusMemBuf;
+
+typedef struct {
+    OpusEncoder *encoder;
+    ogg_stream_state os;
+    XBOOL stream_initialized;
+
+    UINT32 input_sample_rate;
+    UINT32 channels;
+    UINT32 bitrate;
+
+    double resample_step;
+    double resample_pos;
+
+    INT16 *input_fifo;
+    uint32_t input_fifo_frames;
+    uint32_t input_fifo_capacity;
+
+    INT16 *frame_pcm;
+    uint32_t frame_fill;
+
+    unsigned char *packet_buf;
+    uint32_t packet_buf_size;
+
+    ogg_int64_t granule_pos;
+    ogg_int64_t packet_no;
+    XBOOL headers_queued;
+} XOpusEncoder;
+
+static int PV_OpusMemBufAppend(XOpusMemBuf *buf, const unsigned char *bytes, uint32_t len)
+{
+    uint32_t newSize;
+    uint32_t newCap;
+    unsigned char *grown;
+
+    if (!buf || !bytes || len == 0) return 0;
+
+    newSize = buf->size + len;
+    if (newSize > buf->capacity)
+    {
+        newCap = buf->capacity ? (buf->capacity * 2) : 65536;
+        while (newCap < newSize)
+        {
+            newCap *= 2;
+        }
+
+        grown = (unsigned char *)XNewPtr((int32_t)newCap);
+        if (!grown) return -1;
+
+        if (buf->data && buf->size)
+        {
+            XBlockMove(buf->data, grown, (int32_t)buf->size);
+            XDisposePtr((XPTR)buf->data);
+        }
+        buf->data = grown;
+        buf->capacity = newCap;
+    }
+
+    XBlockMove((void *)bytes, buf->data + buf->size, (int32_t)len);
+    buf->size = newSize;
+    return 0;
+}
+
+static int PV_EnsureInputFifoCapacity(XOpusEncoder *enc, uint32_t neededFrames)
+{
+    uint32_t needed;
+    uint32_t newCap;
+    INT16 *grown;
+
+    needed = enc->input_fifo_frames + neededFrames;
+    if (needed <= enc->input_fifo_capacity) return 0;
+
+    newCap = enc->input_fifo_capacity ? enc->input_fifo_capacity : 4096;
+    while (newCap < needed)
+    {
+        newCap *= 2;
+    }
+
+    grown = (INT16 *)XNewPtr((int32_t)(newCap * enc->channels * sizeof(INT16)));
+    if (!grown) return -1;
+
+    if (enc->input_fifo && enc->input_fifo_frames)
+    {
+        XBlockMove(enc->input_fifo,
+                   grown,
+                   (int32_t)(enc->input_fifo_frames * enc->channels * sizeof(INT16)));
+        XDisposePtr((XPTR)enc->input_fifo);
+    }
+
+    enc->input_fifo = grown;
+    enc->input_fifo_capacity = newCap;
+    return 0;
+}
+
+static long PV_WriteOggPages(XOpusEncoder *enc, XFILE output_file, XOpusMemBuf *mem, XBOOL flushAll)
+{
+    ogg_page og;
+    long total = 0;
+
+    while (1)
+    {
+        int result = flushAll ? ogg_stream_flush(&enc->os, &og)
+                              : ogg_stream_pageout(&enc->os, &og);
+        if (result == 0) break;
+
+        if (output_file)
+        {
+            if (XFileWrite(output_file, (XPTRC)og.header, og.header_len) == -1) return -1;
+            if (XFileWrite(output_file, (XPTRC)og.body, og.body_len) == -1) return -1;
+            total += (long)(og.header_len + og.body_len);
+        }
+        else if (mem)
+        {
+            if (PV_OpusMemBufAppend(mem, (const unsigned char *)og.header, (uint32_t)og.header_len) != 0) return -1;
+            if (PV_OpusMemBufAppend(mem, (const unsigned char *)og.body, (uint32_t)og.body_len) != 0) return -1;
+            total += (long)(og.header_len + og.body_len);
+        }
+        else
+        {
+            return -1;
+        }
+    }
+
+    return total;
+}
+
+static int PV_QueueOpusHeaders(XOpusEncoder *enc)
+{
+    unsigned char head[19];
+    const char vendor[] = "miniBAE";
+    unsigned char tags[8 + 4 + sizeof(vendor) - 1 + 4];
+    ogg_packet op;
+
+    /* OpusHead */
+    XSetMemory(head, sizeof(head), 0);
+    XBlockMove((void *)"OpusHead", head, 8);
+    head[8] = 1;
+    head[9] = (unsigned char)enc->channels;
+    head[10] = 0;
+    head[11] = 0;
+    head[12] = (unsigned char)(enc->input_sample_rate & 0xFF);
+    head[13] = (unsigned char)((enc->input_sample_rate >> 8) & 0xFF);
+    head[14] = (unsigned char)((enc->input_sample_rate >> 16) & 0xFF);
+    head[15] = (unsigned char)((enc->input_sample_rate >> 24) & 0xFF);
+    head[16] = 0;
+    head[17] = 0;
+    head[18] = 0;
+
+    XSetMemory(&op, sizeof(op), 0);
+    op.packet = head;
+    op.bytes = (long)sizeof(head);
+    op.b_o_s = 1;
+    op.e_o_s = 0;
+    op.granulepos = 0;
+    op.packetno = enc->packet_no++;
+    if (ogg_stream_packetin(&enc->os, &op) != 0) return -1;
+
+    /* OpusTags */
+    XSetMemory(tags, sizeof(tags), 0);
+    XBlockMove((void *)"OpusTags", tags, 8);
+    tags[8] = (unsigned char)((sizeof(vendor) - 1) & 0xFF);
+    tags[9] = (unsigned char)(((sizeof(vendor) - 1) >> 8) & 0xFF);
+    tags[10] = (unsigned char)(((sizeof(vendor) - 1) >> 16) & 0xFF);
+    tags[11] = (unsigned char)(((sizeof(vendor) - 1) >> 24) & 0xFF);
+    XBlockMove((void *)vendor, tags + 12, (int32_t)(sizeof(vendor) - 1));
+    tags[12 + (sizeof(vendor) - 1)] = 0;
+    tags[13 + (sizeof(vendor) - 1)] = 0;
+    tags[14 + (sizeof(vendor) - 1)] = 0;
+    tags[15 + (sizeof(vendor) - 1)] = 0;
+
+    XSetMemory(&op, sizeof(op), 0);
+    op.packet = tags;
+    op.bytes = (long)sizeof(tags);
+    op.b_o_s = 0;
+    op.e_o_s = 0;
+    op.granulepos = 0;
+    op.packetno = enc->packet_no++;
+    if (ogg_stream_packetin(&enc->os, &op) != 0) return -1;
+
+    enc->headers_queued = TRUE;
+    return 0;
+}
+
+static int PV_AppendInputPcm(XOpusEncoder *enc, const INT16 *pcm, uint32_t frames)
+{
+    if (frames == 0) return 0;
+    if (PV_EnsureInputFifoCapacity(enc, frames) != 0) return -1;
+
+    XBlockMove((void *)pcm,
+               enc->input_fifo + (enc->input_fifo_frames * enc->channels),
+               (int32_t)(frames * enc->channels * sizeof(INT16)));
+    enc->input_fifo_frames += frames;
+    return 0;
+}
+
+static uint32_t PV_GenerateResampledFrames(XOpusEncoder *enc, INT16 *dst, uint32_t wanted)
+{
+    uint32_t produced;
+
+    produced = 0;
+
+    if (enc->input_sample_rate == 48000)
+    {
+        uint32_t take = enc->input_fifo_frames;
+        if (take > wanted) take = wanted;
+
+        if (take)
+        {
+            XBlockMove(enc->input_fifo,
+                       dst,
+                       (int32_t)(take * enc->channels * sizeof(INT16)));
+
+            enc->input_fifo_frames -= take;
+            if (enc->input_fifo_frames)
+            {
+                XBlockMove(enc->input_fifo + (take * enc->channels),
+                           enc->input_fifo,
+                           (int32_t)(enc->input_fifo_frames * enc->channels * sizeof(INT16)));
+            }
+        }
+        return take;
+    }
+
+    while (produced < wanted)
+    {
+        uint32_t i0 = (uint32_t)enc->resample_pos;
+        double frac;
+        uint32_t ch;
+
+        if (i0 + 1 >= enc->input_fifo_frames)
+        {
+            break;
+        }
+
+        frac = enc->resample_pos - (double)i0;
+        for (ch = 0; ch < enc->channels; ++ch)
+        {
+            INT16 s0 = enc->input_fifo[(i0 * enc->channels) + ch];
+            INT16 s1 = enc->input_fifo[((i0 + 1) * enc->channels) + ch];
+            double v = (double)s0 + (((double)s1 - (double)s0) * frac);
+            if (v > 32767.0) v = 32767.0;
+            if (v < -32768.0) v = -32768.0;
+            dst[(produced * enc->channels) + ch] = (INT16)v;
+        }
+
+        enc->resample_pos += enc->resample_step;
+        produced++;
+    }
+
+    {
+        uint32_t consume = (uint32_t)enc->resample_pos;
+        if (consume > 0)
+        {
+            if (consume > enc->input_fifo_frames)
+            {
+                consume = enc->input_fifo_frames;
+            }
+            enc->input_fifo_frames -= consume;
+            if (enc->input_fifo_frames)
+            {
+                XBlockMove(enc->input_fifo + (consume * enc->channels),
+                           enc->input_fifo,
+                           (int32_t)(enc->input_fifo_frames * enc->channels * sizeof(INT16)));
+            }
+            enc->resample_pos -= (double)consume;
+        }
+    }
+
+    return produced;
+}
+
+static long PV_PushEncodedPacket(XOpusEncoder *enc, int packetBytes, XFILE output_file, XOpusMemBuf *mem, XBOOL endOfStream)
+{
+    ogg_packet op;
+
+    XSetMemory(&op, sizeof(op), 0);
+    op.packet = enc->packet_buf;
+    op.bytes = packetBytes;
+    op.b_o_s = 0;
+    op.e_o_s = endOfStream ? 1 : 0;
+    op.granulepos = enc->granule_pos;
+    op.packetno = enc->packet_no++;
+
+    if (ogg_stream_packetin(&enc->os, &op) != 0)
+    {
+        return -1;
+    }
+
+    return PV_WriteOggPages(enc, output_file, mem, endOfStream);
+}
+
+static long PV_EncodeQueuedFrames(XOpusEncoder *enc, XFILE output_file, XOpusMemBuf *mem)
+{
+    long totalWritten;
+
+    totalWritten = 0;
+
+    while (1)
+    {
+        uint32_t needed = 960 - enc->frame_fill;
+        uint32_t produced;
+        int packetBytes;
+        long wrote;
+
+        produced = PV_GenerateResampledFrames(enc,
+                                              enc->frame_pcm + (enc->frame_fill * enc->channels),
+                                              needed);
+        enc->frame_fill += produced;
+
+        if (enc->frame_fill < 960)
+        {
+            break;
+        }
+
+        packetBytes = opus_encode(enc->encoder,
+                                  (const opus_int16 *)enc->frame_pcm,
+                                  960,
+                                  enc->packet_buf,
+                                  (opus_int32)enc->packet_buf_size);
+        if (packetBytes < 0)
+        {
+            return -1;
+        }
+
+        enc->granule_pos += 960;
+        wrote = PV_PushEncodedPacket(enc, packetBytes, output_file, mem, FALSE);
+        if (wrote < 0)
+        {
+            return -1;
+        }
+        totalWritten += wrote;
+        enc->frame_fill = 0;
+    }
+
+    return totalWritten;
+}
+
+static long PV_FlushEncoderInternal(XOpusEncoder *enc, XFILE output_file, XOpusMemBuf *mem)
+{
+    long totalWritten;
+    int packetBytes;
+    long wrote;
+
+    totalWritten = 0;
+
+    wrote = PV_EncodeQueuedFrames(enc, output_file, mem);
+    if (wrote < 0) return -1;
+    totalWritten += wrote;
+
+    /* Flush any remaining resampled/interpolated frames by padding the final packet. */
+    if (enc->frame_fill > 0)
+    {
+        uint32_t remainingFrames = 960 - enc->frame_fill;
+
+        if (remainingFrames > 0)
+        {
+            XSetMemory(enc->frame_pcm + (enc->frame_fill * enc->channels),
+                       (int32_t)(remainingFrames * enc->channels * sizeof(INT16)),
+                       0);
+        }
+
+        packetBytes = opus_encode(enc->encoder,
+                                  (const opus_int16 *)enc->frame_pcm,
+                                  960,
+                                  enc->packet_buf,
+                                  (opus_int32)enc->packet_buf_size);
+        if (packetBytes < 0)
+        {
+            return -1;
+        }
+
+        enc->granule_pos += enc->frame_fill;
+        enc->frame_fill = 0;
+
+        wrote = PV_PushEncodedPacket(enc, packetBytes, output_file, mem, TRUE);
+        if (wrote < 0)
+        {
+            return -1;
+        }
+        totalWritten += wrote;
+    }
+    else
+    {
+        wrote = PV_WriteOggPages(enc, output_file, mem, TRUE);
+        if (wrote < 0)
+        {
+            return -1;
+        }
+        totalWritten += wrote;
+    }
+
+    return totalWritten;
+}
+
+void* XInitOpusEncoder(UINT32 sample_rate, UINT32 channels, UINT32 bitrate)
+{
+    XOpusEncoder *enc;
+    int err;
+
+    if (channels < 1 || channels > 2)
+    {
+        return NULL;
+    }
+    if (sample_rate == 0)
+    {
+        sample_rate = 48000;
+    }
+    if (bitrate < 6000)
+    {
+        bitrate = 6000;
+    }
+    if (bitrate > 510000)
+    {
+        bitrate = 510000;
+    }
+
+    enc = (XOpusEncoder *)XNewPtr(sizeof(XOpusEncoder));
+    if (!enc) return NULL;
+    XSetMemory(enc, sizeof(XOpusEncoder), 0);
+
+    enc->input_sample_rate = sample_rate;
+    enc->channels = channels;
+    enc->bitrate = bitrate;
+    enc->resample_step = (double)sample_rate / 48000.0;
+    enc->resample_pos = 0.0;
+
+    enc->frame_pcm = (INT16 *)XNewPtr((int32_t)(960 * channels * sizeof(INT16)));
+    if (!enc->frame_pcm)
+    {
+        XDisposePtr((XPTR)enc);
+        return NULL;
+    }
+
+    enc->packet_buf_size = 4000;
+    enc->packet_buf = (unsigned char *)XNewPtr((int32_t)enc->packet_buf_size);
+    if (!enc->packet_buf)
+    {
+        XDisposePtr((XPTR)enc->frame_pcm);
+        XDisposePtr((XPTR)enc);
+        return NULL;
+    }
+
+    enc->encoder = opus_encoder_create(48000, (int)channels, OPUS_APPLICATION_AUDIO, &err);
+    if (!enc->encoder || err != OPUS_OK)
+    {
+        if (enc->encoder)
+        {
+            opus_encoder_destroy(enc->encoder);
+        }
+        XDisposePtr((XPTR)enc->packet_buf);
+        XDisposePtr((XPTR)enc->frame_pcm);
+        XDisposePtr((XPTR)enc);
+        return NULL;
+    }
+
+    opus_encoder_ctl(enc->encoder, OPUS_SET_BITRATE((opus_int32)bitrate));
+    opus_encoder_ctl(enc->encoder, OPUS_SET_VBR(1));
+
+    if (ogg_stream_init(&enc->os, rand()) != 0)
+    {
+        opus_encoder_destroy(enc->encoder);
+        XDisposePtr((XPTR)enc->packet_buf);
+        XDisposePtr((XPTR)enc->frame_pcm);
+        XDisposePtr((XPTR)enc);
+        return NULL;
+    }
+    enc->stream_initialized = TRUE;
+
+    if (PV_QueueOpusHeaders(enc) != 0)
+    {
+        ogg_stream_clear(&enc->os);
+        opus_encoder_destroy(enc->encoder);
+        XDisposePtr((XPTR)enc->packet_buf);
+        XDisposePtr((XPTR)enc->frame_pcm);
+        XDisposePtr((XPTR)enc);
+        return NULL;
+    }
+
+    return enc;
+}
+
+long XWriteOpusHeader(void *encoder_handle, XFILE output_file)
+{
+    XOpusEncoder *enc = (XOpusEncoder *)encoder_handle;
+
+    if (!enc || !enc->stream_initialized || !output_file)
+    {
+        return -1;
+    }
+
+    return PV_WriteOggPages(enc, output_file, NULL, TRUE);
+}
+
+long XEncodeOpusData(void *encoder_handle, const INT16 *pcm_interleaved, long frames, XFILE output_file)
+{
+    XOpusEncoder *enc = (XOpusEncoder *)encoder_handle;
+
+    if (!enc || !enc->stream_initialized || !pcm_interleaved || frames < 0 || !output_file)
+    {
+        return -1;
+    }
+
+    if (PV_AppendInputPcm(enc, pcm_interleaved, (uint32_t)frames) != 0)
+    {
+        return -1;
+    }
+
+    return PV_EncodeQueuedFrames(enc, output_file, NULL);
+}
+
+long XFlushOpusEncoder(void *encoder_handle, XFILE output_file)
+{
+    XOpusEncoder *enc = (XOpusEncoder *)encoder_handle;
+
+    if (!enc || !enc->stream_initialized || !output_file)
+    {
+        return -1;
+    }
+
+    return PV_FlushEncoderInternal(enc, output_file, NULL);
+}
+
+void XCloseOpusEncoder(void *encoder_handle)
+{
+    XOpusEncoder *enc = (XOpusEncoder *)encoder_handle;
+
+    if (!enc) return;
+
+    if (enc->stream_initialized)
+    {
+        ogg_stream_clear(&enc->os);
+        enc->stream_initialized = FALSE;
+    }
+
+    if (enc->encoder)
+    {
+        opus_encoder_destroy(enc->encoder);
+        enc->encoder = NULL;
+    }
+
+    if (enc->packet_buf)
+    {
+        XDisposePtr((XPTR)enc->packet_buf);
+        enc->packet_buf = NULL;
+    }
+    if (enc->frame_pcm)
+    {
+        XDisposePtr((XPTR)enc->frame_pcm);
+        enc->frame_pcm = NULL;
+    }
+    if (enc->input_fifo)
+    {
+        XDisposePtr((XPTR)enc->input_fifo);
+        enc->input_fifo = NULL;
+    }
+
+    XDisposePtr((XPTR)enc);
+}
+
+OPErr XEncodeOpusToMemory(GM_Waveform const *src, uint32_t bitrate,
+                          XPTR *outData, uint32_t *outSize)
+{
+    XOpusEncoder *enc;
+    XOpusMemBuf buf;
+    uint32_t frames;
+    uint32_t channels;
+    uint32_t f;
+    uint32_t chunkFrames;
+    INT16 *chunkPcm;
+    long wrote;
+
+    if (!src || !src->theWaveform || !outData || !outSize)
+    {
+        return PARAM_ERR;
+    }
+    if (src->compressionType != (XDWORD)C_NONE)
+    {
+        return PARAM_ERR;
+    }
+    if (src->channels < 1 || src->channels > 2)
+    {
+        return PARAM_ERR;
+    }
+
+    *outData = NULL;
+    *outSize = 0;
+    XSetMemory(&buf, sizeof(buf), 0);
+
+    enc = (XOpusEncoder *)XInitOpusEncoder((UINT32)(src->sampledRate >> 16),
+                                           (UINT32)src->channels,
+                                           bitrate);
+    if (!enc)
+    {
+        return MEMORY_ERR;
+    }
+
+    wrote = PV_WriteOggPages(enc, NULL, &buf, TRUE);
+    if (wrote < 0)
+    {
+        XCloseOpusEncoder(enc);
+        if (buf.data) XDisposePtr((XPTR)buf.data);
+        return BAD_FILE;
+    }
+
+    channels = src->channels;
+    frames = src->waveFrames;
+    chunkFrames = 4096;
+    chunkPcm = (INT16 *)XNewPtr((int32_t)(chunkFrames * channels * sizeof(INT16)));
+    if (!chunkPcm)
+    {
+        XCloseOpusEncoder(enc);
+        if (buf.data) XDisposePtr((XPTR)buf.data);
+        return MEMORY_ERR;
+    }
+
+    f = 0;
+    while (f < frames)
+    {
+        uint32_t count = frames - f;
+        if (count > chunkFrames) count = chunkFrames;
+
+        if (src->bitSize == 16)
+        {
+            XBlockMove(((INT16 const *)src->theWaveform) + (f * channels),
+                       chunkPcm,
+                       (int32_t)(count * channels * sizeof(INT16)));
+        }
+        else if (src->bitSize == 8)
+        {
+            uint32_t i;
+            unsigned char const *pcm8 = (unsigned char const *)src->theWaveform;
+            for (i = 0; i < count * channels; ++i)
+            {
+                chunkPcm[i] = (INT16)(((int)pcm8[(f * channels) + i] - 128) << 8);
+            }
+        }
+        else
+        {
+            XDisposePtr((XPTR)chunkPcm);
+            XCloseOpusEncoder(enc);
+            if (buf.data) XDisposePtr((XPTR)buf.data);
+            return PARAM_ERR;
+        }
+
+        if (PV_AppendInputPcm(enc, chunkPcm, count) != 0)
+        {
+            XDisposePtr((XPTR)chunkPcm);
+            XCloseOpusEncoder(enc);
+            if (buf.data) XDisposePtr((XPTR)buf.data);
+            return MEMORY_ERR;
+        }
+
+        wrote = PV_EncodeQueuedFrames(enc, NULL, &buf);
+        if (wrote < 0)
+        {
+            XDisposePtr((XPTR)chunkPcm);
+            XCloseOpusEncoder(enc);
+            if (buf.data) XDisposePtr((XPTR)buf.data);
+            return BAD_FILE;
+        }
+
+        f += count;
+    }
+
+    XDisposePtr((XPTR)chunkPcm);
+
+    wrote = PV_FlushEncoderInternal(enc, NULL, &buf);
+    XCloseOpusEncoder(enc);
+    if (wrote < 0)
+    {
+        if (buf.data) XDisposePtr((XPTR)buf.data);
+        return BAD_FILE;
+    }
+
+    if (!buf.data || buf.size == 0)
+    {
+        if (buf.data) XDisposePtr((XPTR)buf.data);
+        return BAD_FILE;
+    }
+
+    *outData = (XPTR)buf.data;
+    *outSize = buf.size;
+    return NO_ERR;
+}
+
+#endif // USE_OPUS_ENCODER

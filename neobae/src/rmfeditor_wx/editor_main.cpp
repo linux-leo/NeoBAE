@@ -1657,12 +1657,12 @@ private:
         requiresZmf = BAERmfEditorDocument_RequiresZmf(saveDoc) != 0;
 
         wxFileDialog dialog(this,
-                            requiresZmf ? "Save As ZMF (required by FLAC/Vorbis samples)"
+                            requiresZmf ? "Save As ZMF (required by FLAC/Vorbis/Opus samples)"
                                         : "Save As RMF",
                             wxEmptyString,
                             wxEmptyString,
                             requiresZmf ? "ZMF files (*.zmf)|*.zmf"
-                                        : "RMF files (*.rmf;*.zmf)|*.rmf;*.zmf",
+                                        : "RMF and ZMF files (*.rmf;*.zmf)|*.rmf;*.zmf",
                             wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
         if (dialog.ShowModal() != wxID_OK) {
             if (saveDoc != m_document) {
@@ -1672,7 +1672,7 @@ private:
         }
         {
             wxString targetPath = dialog.GetPath();
-            /* Enforce .zmf extension when document contains FLAC/Vorbis samples */
+            /* Enforce .zmf extension when document contains FLAC/Vorbis/Opus samples */
             if (requiresZmf) {
                 wxFileName fn(targetPath);
                 if (fn.GetExt().Lower() != "zmf") {

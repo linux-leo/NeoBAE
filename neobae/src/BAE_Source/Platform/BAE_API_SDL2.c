@@ -64,6 +64,12 @@ typedef void (*VorbisRecorderCallback)(int16_t *left, int16_t *right, int frames
 static VorbisRecorderCallback g_vorbis_recorder_callback = NULL;
 #endif
 
+#if USE_OPUS_ENCODER == TRUE
+// Opus recorder callback (called from audio callback to capture samples)
+typedef void (*OpusRecorderCallback)(int16_t *left, int16_t *right, int frames);
+static OpusRecorderCallback g_opus_recorder_callback = NULL;
+#endif
+
 // MP3 recorder state: real-time encoding via ring buffer and encoder thread (no temp file)
 typedef struct MP3EncState_s
 {
@@ -203,6 +209,26 @@ void BAE_Platform_ClearVorbisRecorderCallback(void)
     if (g_audioDevice)
         SDL_LockAudioDevice(g_audioDevice);
     g_vorbis_recorder_callback = NULL;
+    if (g_audioDevice)
+        SDL_UnlockAudioDevice(g_audioDevice);
+}
+#endif
+
+#if USE_OPUS_ENCODER == TRUE
+void BAE_Platform_SetOpusRecorderCallback(void (*callback)(int16_t *left, int16_t *right, int frames))
+{
+    if (g_audioDevice)
+        SDL_LockAudioDevice(g_audioDevice);
+    g_opus_recorder_callback = (OpusRecorderCallback)callback;
+    if (g_audioDevice)
+        SDL_UnlockAudioDevice(g_audioDevice);
+}
+
+void BAE_Platform_ClearOpusRecorderCallback(void)
+{
+    if (g_audioDevice)
+        SDL_LockAudioDevice(g_audioDevice);
+    g_opus_recorder_callback = NULL;
     if (g_audioDevice)
         SDL_UnlockAudioDevice(g_audioDevice);
 }
@@ -441,6 +467,57 @@ static void audio_callback(void *userdata, Uint8 *stream, int len)
                             right_temp[i] = samples[i * 2 + 1];
                         }
                         g_vorbis_recorder_callback(left_temp, right_temp, frames);
+                    }
+                }
+            }
+        }
+#endif
+#if USE_OPUS_ENCODER == TRUE
+        // If Opus recorder callback is active, call it with the audio data
+        if (g_opus_recorder_callback)
+        {
+            const uint32_t frames = (uint32_t)(sliceBytes / (g_channels * (g_bits / 8)));
+            if (frames && g_bits == 16)
+            {
+                int16_t *samples = (int16_t *)g_sliceStatic;
+                if (g_channels == 1)
+                {
+                    // Mono - pass the same data as both left and right
+                    g_opus_recorder_callback(samples, samples, frames);
+                }
+                else if (g_channels == 2)
+                {
+                    // Stereo - need to deinterleave
+                    static int16_t *left_temp = NULL, *right_temp = NULL;
+                    static uint32_t temp_frames = 0;
+
+                    if (frames > temp_frames)
+                    {
+                        int16_t *new_left = (int16_t *)malloc(frames * sizeof(int16_t));
+                        int16_t *new_right = (int16_t *)malloc(frames * sizeof(int16_t));
+                        if (new_left && new_right)
+                        {
+                            free(left_temp);
+                            free(right_temp);
+                            left_temp = new_left;
+                            right_temp = new_right;
+                            temp_frames = frames;
+                        }
+                        else
+                        {
+                            free(new_left);
+                            free(new_right);
+                        }
+                    }
+
+                    if (left_temp && right_temp)
+                    {
+                        for (uint32_t i = 0; i < frames; i++)
+                        {
+                            left_temp[i] = samples[i * 2];
+                            right_temp[i] = samples[i * 2 + 1];
+                        }
+                        g_opus_recorder_callback(left_temp, right_temp, frames);
                     }
                 }
             }

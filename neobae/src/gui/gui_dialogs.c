@@ -188,6 +188,11 @@ static const char AUDIO_EXT_FILTER[] =
 #else
     ""
 #endif
+#if USE_ZMF_SUPPORT == TRUE
+    "*.zmf;";
+#else
+    ""
+#endif
     "*.wav;*.aif;*.aiff;*.au;";
     char fileBuf[1024] = {0};
     OPENFILENAMEA ofn;
@@ -208,7 +213,7 @@ static const char AUDIO_EXT_FILTER[] =
     {
         char pattern[512];
         /* include the always-available patterns plus the compiled-in ones */
-        snprintf(pattern, sizeof(pattern), "*.mid;*.midi;*.kar;*.rmi;*.rmf;*.zmf;%s", AUDIO_EXT_FILTER);
+        snprintf(pattern, sizeof(pattern), "*.mid;*.midi;*.kar;*.rmi;*.rmf;%s", AUDIO_EXT_FILTER);
         /* Remove possible duplicate separators if AUDIO_EXT_FILTER is empty */
         APPEND_STR(pattern);
     }
@@ -216,7 +221,10 @@ static const char AUDIO_EXT_FILTER[] =
 #if USE_XMF_SUPPORT == TRUE && _USING_FLUIDSYNTH == TRUE
     APPEND_STR("XMF Files"); APPEND_STR("*.xmf;*.mxmf");
 #endif
-    APPEND_STR("RMF Files"); APPEND_STR("*.rmf;*.zmf");    
+    APPEND_STR("RMF Files"); APPEND_STR("*.rmf");
+#if USE_ZMF_SUPPORT == TRUE
+    APPEND_STR("ZMF Files"); APPEND_STR("*.zmf");
+#endif    
     APPEND_STR("Audio Files");
     {
         char audioPattern[512];
@@ -291,6 +299,11 @@ static const char AUDIO_EXT_FILTER[] =
 /* Compile-time built extension list, Linux Style */
 static const char AUDIO_EXT_FILTER[] =
     "*.mid *.midi *.kar *.rmi *.rmf "
+#if USE_ZMF_SUPPORT == TRUE
+    "*.zmf "
+#else
+    ""
+#endif    
 #if USE_FLAC_DECODER == TRUE
     "*.flac "
 #else
@@ -1274,7 +1287,7 @@ void render_about_dialog(SDL_Renderer *R, int mx, int my, bool mclick)
 
 #if (USE_MPEG_DECODER == TRUE) || (USE_MPEG_ENCODER == TRUE) || (SUPPORT_MIDI_HW == TRUE) || (SUPPORT_OGG_FORMAT == TRUE) || (USE_VORBIS_DECODER == TRUE) || (USE_VORBIS_ENCODER == TRUE) || (USE_FLAC_DECODER == TRUE) || (USE_FLAC_ENCODER == TRUE) || (_USING_FLUIDSYNTH == TRUE)
     // Page 2 & 3: credits/licenses (part 2)
-    else if (g_about_page == 2 || g_about_page == 3)
+    else if (g_about_page == 2 || g_about_page == 3 || g_about_page == 4)
     {
         const char *credits_page2[] = {
 #if USE_MPEG_ENCODER == TRUE
@@ -1299,6 +1312,12 @@ void render_about_dialog(SDL_Renderer *R, int mx, int my, bool mclick)
             "libvorbis",
             "Copyright (c) 2002-2020 Xiph.org Foundation",
             "https://www.xiph.org/vorbis/",
+#endif
+#if (USE_OPUS_DECODER == TRUE) || (USE_OPUS_ENCODER == TRUE)
+            "",
+            "libopus",
+            "Copyright (c) 2007-2026 Xiph.org Foundation",
+            "https://www.xiph.org/opus/",
 #endif
 #if (USE_FLAC_DECODER == TRUE) || (USE_FLAC_ENCODER == TRUE)
             "",
@@ -1406,6 +1425,9 @@ void render_about_dialog(SDL_Renderer *R, int mx, int my, bool mclick)
 #endif
 #if (USE_VORBIS_DECODER == TRUE) || (USE_VORBIS_ENCODER == TRUE)
         "", "libvorbis", "Copyright (c) 2002-2020 Xiph.org Foundation", "https://www.xiph.org/vorbis/",
+#endif
+#if (USE_OPUS_DECODER == TRUE) || (USE_OPUS_ENCODER == TRUE)
+        "", "libopus", "Copyright (c) 2007-2026 Xiph.org Foundation", "https://www.xiph.org/opus/",
 #endif
 #if (USE_FLAC_DECODER == TRUE) || (USE_FLAC_ENCODER == TRUE)
         "", "libFLAC", "Copyright (C) 2000-2009  Josh Coalson", "Copyright (C) 2011-2025  Xiph.Org Foundation", "https://www.xiph.org/flac/",

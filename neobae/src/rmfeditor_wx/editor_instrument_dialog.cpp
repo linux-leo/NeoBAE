@@ -209,6 +209,12 @@ public:
         m_compressionChoice->Append("VORBIS 64k");
         m_compressionChoice->Append("VORBIS 96k");
         m_compressionChoice->Append("FLAC (level 9)");
+        m_compressionChoice->Append("OPUS 16k");
+        m_compressionChoice->Append("OPUS 32k");
+        m_compressionChoice->Append("OPUS 64k");
+        m_compressionChoice->Append("OPUS 96k");
+        m_compressionChoice->Append("OPUS 128k");
+        m_compressionChoice->Append("OPUS 256k");
 
         for (size_t i = 0; i < m_samples.size(); ++i) {
             m_splitChoice->Append(BuildSplitLabel(static_cast<int>(i)));
@@ -344,6 +350,12 @@ private:
             case BAE_EDITOR_COMPRESSION_VORBIS_64K:   return 7;
             case BAE_EDITOR_COMPRESSION_VORBIS_96K:   return 8;
             case BAE_EDITOR_COMPRESSION_FLAC:         return 9;
+            case BAE_EDITOR_COMPRESSION_OPUS_16K:     return 10;
+            case BAE_EDITOR_COMPRESSION_OPUS_32K:     return 11;
+            case BAE_EDITOR_COMPRESSION_OPUS_64K:     return 12;
+            case BAE_EDITOR_COMPRESSION_OPUS_96K:     return 13;
+            case BAE_EDITOR_COMPRESSION_OPUS_128K:    return 14;
+            case BAE_EDITOR_COMPRESSION_OPUS_256K:    return 15;
             default:                                   return 1;
         }
     }
@@ -360,6 +372,12 @@ private:
             case 7:  return BAE_EDITOR_COMPRESSION_VORBIS_64K;
             case 8:  return BAE_EDITOR_COMPRESSION_VORBIS_96K;
             case 9:  return BAE_EDITOR_COMPRESSION_FLAC;
+            case 10: return BAE_EDITOR_COMPRESSION_OPUS_16K;
+            case 11: return BAE_EDITOR_COMPRESSION_OPUS_32K;
+            case 12: return BAE_EDITOR_COMPRESSION_OPUS_64K;
+            case 13: return BAE_EDITOR_COMPRESSION_OPUS_96K;
+            case 14: return BAE_EDITOR_COMPRESSION_OPUS_128K;
+            case 15: return BAE_EDITOR_COMPRESSION_OPUS_256K;
             default: return BAE_EDITOR_COMPRESSION_PCM;
         }
     }
@@ -688,6 +706,9 @@ private:
             if (codecLower.Contains("flac")) {
                 defaultExt = "flac";
                 filter = "FLAC files (*.flac)|*.flac|All files (*.*)|*.*";
+            } else if (codecLower.Contains("opus")) {
+                defaultExt = "opus";
+                filter = "Ogg Opus files (*.opus)|*.opus|All files (*.*)|*.*";
             } else if (codecLower.Contains("vorbis")) {
                 defaultExt = "ogg";
                 filter = "Ogg Vorbis files (*.ogg)|*.ogg|All files (*.*)|*.*";

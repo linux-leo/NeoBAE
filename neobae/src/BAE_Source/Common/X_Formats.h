@@ -857,7 +857,7 @@ typedef enum SndCompressionType
     C_VORBIS            = FOUR_CHAR('O','g','g','V'),   // 'OggV'   Ogg Vorbis audio
 #endif
 
-#if USE_OPUS_DECODER == TRUE
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
     C_OPUS              = FOUR_CHAR('O','g','g','O'),   // 'OggO'   Ogg Opus audio
 #endif
                                                         // for all of these compression types
@@ -888,7 +888,13 @@ typedef enum SndCompressionSubType
     CS_MPEG2            = FOUR_CHAR('m','2','0','0'),   // MPEG 2.0 compatible streams
     CS_VORBIS_32K       = FOUR_CHAR('v','0','3','2'),   // Ogg Vorbis target ~32 kbps
     CS_VORBIS_64K       = FOUR_CHAR('v','0','6','4'),   // Ogg Vorbis target ~64 kbps
-    CS_VORBIS_96K       = FOUR_CHAR('v','0','9','6')    // Ogg Vorbis target ~96 kbps
+    CS_VORBIS_96K       = FOUR_CHAR('v','0','9','6'),   // Ogg Vorbis target ~96 kbps
+    CS_OPUS_16K         = FOUR_CHAR('o','0','1','6'),   // Ogg Opus target 16 kbps
+    CS_OPUS_32K         = FOUR_CHAR('o','0','3','2'),   // Ogg Opus target 32 kbps
+    CS_OPUS_64K         = FOUR_CHAR('o','0','6','4'),   // Ogg Opus target 64 kbps
+    CS_OPUS_96K         = FOUR_CHAR('o','0','9','6'),   // Ogg Opus target 96 kbps
+    CS_OPUS_128K        = FOUR_CHAR('o','1','2','8'),   // Ogg Opus target 128 kbps
+    CS_OPUS_256K        = FOUR_CHAR('o','2','5','6')    // Ogg Opus target 256 kbps
 } SndCompressionSubType;
 
 enum
@@ -1232,6 +1238,14 @@ OPErr XEncodeVorbisToMemory(GM_Waveform const *src, float quality,
 
 #if USE_OPUS_DECODER != 0
 OPErr XExpandOpus(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst);
+#endif
+
+#if USE_OPUS_ENCODER == TRUE
+/* Encode a PCM GM_Waveform to an Ogg Opus bitstream in memory.
+ * bitrate is total stream bitrate in bits/sec (e.g. 64000, 96000, 128000, 256000).
+ * On success allocates *outData (caller must XDisposePtr) and sets *outSize. */
+OPErr XEncodeOpusToMemory(GM_Waveform const *src, uint32_t bitrate,
+                          XPTR *outData, uint32_t *outSize);
 #endif
 
 

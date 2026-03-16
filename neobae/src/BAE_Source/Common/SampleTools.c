@@ -1077,6 +1077,13 @@ XBYTE               order = X_WORD_ORDER;
             info->frames = XGetLong(&header3->frameCount);
             break;
 #endif
+#if USE_OPUS_DECODER == TRUE
+        case C_OPUS:
+            /* encodedBytes = Ogg Opus bitstream size; frameCount = decoded PCM frames */
+            info->size   = XGetLong(&header3->encodedBytes);
+            info->frames = XGetLong(&header3->frameCount);
+            break;
+#endif
         default:
             BAE_PRINTF("Unsupported codec %d\n", info->compressionType);
             BAE_ASSERT(FALSE);
@@ -2077,6 +2084,70 @@ XSoundFormat1*      header;
         XPutLong(&snd->sndBuffer.subType,      C_VORBIS);
         XPutLong(&snd->sndBuffer.sampleRate,   src.sampledRate);
         XPutLong(&snd->sndBuffer.frameCount,   src.waveFrames);   /* decoded frame count */
+        XPutLong(&snd->sndBuffer.encodedBytes, encodedBytes);
+        XPutLong(&snd->sndBuffer.decodedBytes, (uint32_t)(src.waveFrames * src.channels * (src.bitSize / 8)));
+        XPutLong(&snd->sndBuffer.blockBytes,   0);
+        XPutLong(&snd->sndBuffer.startFrame,   0);
+        XPutLong(&snd->sndBuffer.loopStart[0], src.startLoop);
+        XPutLong(&snd->sndBuffer.loopEnd[0],   src.endLoop);
+        snd->sndBuffer.baseKey    = (XBYTE)src.baseMidiPitch;
+        snd->sndBuffer.channels   = (XBYTE)src.channels;
+        snd->sndBuffer.bitSize    = (XBYTE)src.bitSize;
+        snd->sndBuffer.isEmbedded = TRUE;
+        XBlockMove(encodedData, snd->sndBuffer.sampleArea, (int32_t)encodedBytes);
+        XDisposePtr(encodedData);
+        return NO_ERR;
+    }
+#endif
+
+#if USE_OPUS_ENCODER == TRUE
+    case C_OPUS:
+    {
+    XPTR        encodedData;
+    uint32_t    encodedBytes;
+    OPErr       err;
+    XSndHeader3 *snd;
+    uint32_t    bitrate;
+    GM_Waveform pcmSrc;
+
+        pcmSrc = src;
+        if (pcmSrc.compressionType != (XDWORD)C_NONE)
+        {
+            XDisposePtr(intermediateData);
+            return PARAM_ERR;
+        }
+
+        switch (dstCompressionSubType)
+        {
+        case CS_OPUS_16K:  bitrate =  16000; break;
+        case CS_OPUS_32K:  bitrate =  32000; break;
+        case CS_OPUS_64K:  bitrate =  64000; break;
+        case CS_OPUS_96K:  bitrate =  96000; break;
+        case CS_OPUS_256K: bitrate = 256000; break;
+        case CS_OPUS_128K:
+        default:           bitrate = 128000; break;
+        }
+
+        err = XEncodeOpusToMemory(&pcmSrc, bitrate, &encodedData, &encodedBytes);
+        XDisposePtr(intermediateData);
+        if (err != NO_ERR || !encodedData)
+        {
+            return err != NO_ERR ? err : MEMORY_ERR;
+        }
+
+        *dst = XNewPtr((int32_t)(sizeof(XSndHeader3) + encodedBytes));
+        if (!*dst)
+        {
+            XDisposePtr(encodedData);
+            return MEMORY_ERR;
+        }
+        snd = (XSndHeader3 *)*dst;
+        XSetMemory(snd, sizeof(XSndHeader3), 0);
+        XPutShort(&snd->type, XThirdSoundFormat);
+
+        XPutLong(&snd->sndBuffer.subType,      C_OPUS);
+        XPutLong(&snd->sndBuffer.sampleRate,   src.sampledRate);
+        XPutLong(&snd->sndBuffer.frameCount,   src.waveFrames);
         XPutLong(&snd->sndBuffer.encodedBytes, encodedBytes);
         XPutLong(&snd->sndBuffer.decodedBytes, (uint32_t)(src.waveFrames * src.channels * (src.bitSize / 8)));
         XPutLong(&snd->sndBuffer.blockBytes,   0);

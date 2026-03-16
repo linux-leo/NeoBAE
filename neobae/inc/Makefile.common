@@ -19,14 +19,7 @@ BAE_LIBS      :=
 # Default build options (override with NOAUTO=1)
 ifneq ($(WASM),1)
 	ifneq ($(NOAUTO),1)
-		MP3_DEC := 1
-		MP3_ENC := 1
-		FLAC_DEC := 1
-		FLAC_ENC := 1
-		OGG_SUPPORT := 1
-		VORBIS_DEC := 1
-		VORBIS_ENC := 1
-		OPUS_DEC := 1
+		ZMF_SUPPORT := 1
 		KARAOKE := 1
 		BAESCRIPT := 1
 		PLAYLIST := 1
@@ -38,6 +31,19 @@ ifneq ($(WASM),1)
 		DISABLE_NOKIA := 0			    
 		DISABLE_BEATNIK_SF2_NRPN := 0   
 	endif
+endif
+
+ifeq ($(ZMF_SUPPORT),1)
+	# All of these are required for ZMF support
+	OGG_SUPPORT := 1
+	MP3_DEC := 1
+	MP3_ENC := 1
+	FLAC_DEC := 1
+	FLAC_ENC := 1
+	VORBIS_DEC := 1
+	VORBIS_ENC := 1
+	OPUS_DEC := 1
+	OPUS_ENC := 1
 endif
 
 # Disable SDL2 if using SDL3
@@ -62,7 +68,7 @@ endif
 
 # Force OGG support if VORBIS is chosen
 ifneq ($(OGG_SUPPORT),1)
-	ifneq ($(filter 1,$(VORBIS_ENC) $(VORBIS_DEC) $(FLAC_DEC) $(FLAC_ENC) $(OPUS_DEC)),) 
+	ifneq ($(filter 1,$(VORBIS_ENC) $(VORBIS_DEC) $(FLAC_DEC) $(FLAC_ENC) $(OPUS_DEC) $(OPUS_ENC)),) 
 		OGG_SUPPORT := 1
 	endif
 endif
@@ -105,13 +111,6 @@ ifneq ($(filter 1,$(MP3_ENC) $(MP3_DEC)),)
 	INC_PATH  += -Isrc/BAE_MPEG_Source_II
 endif
 
-# Ensure the legacy MPG API implementation is built when MP3 encoder or
-# decoder support is enabled. XMPEG_BAE_API.c implements MPG_* and
-# X* MPEG helper functions needed across the codebase.
-ifneq ($(filter 1,$(MP3_ENC) $(MP3_DEC)),)
-	SRC += src/BAE_MPEG_Source_II/XMPEG_BAE_API.c
-endif
-
 ifeq ($(MP3_DEC),1)
 INC_PATH	+= -Isrc/thirdparty/minimp3
 endif
@@ -125,7 +124,11 @@ ifeq ($(DISABLE_NOKIA),1)
 endif
 
 ifeq ($(DISABLE_BEATNIK_SF2_NRPN),1)
-	BAE_FLAGS +=	-DISABLE_BEATNIK_SF2_NRPN=1
+	BAE_FLAGS += -DISABLE_BEATNIK_SF2_NRPN=1
+endif
+
+ifeq ($(ZMF_SUPPORT),1)
+	BAE_FLAGS += -DUSE_ZMF_SUPPORT=1
 endif
 
 ifneq ($(filter 1,$(FLAC_ENC) $(FLAC_DEC)),) 
@@ -143,15 +146,28 @@ ifneq ($(filter 1,$(FLAC_ENC) $(FLAC_DEC)),)
 	endif
 endif
 
-ifeq ($(OPUS_DEC),1) 
-	INC_PATH	+= -Isrc/thirdparty/opus/include -Isrc/thirdparty/opusfile/include
-	ifeq ($(XPHACK),1)
-		BAE_LIBS 	:= -lopusfile.dll -lopus.dll $(BAE_LIBS)
-	else
-		BAE_LIBS 	:= -lopusfile -lopus $(BAE_LIBS)
+ifneq ($(filter 1,$(OPUS_DEC) $(OPUS_ENC)),)
+	INC_PATH	+= -Isrc/thirdparty/opus/include
+	ifeq ($(OPUS_DEC),1)
+		INC_PATH	+= -Isrc/thirdparty/opusfile/include
 	endif
-	BAE_FLAGS += -DUSE_OPUS_DECODER=1
-	SRC += src/BAE_Source/Common/XOpusFiles.c
+	ifeq ($(XPHACK),1)
+		BAE_LIBS 	:= -lopus.dll $(BAE_LIBS)
+		ifeq ($(OPUS_DEC),1)
+			BAE_LIBS 	:= -lopusfile.dll $(BAE_LIBS)
+		endif
+	else
+		BAE_LIBS 	:= -lopus $(BAE_LIBS)
+		ifeq ($(OPUS_DEC),1)
+			BAE_LIBS 	:= -lopusfile $(BAE_LIBS)
+		endif
+	endif
+	ifeq ($(OPUS_DEC),1)
+		BAE_FLAGS += -DUSE_OPUS_DECODER=1
+	endif
+	ifeq ($(OPUS_ENC),1)
+		BAE_FLAGS += -DUSE_OPUS_ENCODER=1
+	endif
 endif
 
 ifneq ($(filter 1,$(VORBIS_DEC) $(VORBIS_ENC)),) 
@@ -375,6 +391,10 @@ ifneq ($(filter 1,$(VORBIS_DEC) $(VORBIS_ENC)),)
 	ifeq ($(VORBIS_ENC),1)
 		BAE_FLAGS += -DUSE_VORBIS_ENCODER=1
 	endif
+endif
+
+ifneq ($(filter 1,$(OPUS_DEC) $(OPUS_ENC)),)
+	SRC += src/BAE_Source/Common/XOpusFiles.c
 endif
 
 ifeq ($(OGG_SUPPORT),1)

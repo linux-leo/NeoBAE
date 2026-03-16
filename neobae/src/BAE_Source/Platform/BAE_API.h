@@ -391,6 +391,16 @@ void BAE_Platform_SetVorbisRecorderCallback(void (*callback)(int16_t *left, int1
 void BAE_Platform_ClearVorbisRecorderCallback(void);
 #endif
 
+#if USE_OPUS_ENCODER == TRUE
+// Opus recording callback functions - similar to Vorbis/FLAC.
+// The callback receives separate left/right channel arrays and frame count.
+// Pass NULL to clear the callback.
+void BAE_Platform_SetOpusRecorderCallback(void (*callback)(int16_t *left, int16_t *right, int frames));
+
+// Clear the Opus recorder callback. Safe to call if no callback is set.
+void BAE_Platform_ClearOpusRecorderCallback(void);
+#endif
+
 // **** Audio Engine feedback functions. These functions are used to direct or get
 //      information about the engine.
 //

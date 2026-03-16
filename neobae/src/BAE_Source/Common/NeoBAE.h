@@ -205,6 +205,8 @@ extern "C"
         BAE_COMPRESSION_VORBIS_256,
         BAE_COMPRESSION_VORBIS_320,
         // Opus quality-bitrate mappings (codec export targets)
+        BAE_COMPRESSION_OPUS_16,
+        BAE_COMPRESSION_OPUS_32,
         BAE_COMPRESSION_OPUS_64,
         BAE_COMPRESSION_OPUS_96,
         BAE_COMPRESSION_OPUS_128,
@@ -303,7 +305,7 @@ extern "C"
 #if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE
         BAE_VORBIS_TYPE,
 #endif        
-#if USE_OPUS_DECODER == TRUE
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
         BAE_OPUS_TYPE,
 #endif        
 
@@ -2886,7 +2888,13 @@ typedef enum BAERmfEditorCompressionType
     BAE_EDITOR_COMPRESSION_VORBIS_32K  = 6,  /* Ogg Vorbis at ~32 kbps */
     BAE_EDITOR_COMPRESSION_VORBIS_64K  = 7,  /* Ogg Vorbis at ~64 kbps */
     BAE_EDITOR_COMPRESSION_VORBIS_96K  = 8,  /* Ogg Vorbis at ~96 kbps */
-    BAE_EDITOR_COMPRESSION_FLAC        = 9   /* FLAC lossless (compression level 9) */
+    BAE_EDITOR_COMPRESSION_FLAC        = 9,  /* FLAC lossless (compression level 9) */
+    BAE_EDITOR_COMPRESSION_OPUS_64K    = 10, /* Ogg Opus at 64 kbps */
+    BAE_EDITOR_COMPRESSION_OPUS_96K    = 11, /* Ogg Opus at 96 kbps */
+    BAE_EDITOR_COMPRESSION_OPUS_128K   = 12, /* Ogg Opus at 128 kbps */
+    BAE_EDITOR_COMPRESSION_OPUS_256K   = 13, /* Ogg Opus at 256 kbps */
+    BAE_EDITOR_COMPRESSION_OPUS_16K    = 14, /* Ogg Opus at 16 kbps */
+    BAE_EDITOR_COMPRESSION_OPUS_32K    = 15  /* Ogg Opus at 32 kbps */
 } BAERmfEditorCompressionType;
 
 typedef struct BAERmfEditorSampleInfo
