@@ -3943,6 +3943,10 @@ static BAEResult PV_LoadRmfFileIntoDocument(BAERmfEditorDocument *document, BAEP
     {
         BAERmfEditorDocument_SetInfo(document, TITLE_INFO, songInfo->title);
     }
+    if (songInfo->performed)
+    {
+        BAERmfEditorDocument_SetInfo(document, PERFORMED_BY_INFO, songInfo->performed);
+    }
     if (songInfo->composer)
     {
         BAERmfEditorDocument_SetInfo(document, COMPOSER_INFO, songInfo->composer);
@@ -3950,6 +3954,50 @@ static BAEResult PV_LoadRmfFileIntoDocument(BAERmfEditorDocument *document, BAEP
     if (songInfo->copyright)
     {
         BAERmfEditorDocument_SetInfo(document, COPYRIGHT_INFO, songInfo->copyright);
+    }
+    if (songInfo->publisher_contact_info)
+    {
+        BAERmfEditorDocument_SetInfo(document, PUBLISHER_CONTACT_INFO, songInfo->publisher_contact_info);
+    }
+    if (songInfo->use_license)
+    {
+        BAERmfEditorDocument_SetInfo(document, USE_OF_LICENSE_INFO, songInfo->use_license);
+    }
+    if (songInfo->licensed_to_URL)
+    {
+        BAERmfEditorDocument_SetInfo(document, LICENSED_TO_URL_INFO, songInfo->licensed_to_URL);
+    }
+    if (songInfo->license_term)
+    {
+        BAERmfEditorDocument_SetInfo(document, LICENSE_TERM_INFO, songInfo->license_term);
+    }
+    if (songInfo->expire_date)
+    {
+        BAERmfEditorDocument_SetInfo(document, EXPIRATION_DATE_INFO, songInfo->expire_date);
+    }
+    if (songInfo->compser_notes)
+    {
+        BAERmfEditorDocument_SetInfo(document, COMPOSER_NOTES_INFO, songInfo->compser_notes);
+    }
+    if (songInfo->index_number)
+    {
+        BAERmfEditorDocument_SetInfo(document, INDEX_NUMBER_INFO, songInfo->index_number);
+    }
+    if (songInfo->genre)
+    {
+        BAERmfEditorDocument_SetInfo(document, GENRE_INFO, songInfo->genre);
+    }
+    if (songInfo->sub_genre)
+    {
+        BAERmfEditorDocument_SetInfo(document, SUB_GENRE_INFO, songInfo->sub_genre);
+    }
+    if (songInfo->tempo_description)
+    {
+        BAERmfEditorDocument_SetInfo(document, TEMPO_DESCRIPTION_INFO, songInfo->tempo_description);
+    }
+    if (songInfo->original_source)
+    {
+        BAERmfEditorDocument_SetInfo(document, ORIGINAL_SOURCE_INFO, songInfo->original_source);
     }
     objectResourceID = songInfo->objectResourceID;
     document->originalSongID = songID;

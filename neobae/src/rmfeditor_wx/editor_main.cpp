@@ -9,6 +9,7 @@
 #include <wx/dcbuffer.h>
 #include <wx/button.h>
 #include <wx/file.h>
+#include <wx/fileconf.h>
 #include <wx/filedlg.h>
 #include <wx/filename.h>
 #include <wx/choice.h>
@@ -27,6 +28,7 @@ extern "C" {
 }
 
 #include "editor_instrument_ext_dialog.h"
+#include "editor_metadata_dialog.h"
 #include "editor_pianoroll_panel.h"
 
 namespace {
@@ -193,6 +195,7 @@ public:
         m_playButton = new wxButton(editorPanel, wxID_ANY, "Play");
         m_pauseButton = new wxButton(editorPanel, wxID_ANY, "Pause/Resume");
         m_stopButton = new wxButton(editorPanel, wxID_ANY, "Stop");
+        m_metadataButton = new wxButton(editorPanel, wxID_ANY, "Metadata");
         m_playScopeChoice = new wxChoice(editorPanel, wxID_ANY);
         m_previewVolumeSlider = new wxSlider(editorPanel, wxID_ANY, 100, 0, 100, wxDefaultPosition, wxSize(120, -1), wxSL_HORIZONTAL);
         m_playScopeChoice->Append("All Tracks");
@@ -220,6 +223,8 @@ public:
         transportSizer->Add(m_playScopeChoice, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
         transportSizer->Add(new wxStaticText(editorPanel, wxID_ANY, "Preview Vol"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
         transportSizer->Add(m_previewVolumeSlider, 0, wxALIGN_CENTER_VERTICAL, 0);
+        transportSizer->AddStretchSpacer(1);
+        transportSizer->Add(m_metadataButton, 0, wxALIGN_CENTER_VERTICAL);
 
         m_positionSlider = new wxSlider(editorPanel, wxID_ANY, 0, 0, 1000, wxDefaultPosition, wxDefaultSize, wxSL_HORIZONTAL);
         m_positionLabel = new wxStaticText(editorPanel, wxID_ANY, "0:00.0 / 0:00.0");
@@ -275,6 +280,7 @@ public:
         m_stopButton->Bind(wxEVT_BUTTON, &MainFrame::OnStop, this);
         m_previewVolumeSlider->Bind(wxEVT_SLIDER, &MainFrame::OnPreviewVolumeChanged, this);
         m_positionSlider->Bind(wxEVT_SLIDER, &MainFrame::OnSeekSlider, this);
+        m_metadataButton->Bind(wxEVT_BUTTON, &MainFrame::OnMetadata, this);
         Bind(wxEVT_MENU, &MainFrame::OnTrackAdd, this, ID_TrackAdd);
         Bind(wxEVT_MENU, &MainFrame::OnTrackDelete, this, ID_TrackDelete);
         Bind(wxEVT_MENU, &MainFrame::OnSampleAdd, this, ID_SampleAdd);
@@ -286,11 +292,13 @@ public:
         Bind(wxEVT_MENU, &MainFrame::OnLoadBank, this, ID_LoadBank);
         Bind(wxEVT_MENU, &MainFrame::OnUnloadBanks, this, ID_UnloadBanks);
         Bind(wxEVT_TIMER, &MainFrame::OnPlaybackTimer, this);
+        LoadIniSettings();
         UpdateUndoMenuState();
 
     }
 
     ~MainFrame() override {
+        SaveIniSettings();
         if (m_document) {
             BAERmfEditorDocument_Delete(m_document);
             m_document = nullptr;
@@ -320,6 +328,7 @@ private:
     wxButton *m_playButton;
     wxButton *m_pauseButton;
     wxButton *m_stopButton;
+    wxButton *m_metadataButton;
     wxChoice *m_playScopeChoice;
     wxSlider *m_previewVolumeSlider;
     wxSlider *m_positionSlider;
@@ -344,6 +353,35 @@ private:
     wxString m_pendingUndoLabel;
     bool m_hasPendingUndo;
     bool m_restoringUndo;
+
+    static wxString GetIniPath() {
+        return wxFileName::GetHomeDir() + "/.nbstudio.ini";
+    }
+
+    void LoadIniSettings() {
+        wxFileConfig config(wxEmptyString,
+                            wxEmptyString,
+                            GetIniPath(),
+                            wxEmptyString,
+                            wxCONFIG_USE_LOCAL_FILE);
+        long previewVolume;
+
+        previewVolume = 100;
+        if (config.Read("audio/preview_volume", &previewVolume) && m_previewVolumeSlider) {
+            m_previewVolumeSlider->SetValue(std::clamp<long>(previewVolume, 0, 100));
+        }
+    }
+
+    void SaveIniSettings() {
+        wxFileConfig config(wxEmptyString,
+                            wxEmptyString,
+                            GetIniPath(),
+                            wxEmptyString,
+                            wxCONFIG_USE_LOCAL_FILE);
+
+        config.Write("audio/preview_volume", static_cast<long>(m_previewVolumeSlider ? m_previewVolumeSlider->GetValue() : 100));
+        config.Flush();
+    }
 
     BAE_UNSIGNED_FIXED GetPreviewVolumeFixed() const {
         int percent = 100;
@@ -2271,6 +2309,14 @@ private:
             UpdatePositionLabel(targetUsec, totalUsec);
         }
         PianoRollPanel_SetPlayheadTick(m_pianoRoll, playheadTick);
+    }
+
+    void OnMetadata(wxCommandEvent &) {
+        if (!m_document) {
+            wxMessageBox("Nothing is loaded.", "Metadata", wxOK | wxICON_INFORMATION, this);
+            return;
+        }
+        ShowMetadataDialog(this, m_document);
     }
 
     void OnLoadBank(wxCommandEvent &) {

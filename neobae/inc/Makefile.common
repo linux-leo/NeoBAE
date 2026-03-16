@@ -448,6 +448,7 @@ else
 			SRC_BIN := $(SRC) \
 				src/rmfeditor_wx/editor_main.cpp \
 				src/rmfeditor_wx/editor_instrument_ext_dialog.cpp \
+				src/rmfeditor_wx/editor_metadata_dialog.cpp \
 				src/rmfeditor_wx/editor_pianoroll_panel.cpp
 		else
 			# playbae = libNeoBAE srcs + playbae.c

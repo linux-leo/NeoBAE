@@ -7637,6 +7637,64 @@ BAEResult BAESong_LoadMidiFromFile(BAESong song, BAEPathName filePath, BAE_BOOL 
     return BAE_TranslateOPErr(theErr);
 }
 
+// PV_XFileHasModernCodecSamples()
+// --------------------------------------
+// Scan an open XFILE resource map for any snd /csnd/esnd resource that uses
+// a "modern" codec (FLAC, Ogg Vorbis, or Ogg Opus).  Only Type 3 snd headers
+// carry these codecs, so we only look there.
+//
+// These codec FourCC values are checked unconditionally regardless of which
+// decoder features are compiled in, so the guard is always effective.
+//
+// Returns TRUE if at least one such resource is found, FALSE otherwise.
+//
+#if USE_FULL_RMF_SUPPORT == TRUE
+static XBOOL PV_XFileHasModernCodecSamples(XFILE fileRef)
+{
+    static const XResourceType sndTypes[] = { ID_SND, ID_CSND, ID_ESND };
+    // FourCC values for the blocked codecs – hard-coded so the check works
+    // even when a particular decoder is not compiled in.
+    static const uint32_t modernCodecs[] = {
+        0x664C6143UL,   // 'fLaC' = C_FLAC
+        0x4F676756UL,   // 'OggV' = C_VORBIS
+        0x4F67674FUL    // 'OggO' = C_OPUS
+    };
+
+    for (int t = 0; t < 3; t++)
+    {
+        int32_t count = XCountFileResourcesOfType(fileRef, sndTypes[t]);
+        for (int32_t i = 0; i < count; i++)
+        {
+            XLongResourceID resID;
+            int32_t resSize = 0;
+            XPTR resData = XGetIndexedFileResource(fileRef, sndTypes[t], &resID, i, NULL, &resSize);
+            if (resData && resSize >= 6)
+            {
+                const uint8_t *rb = (const uint8_t *)resData;
+                // First 2 bytes: snd resource format type (big-endian int16)
+                uint16_t soundFormat = ((uint16_t)rb[0] << 8) | rb[1];
+                if (soundFormat == (uint16_t)XThirdSoundFormat)
+                {
+                    // Bytes 2-5: XSoundHeader3.subType (big-endian FourCC)
+                    uint32_t subType = ((uint32_t)rb[2] << 24) | ((uint32_t)rb[3] << 16)
+                                     | ((uint32_t)rb[4] <<  8) |  (uint32_t)rb[5];
+                    for (int c = 0; c < 3; c++)
+                    {
+                        if (subType == modernCodecs[c])
+                        {
+                            XDisposePtr(resData);
+                            return TRUE;
+                        }
+                    }
+                }
+            }
+            XDisposePtr(resData);
+        }
+    }
+    return FALSE;
+}
+#endif // USE_FULL_RMF_SUPPORT == TRUE
+
 // BAESong_LoadRmfFromMemory()
 // --------------------------------------
 // was BAERmfSong::LoadFromMemory()
@@ -7660,6 +7718,25 @@ BAEResult BAESong_LoadRmfFromMemory(BAESong song, void const *pRMFData, uint32_t
             fileRef = XFileOpenResourceFromMemory((XPTR)pRMFData, rmfSize, TRUE);
             if (fileRef)
             {
+                // Reject IREZ (classic RMF) files that contain modern-codec samples.
+                // Only ZREZ (ZMF) files are permitted to embed FLAC, Vorbis, or Opus.
+                {
+                    XFILERESOURCEMAP mapHdr;
+                    XFileSetPosition(fileRef, 0L);
+                    if (XFileRead(fileRef, &mapHdr, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
+                    {
+                        if (XGetLong(&mapHdr.mapID) == XFILERESOURCE_ID) // IREZ, not ZREZ
+                        {
+                            if (PV_XFileHasModernCodecSamples(fileRef))
+                            {
+                                BAE_PRINTF("[RMF] IREZ file rejected: contains FLAC/Vorbis/Opus sample(s) — upgrade to ZMF (.zmf)\n");
+                                XFileClose(fileRef);
+                                BAE_ReleaseMutex(song->mLock);
+                                return BAE_UNSUPPORTED_FORMAT;
+                            }
+                        }
+                    }
+                }
                 {
 #if _DEBUG
                     int32_t songCount = XCountFileResourcesOfType(fileRef, ID_SONG);
@@ -7884,6 +7961,25 @@ BAEResult BAESong_LoadRmfFromFile(BAESong song, BAEPathName filePath, int16_t so
         fileRef = XFileOpenResource(&name, TRUE);
         if (fileRef)
         {
+            // Reject IREZ (classic RMF) files that contain modern-codec samples.
+            // Only ZREZ (ZMF) files are permitted to embed FLAC, Vorbis, or Opus.
+            {
+                XFILERESOURCEMAP mapHdr;
+                XFileSetPosition(fileRef, 0L);
+                if (XFileRead(fileRef, &mapHdr, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
+                {
+                    if (XGetLong(&mapHdr.mapID) == XFILERESOURCE_ID) // IREZ, not ZREZ
+                    {
+                        if (PV_XFileHasModernCodecSamples(fileRef))
+                        {
+                            BAE_PRINTF("[RMF] IREZ file rejected: contains FLAC/Vorbis/Opus sample(s) — upgrade to ZMF (.zmf)\n");
+                            XFileClose(fileRef);
+                            BAE_ReleaseMutex(song->mLock);
+                            return BAE_UNSUPPORTED_FORMAT;
+                        }
+                    }
+                }
+            }
             pXSong = (SongResource *)XGetIndexedFileResource(fileRef, ID_SONG, &theID, songIndex, NULL, &size);
             if (pXSong)
             {

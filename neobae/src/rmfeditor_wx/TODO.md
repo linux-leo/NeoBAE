@@ -30,17 +30,17 @@
 - ~~Instrument name is lost when clicking OK on Instrument Editor Dialog~~
 - ~~Add a delete sample button to the sample editor with confirmation~~
 - ~~Add a "New Sample" button somewhere in the instrument dialog, let it create a empty sample like the Add Sample context menu~~
-- ~~Replicate `Linn Groove 900.rmf` in preview player and export~~
 - ~~Add 'duration' to event edit dialogs~~
 - ~~Remove "Add Sample" from context menu. Replace "Delete Sample" with "Delete Instrument"~~
 - ~~"Add Instrument" should default to first unused program~~
 - ~~There are some instances where Bank 2 still shows as Bank 256 (eg note edit dialog)~~
 - ~~Replace tempfile RMF preview playback with in-memory ZMF playback~~
-- Make RMF refuse to play if it has ZMF codecs
+- ~~Make RMF refuse to play if it has ZMF codecs~~
 - ~~Main piano roll should center vertical on MIDI content not just scroll to bottom~~
 - ~~Add preview playback volume slider (0-100, default 100), apply it to sample previews too~~
-- Add ini save system to store preview playback volume on exit, and restore it on load
-- Metadata editor, and loss of metadata
+- ~~Add ini save system to store preview playback volume on exit, and restore it on load~~
+- ~~Metadata editor, and loss of metadata~~
+- ~~Replicate `Linn Groove 900.rmf` in preview player and export~~
 
 # Future
 - SESSIONS! Savable and loadable workspace sessions.
