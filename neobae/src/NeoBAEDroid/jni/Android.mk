@@ -101,6 +101,7 @@ LOCAL_SRC_FILES	:= \
 			Common/sha1mini.c \
 			Common/XFileTypes.c \
       		Common/XVorbisFiles.c \
+			Common/XOpusFiles.c \
 			../BAE_MPEG_Source_II/XMPEG_minimp3_wrapper.c \
 			../BAE_MPEG_Source_II/XMPEGFilesSun.c \
 			Platform/jni/com_zefie_NeoBAE_Mixer.c \
@@ -162,6 +163,8 @@ LOCAL_C_INCLUDES	  += $(LOCAL_PATH)/../thirdparty/minimp3/
 LOCAL_C_INCLUDES	  += $(LOCAL_PATH)/../NeoBAEDroid
 LOCAL_C_INCLUDES	  += $(LOCAL_PATH)/../../../deps/android/jniLibs/$(TARGET_ARCH_ABI)/fluidsynth/include
 LOCAL_C_INCLUDES	  += $(LOCAL_PATH)/../../../deps/android/jniLibs/$(TARGET_ARCH_ABI)/sqlite3/include
+LOCAL_C_INCLUDES	  += $(LOCAL_PATH)/../../../deps/android/jniLibs/$(TARGET_ARCH_ABI)/libopus/include
+LOCAL_C_INCLUDES	  += $(LOCAL_PATH)/../../../deps/android/jniLibs/$(TARGET_ARCH_ABI)/libopus/include/opus
 LOCAL_C_INCLUDES    += $(LOCAL_PATH)/../thirdparty/config
 LOCAL_C_INCLUDES    += $(LOCAL_PATH)/../thirdparty/libogg/include
 LOCAL_C_INCLUDES    += $(LOCAL_PATH)/../thirdparty/libvorbis/include
@@ -169,7 +172,7 @@ LOCAL_C_INCLUDES    += $(LOCAL_PATH)/../thirdparty/flac/include
 LOCAL_C_INCLUDES    += $(LOCAL_PATH)/../thirdparty/flac/src/libFLAC/include
 LOCAL_C_INCLUDES    += $(LOCAL_PATH)/../thirdparty/libvorbis/lib
 
-LOCAL_CFLAGS := -std=c99 -O2 -D_VERSION=\"$(VERSION)\" -DX_PLATFORM=X_ANDROID -D__ANDROID__=1 -D_BUILT_IN_PATCHES=0 -DUSE_MINIMP3_WRAPPER=1 -DUSE_VORBIS_DECODER=1 -DUSE_FLAC_DECODER=1 -DUSE_MPEG_DECODER=1 -DUSE_SF2_SUPPORT=1 -DUSE_OGG_FORMAT=1 -DUSE_VORBIS_ENCODER=1 -DUSE_FLAC_ENCODER=1 -D_USING_FLUIDSYNTH=1 -DUSE_XMF_SUPPORT=1 -DUSE_HIGHLEVEL_FILE_API=1 -DSUPPORT_KARAOKE=1 -DFLAC__NO_DLL -DHAVE_CONFIG_H=1 -Wall -fsigned-char
+LOCAL_CFLAGS := -std=c99 -O2 -D_VERSION=\"$(VERSION)\" -DX_PLATFORM=X_ANDROID -D__ANDROID__=1 -D_BUILT_IN_PATCHES=0 -DUSE_MINIMP3_WRAPPER=1 -DUSE_VORBIS_DECODER=1 -DUSE_FLAC_DECODER=1 -DUSE_MPEG_DECODER=1 -DUSE_SF2_SUPPORT=1 -DUSE_OGG_FORMAT=1 -DUSE_VORBIS_ENCODER=1 -DUSE_FLAC_ENCODER=1 -D_USING_FLUIDSYNTH=1 -DUSE_XMF_SUPPORT=1 -DUSE_HIGHLEVEL_FILE_API=1 -DSUPPORT_KARAOKE=1 -DUSE_OPUS_DECODER=1 -DUSE_ZMF_FORMAT=1 -DFLAC__NO_DLL -DHAVE_CONFIG_H=1 -Wall -fsigned-char
 
 ifeq ($(APP_OPTIM),debug)
     LOCAL_CFLAGS += -D_DEBUG=1
@@ -193,7 +196,7 @@ LOCAL_LDLIBS    += -lz
 
 
 # Link against prebuilt FluidSynth
-LOCAL_SHARED_LIBRARIES := fluidsynth sndfile ogg vorbis vorbisenc FLAC opus sqlite3
+LOCAL_SHARED_LIBRARIES := fluidsynth sndfile ogg vorbis vorbisenc FLAC opus opusfile sqlite3
 
 include $(BUILD_SHARED_LIBRARY)
 
@@ -244,5 +247,11 @@ include $(PREBUILT_SHARED_LIBRARY)
 include $(CLEAR_VARS)
 LOCAL_MODULE := opus
 LOCAL_SRC_FILES := $(LOCAL_PATH)/../../../deps/android/jniLibs/$(TARGET_ARCH_ABI)/libopus/lib/libopus.so
+include $(PREBUILT_SHARED_LIBRARY)
+
+# Import prebuilt opusfile .so
+include $(CLEAR_VARS)
+LOCAL_MODULE := opusfile
+LOCAL_SRC_FILES := $(LOCAL_PATH)/../../../deps/android/jniLibs/$(TARGET_ARCH_ABI)/libopus/lib/libopusfile.so
 include $(PREBUILT_SHARED_LIBRARY)
 
