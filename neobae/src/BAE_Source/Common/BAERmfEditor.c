@@ -1,5 +1,4 @@
 #include "NeoBAE.h"
-
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -941,6 +940,10 @@ static int PV_CompareCCEvents(void const *left, void const *right);
 static XBOOL PV_TrackHasMetaType(BAERmfEditorTrack const *track, unsigned char type);
 static BAERmfEditorCCEvent *PV_FindTrackCCEvent(BAERmfEditorTrack *track, unsigned char cc, uint32_t eventIndex, uint32_t *outActualIndex);
 static BAERmfEditorCCEvent const *PV_FindTrackCCEventConst(BAERmfEditorTrack const *track, unsigned char cc, uint32_t eventIndex, uint32_t *outActualIndex);
+static unsigned char PV_ToLowerAscii(unsigned char c);
+static XBOOL PV_IsLoopStartMarkerText(unsigned char const *data, uint32_t size, int32_t *outLoopCount);
+static XBOOL PV_IsLoopEndMarkerText(unsigned char const *data, uint32_t size);
+static void PV_RemoveLoopMarkersFromTrack(BAERmfEditorTrack *track);
 
 static char *PV_DuplicateString(char const *source)
 {
@@ -1929,6 +1932,131 @@ static void PV_FreeTrackMetaEvents(BAERmfEditorTrack *track)
     }
     track->metaEventCount = 0;
     track->metaEventCapacity = 0;
+}
+
+static unsigned char PV_ToLowerAscii(unsigned char c)
+{
+    if (c >= 'A' && c <= 'Z')
+    {
+        return (unsigned char)(c + ('a' - 'A'));
+    }
+    return c;
+}
+
+static XBOOL PV_MarkerStartsWith(unsigned char const *data, uint32_t size, char const *text)
+{
+    uint32_t i;
+
+    if (!data || !text)
+    {
+        return FALSE;
+    }
+    for (i = 0; text[i] != 0; ++i)
+    {
+        if (i >= size)
+        {
+            return FALSE;
+        }
+        if (PV_ToLowerAscii(data[i]) != (unsigned char)text[i])
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static XBOOL PV_IsLoopStartMarkerText(unsigned char const *data, uint32_t size, int32_t *outLoopCount)
+{
+    if (outLoopCount)
+    {
+        *outLoopCount = -1;
+    }
+    if (!data || size == 0)
+    {
+        return FALSE;
+    }
+
+    if (PV_MarkerStartsWith(data, size, "[") || PV_MarkerStartsWith(data, size, "start"))
+    {
+        return TRUE;
+    }
+    if (PV_MarkerStartsWith(data, size, "loopstart"))
+    {
+        if (size > 9 && data[9] == '=')
+        {
+            int32_t count;
+            uint32_t i;
+
+            count = 0;
+            for (i = 10; i < size; ++i)
+            {
+                unsigned char ch;
+
+                ch = data[i];
+                if (ch < '0' || ch > '9')
+                {
+                    break;
+                }
+                count = (count * 10) + (int32_t)(ch - '0');
+            }
+            if (outLoopCount && count > 0)
+            {
+                *outLoopCount = count;
+            }
+        }
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static XBOOL PV_IsLoopEndMarkerText(unsigned char const *data, uint32_t size)
+{
+    if (!data || size == 0)
+    {
+        return FALSE;
+    }
+    if (PV_MarkerStartsWith(data, size, "]") ||
+        PV_MarkerStartsWith(data, size, "end") ||
+        PV_MarkerStartsWith(data, size, "loopend"))
+    {
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static void PV_RemoveLoopMarkersFromTrack(BAERmfEditorTrack *track)
+{
+    uint32_t readIndex;
+    uint32_t writeIndex;
+
+    if (!track || track->metaEventCount == 0)
+    {
+        return;
+    }
+    writeIndex = 0;
+    for (readIndex = 0; readIndex < track->metaEventCount; ++readIndex)
+    {
+        BAERmfEditorMetaEvent *event;
+
+        event = &track->metaEvents[readIndex];
+        if (event->type == 0x06 &&
+            (PV_IsLoopStartMarkerText(event->data, event->size, NULL) ||
+             PV_IsLoopEndMarkerText(event->data, event->size)))
+        {
+            if (event->data)
+            {
+                XDisposePtr(event->data);
+                event->data = NULL;
+            }
+            continue;
+        }
+        if (writeIndex != readIndex)
+        {
+            track->metaEvents[writeIndex] = *event;
+        }
+        writeIndex++;
+    }
+    track->metaEventCount = writeIndex;
 }
 
 static int PV_CompareCCEvents(void const *left, void const *right)
@@ -3760,6 +3888,50 @@ static BAEResult PV_AddInstrumentExt(BAERmfEditorDocument *document, BAERmfEdito
     return BAE_NO_ERROR;
 }
 
+static void PV_EnsureInstrumentExtForRemappedID(BAERmfEditorDocument *document,
+                                                XLongResourceID oldInstID,
+                                                XLongResourceID newInstID)
+{
+    BAERmfEditorInstrumentExt *oldExt;
+    BAERmfEditorInstrumentExt clone;
+    BAEResult addResult;
+
+    if (!document || oldInstID == 0 || newInstID == 0 || oldInstID == newInstID)
+    {
+        return;
+    }
+    if (PV_FindInstrumentExt(document, newInstID))
+    {
+        return;
+    }
+    oldExt = PV_FindInstrumentExt(document, oldInstID);
+    if (!oldExt)
+    {
+        return;
+    }
+
+    clone = *oldExt;
+    clone.instID = newInstID;
+    clone.dirty = TRUE;
+    clone.displayName = NULL;
+    clone.originalInstData = NULL;
+    clone.originalInstSize = 0;
+    if (oldExt->displayName)
+    {
+        clone.displayName = PV_DuplicateString(oldExt->displayName);
+        if (!clone.displayName)
+        {
+            return;
+        }
+    }
+
+    addResult = PV_AddInstrumentExt(document, &clone);
+    if (addResult != BAE_NO_ERROR && clone.displayName)
+    {
+        XDisposePtr(clone.displayName);
+    }
+}
+
 static void PV_ClearInstrumentExts(BAERmfEditorDocument *document)
 {
     uint32_t i;
@@ -4160,6 +4332,11 @@ static XPTR PV_SerializeExtendedInstTail(BAERmfEditorInstrumentExt const *ext, i
    as editable samples in the document. Includes all key-split variants. */
 static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE fileRef)
 {
+    enum
+    {
+        kInstHeaderMinSize = 14,
+        kInstKeySplitSize = 8
+    };
     int32_t instIndex;
 
     for (instIndex = 0; ; ++instIndex)
@@ -4182,7 +4359,9 @@ static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE 
         {
             break;
         }
-        if (instSize < (int32_t)sizeof(InstrumentResource) || instID < 256)
+        /* Some RMFs intentionally override Bank 0 with low INST IDs (<256).
+         * Do not filter those out, or their embedded samples become invisible. */
+        if (instSize < kInstHeaderMinSize)
         {
             XDisposePtr(instData);
             continue;
@@ -4193,6 +4372,15 @@ static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE 
         baseSndID = (XShortResourceID)XGetShort(&inst->sndResourceID);
         baseRootKey = (int16_t)XGetShort(&inst->midiRootKey);
         splitCount = (int16_t)XGetShort(&inst->keySplitCount);
+        if (splitCount < 0)
+        {
+            splitCount = 0;
+        }
+        if (instSize < (kInstHeaderMinSize + (splitCount * kInstKeySplitSize)))
+        {
+            XDisposePtr(instData);
+            continue;
+        }
         program = (unsigned char)(instID % 128);
 
         /* Detect whether this INST uses miscParameter1 as the per-sample root key
@@ -4222,10 +4410,12 @@ static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE 
                 {
                     /* miscParameter1 is the authoritative per-split root key */
                     int16_t splitRoot = split.miscParameter1;
-                    if (split.lowMidi == split.highMidi &&
-                        (splitRoot == 0 || (splitRoot == 60 && baseRootKey == 60)))
+                    if (split.lowMidi == split.highMidi && splitRoot == 0)
                     {
-                        /* Single-key split with no meaningful root override: infer from split key. */
+                        /* Single-key split with unset root key: infer from split key.
+                         * rootKey=60 is a valid explicit value (sample pitched at middle C)
+                         * and must NOT be overridden — doing so would break instruments
+                         * where all splits share the same root key for transposition. */
                         splitRoot = (int16_t)split.lowMidi;
                     }
                     if (splitRoot < 0 || splitRoot > 127)
@@ -6098,7 +6288,33 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
 
             if (!usedPreferredID)
             {
-                if (PV_GetAvailableResourceID(fileRef, ID_SND, 1, &sndID) != BAE_NO_ERROR)
+                /* Deterministic fallback: scan IDs starting from 1 and pick the
+                 * first one not already claimed by a prior sample in this save pass.
+                 * This avoids the random ID picker in XGetUniqueFileResourceID so
+                 * every save of the same document produces the same SND IDs. */
+                XLongResourceID candidateID;
+                uint32_t priorIDIndex;
+                XBOOL conflict;
+
+                sndID = 0;
+                for (candidateID = 1; candidateID <= 32767; ++candidateID)
+                {
+                    conflict = FALSE;
+                    for (priorIDIndex = 0; priorIDIndex < index; ++priorIDIndex)
+                    {
+                        if (sampleSndIDs[priorIDIndex] == (XShortResourceID)candidateID)
+                        {
+                            conflict = TRUE;
+                            break;
+                        }
+                    }
+                    if (!conflict)
+                    {
+                        sndID = candidateID;
+                        break;
+                    }
+                }
+                if (sndID == 0)
                 {
                     return BAE_FILE_IO_ERROR;
                 }
@@ -6172,7 +6388,23 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             }
             else
             {
-                writeSampleRate = 44100L << 16;
+                switch (sample->targetCompressionType)
+                {
+                    case BAE_EDITOR_COMPRESSION_OPUS_12K:
+                    case BAE_EDITOR_COMPRESSION_OPUS_16K:
+                    case BAE_EDITOR_COMPRESSION_OPUS_24K:
+                    case BAE_EDITOR_COMPRESSION_OPUS_32K:
+                    case BAE_EDITOR_COMPRESSION_OPUS_48K:
+                    case BAE_EDITOR_COMPRESSION_OPUS_64K:
+                    case BAE_EDITOR_COMPRESSION_OPUS_96K:
+                    case BAE_EDITOR_COMPRESSION_OPUS_128K:
+                    case BAE_EDITOR_COMPRESSION_OPUS_256K:
+                        writeSampleRate = 48000L << 16;
+                        break;
+                    default:
+                        writeSampleRate = 44100L << 16;
+                        break;
+                }
             }
             writeWaveform.sampledRate = writeSampleRate;
         }
@@ -6518,10 +6750,49 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                            (unsigned)writeWaveform.endLoop);
             }
         }
-        XSetSoundBaseKey(sndResource, sample->rootKey);
+        {
+            int32_t sndSampleRate;
+
+            sndSampleRate = writeWaveform.sampledRate;
+#if USE_OPUS_ENCODER == TRUE && (USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE)
+            switch (sample->targetCompressionType)
+            {
+                case BAE_EDITOR_COMPRESSION_OPUS_12K:
+                case BAE_EDITOR_COMPRESSION_OPUS_16K:
+                case BAE_EDITOR_COMPRESSION_OPUS_24K:
+                case BAE_EDITOR_COMPRESSION_OPUS_32K:
+                case BAE_EDITOR_COMPRESSION_OPUS_48K:
+                case BAE_EDITOR_COMPRESSION_OPUS_64K:
+                case BAE_EDITOR_COMPRESSION_OPUS_96K:
+                case BAE_EDITOR_COMPRESSION_OPUS_128K:
+                case BAE_EDITOR_COMPRESSION_OPUS_256K:
+                    /* Opus stream decode domain is always 48 kHz. */
+                    sndSampleRate = 48000L << 16;
+                    break;
+                default:
+                    break;
+            }
+#endif
+            XSetSoundBaseKey(sndResource, sample->rootKey);
+            XSetSoundSampleRate(sndResource, sndSampleRate);
+        }
         XSetSoundLoopPoints(sndResource, (int32_t)writeWaveform.startLoop, (int32_t)writeWaveform.endLoop);
         PV_ForceSndLoopPoints(sndResource, (int32_t)writeWaveform.startLoop, (int32_t)writeWaveform.endLoop);
         XSetSoundEmbeddedStatus(sndResource, TRUE);
+        {
+            XBYTE *dbgBytes = (XBYTE *)sndResource;
+            int32_t dbgSize = XGetPtrSize(sndResource);
+            int16_t dbgFmt = (dbgSize >= 2) ? (int16_t)XGetShort(dbgBytes) : -1;
+            BAE_PRINTF("[RMF Save] SND id=%ld fmt=%d size=%ld first8=",
+                       (long)sndID, (int)dbgFmt, (long)dbgSize);
+            if (dbgSize >= 8)
+            {
+                BAE_PRINTF("%02x %02x %02x %02x %02x %02x %02x %02x",
+                           dbgBytes[0], dbgBytes[1], dbgBytes[2], dbgBytes[3],
+                           dbgBytes[4], dbgBytes[5], dbgBytes[6], dbgBytes[7]);
+            }
+            BAE_PRINTF("\n");
+        }
         if (XAddFileResource(fileRef, ID_SND, sndID, pascalName, sndResource, XGetPtrSize(sndResource)) != 0)
         {
             XDisposePtr(sndResource);
@@ -6644,6 +6915,8 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 uint32_t i;
                 unsigned char writeFlags1;
                 unsigned char writeFlags2;
+                int16_t headerMiscParam1;
+                int16_t headerMiscParam2;
 
                 instSampleIndices = (uint32_t *)XNewPtr((int32_t)(splitCount * sizeof(uint32_t)));
                 if (!instSampleIndices)
@@ -6694,8 +6967,17 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 writeFlags2 = ZBF_useSoundModifierAsRootKey;
                 if (extForInst)
                 {
-                    writeFlags1 |= extForInst->flags1;
-                    writeFlags2 |= extForInst->flags2;
+                    writeFlags1 = extForInst->flags1;
+                    writeFlags2 = extForInst->flags2;
+                }
+
+                headerMiscParam1 = 0;
+                headerMiscParam2 = 0;
+                if (extForInst && extForInst->originalInstData && extForInst->originalInstSize >= 12)
+                {
+                    XBYTE const *origBytes = (XBYTE const *)extForInst->originalInstData;
+                    headerMiscParam1 = (int16_t)XGetShort((void *)(origBytes + kInstOffset_miscParameter1));
+                    headerMiscParam2 = (int16_t)XGetShort((void *)(origBytes + kInstOffset_miscParameter2));
                 }
 
                 /* Check if we need to append extended format data */
@@ -6733,16 +7015,20 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                     }
                     XSetMemory(instBytes, instSize + extTailSize, 0);
 
-                    XPutShort(instBytes + kInstOffset_sndResourceID, (uint16_t)sampleSndIDs[leaderIndex]);
+                    /* Use the first (lowest-key) split as the INST header sndResourceID.
+                     * This matches the original file's convention and is more deterministic
+                     * than using the largest-frame split. The header value is stored in
+                     * defaultInstrumentID but is not used for split playback. */
+                    XPutShort(instBytes + kInstOffset_sndResourceID, (uint16_t)sampleSndIDs[instSampleIndices[0]]);
                     XPutShort(instBytes + kInstOffset_midiRootKey, extForInst ? extForInst->midiRootKey : 60);
                     instBytes[kInstOffset_panPlacement] = extForInst ? (XBYTE)extForInst->panPlacement : 0;
                     instBytes[kInstOffset_flags1] = writeFlags1;
                     instBytes[kInstOffset_flags2] = writeFlags2;
                     instBytes[kInstOffset_smodResourceID] = 0;
-                    /* For split instruments, header miscParameter1/2 are typically 0 —
-                     * each split carries its own rootKey and volume in the split data. */
-                    XPutShort(instBytes + kInstOffset_miscParameter1, 0);
-                    XPutShort(instBytes + kInstOffset_miscParameter2, 0);
+                    /* Preserve header misc parameters from the original INST when present.
+                     * Some files use these fields for sound-modifier defaults. */
+                    XPutShort(instBytes + kInstOffset_miscParameter1, (uint16_t)headerMiscParam1);
+                    XPutShort(instBytes + kInstOffset_miscParameter2, (uint16_t)headerMiscParam2);
                     XPutShort(instBytes + kInstOffset_keySplitCount, (uint16_t)collected);
 
                     for (i = 0; i < collected; ++i)
@@ -6798,6 +7084,8 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             {
                 unsigned char writeFlags1;
                 unsigned char writeFlags2;
+                int16_t headerMiscParam1;
+                int16_t headerMiscParam2;
                 XPTR extTail = NULL;
                 int32_t extTailSize = 0;
 
@@ -6805,8 +7093,27 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 writeFlags2 = ZBF_useSoundModifierAsRootKey;
                 if (extForInst)
                 {
-                    writeFlags1 |= extForInst->flags1;
-                    writeFlags2 |= extForInst->flags2;
+                    writeFlags1 = extForInst->flags1;
+                    writeFlags2 = extForInst->flags2;
+                }
+
+                if (extForInst && extForInst->originalInstData && extForInst->originalInstSize >= 12)
+                {
+                    XBYTE const *origBytes = (XBYTE const *)extForInst->originalInstData;
+                    headerMiscParam1 = (int16_t)XGetShort((void *)(origBytes + 8));
+                    headerMiscParam2 = (int16_t)XGetShort((void *)(origBytes + 10));
+                }
+                else
+                {
+                    headerMiscParam1 = (int16_t)leaderSample->rootKey;
+                    headerMiscParam2 = leaderSample->splitVolume ? (int16_t)leaderSample->splitVolume : 100;
+                }
+
+                if (extForInst && TEST_FLAG_VALUE(writeFlags2, ZBF_useSoundModifierAsRootKey))
+                {
+                    /* If the instrument declares miscParameter1 as root key, keep it
+                     * aligned to the edited sample root key. */
+                    headerMiscParam1 = (int16_t)leaderSample->rootKey;
                 }
                 if (extForInst && (extForInst->hasExtendedData || extForInst->dirty))
                 {
@@ -6834,8 +7141,8 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 instrument.panPlacement = extForInst ? extForInst->panPlacement : 0;
                 instrument.flags1 = writeFlags1;
                 instrument.flags2 = writeFlags2;
-                XPutShort(&instrument.miscParameter1, (uint16_t)leaderSample->rootKey);
-                XPutShort(&instrument.miscParameter2, leaderSample->splitVolume ? (uint16_t)leaderSample->splitVolume : 100);
+                XPutShort(&instrument.miscParameter1, (uint16_t)headerMiscParam1);
+                XPutShort(&instrument.miscParameter2, (uint16_t)headerMiscParam2);
                 XPutShort(&instrument.keySplitCount, 0);
                 XPutShort(&instrument.tremoloCount, 0);
                 XPutShort(&instrument.tremoloEnd, 0x8000);
@@ -7085,6 +7392,60 @@ BAERmfEditorDocument *BAERmfEditorDocument_LoadFromFile(BAEPathName filePath)
     {
         result = PV_LoadRmfFileIntoDocument(document, filePath);
     }
+    else if (fileType == BAE_RMI)
+    {
+        unsigned char *rmiData;
+        uint32_t rmiDataSize;
+
+        result = PV_ReadWholeFile(filePath, &rmiData, &rmiDataSize);
+        if (result == BAE_NO_ERROR)
+        {
+            /* Inline RIFF MIDI extraction: find 'data' chunk inside RIFF/RMID, ignore any DLS */
+            const unsigned char *midiStart = NULL;
+            uint32_t midiLen = 0;
+
+            if (rmiDataSize >= 20 &&
+                rmiData[0]=='R' && rmiData[1]=='I' && rmiData[2]=='F' && rmiData[3]=='F' &&
+                rmiData[8]=='R' && rmiData[9]=='M' && rmiData[10]=='I' && rmiData[11]=='D')
+            {
+                uint32_t pos = 12;
+                while (pos + 8 <= rmiDataSize)
+                {
+                    uint32_t chunkSize = (uint32_t)rmiData[pos+4]
+                                      | ((uint32_t)rmiData[pos+5] << 8)
+                                      | ((uint32_t)rmiData[pos+6] << 16)
+                                      | ((uint32_t)rmiData[pos+7] << 24);
+                    if (rmiData[pos]=='d' && rmiData[pos+1]=='a' && rmiData[pos+2]=='t' && rmiData[pos+3]=='a'
+                        && pos + 8 + chunkSize <= rmiDataSize)
+                    {
+                        midiStart = rmiData + pos + 8;
+                        midiLen = chunkSize;
+                        break;
+                    }
+                    pos += 8 + ((chunkSize + 1) & ~1U);
+                }
+            }
+
+            if (midiStart && midiLen >= 4 &&
+                midiStart[0]=='M' && midiStart[1]=='T' && midiStart[2]=='h' && midiStart[3]=='d')
+            {
+                result = PV_LoadMidiBytesIntoDocument(document, midiStart, midiLen);
+                if (result == BAE_NO_ERROR)
+                {
+                    result = PV_SetDebugOriginalMidiData(document, midiStart, midiLen);
+                }
+                if (result == BAE_NO_ERROR)
+                {
+                    document->isPristine = TRUE;
+                }
+            }
+            else
+            {
+                result = BAE_BAD_FILE;
+            }
+            XDisposePtr(rmiData);
+        }
+    }
     else
     {
         result = BAE_BAD_FILE_TYPE;
@@ -7168,6 +7529,159 @@ BAEResult BAERmfEditorDocument_SetTempoBPM(BAERmfEditorDocument *document, uint3
     /* Explicit tempo edit means use a fixed tempo unless a new MIDI map is loaded/copied. */
     PV_ClearTempoEvents(document);
     document->tempoBPM = bpm;
+    PV_MarkDocumentDirty(document);
+    return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorDocument_GetMidiLoopMarkers(BAERmfEditorDocument const *document,
+                                                  XBOOL *outEnabled,
+                                                  uint32_t *outStartTick,
+                                                  uint32_t *outEndTick,
+                                                  int32_t *outLoopCount)
+{
+    XBOOL hasStart;
+    XBOOL hasEnd;
+    uint32_t startTick;
+    uint32_t endTick;
+    int32_t loopCount;
+    uint16_t trackIndex;
+
+    if (!document || !outEnabled || !outStartTick || !outEndTick || !outLoopCount)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    hasStart = FALSE;
+    hasEnd = FALSE;
+    startTick = 0;
+    endTick = 0;
+    loopCount = -1;
+
+    for (trackIndex = 0; trackIndex < document->trackCount; ++trackIndex)
+    {
+        BAERmfEditorTrack const *track;
+        uint32_t metaIndex;
+
+        track = &document->tracks[trackIndex];
+        for (metaIndex = 0; metaIndex < track->metaEventCount; ++metaIndex)
+        {
+            BAERmfEditorMetaEvent const *event;
+            int32_t markerLoopCount;
+
+            event = &track->metaEvents[metaIndex];
+            if (event->type != 0x06)
+            {
+                continue;
+            }
+
+            markerLoopCount = -1;
+            if (PV_IsLoopStartMarkerText(event->data, event->size, &markerLoopCount))
+            {
+                if (!hasStart || event->tick < startTick)
+                {
+                    startTick = event->tick;
+                    hasStart = TRUE;
+                    if (markerLoopCount > 0)
+                    {
+                        loopCount = markerLoopCount;
+                    }
+                }
+            }
+            else if (PV_IsLoopEndMarkerText(event->data, event->size))
+            {
+                if (!hasEnd || event->tick > endTick)
+                {
+                    endTick = event->tick;
+                    hasEnd = TRUE;
+                }
+            }
+        }
+    }
+
+    *outEnabled = (hasStart && hasEnd && endTick > startTick) ? TRUE : FALSE;
+    *outStartTick = startTick;
+    *outEndTick = endTick;
+    *outLoopCount = loopCount;
+    return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorDocument_SetMidiLoopMarkers(BAERmfEditorDocument *document,
+                                                  XBOOL enabled,
+                                                  uint32_t startTick,
+                                                  uint32_t endTick,
+                                                  int32_t loopCount)
+{
+    uint16_t trackIndex;
+    BAEResult result;
+    BAERmfEditorTrack *track;
+    char loopStartText[32];
+    char const *startText;
+    char const *endText;
+
+    if (!document)
+    {
+        return BAE_PARAM_ERR;
+    }
+    if (enabled && endTick <= startTick)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    for (trackIndex = 0; trackIndex < document->trackCount; ++trackIndex)
+    {
+        PV_RemoveLoopMarkersFromTrack(&document->tracks[trackIndex]);
+    }
+
+    if (!enabled)
+    {
+        PV_MarkDocumentDirty(document);
+        return BAE_NO_ERROR;
+    }
+
+    if (document->trackCount == 0)
+    {
+        BAERmfEditorTrackSetup setup;
+
+        XSetMemory(&setup, sizeof(setup), 0);
+        result = BAERmfEditorDocument_AddTrack(document, &setup, &trackIndex);
+        if (result != BAE_NO_ERROR)
+        {
+            return result;
+        }
+    }
+
+    track = &document->tracks[0];
+    startText = "loopstart";
+    if (loopCount > 0)
+    {
+        if (loopCount > 99)
+        {
+            loopCount = 99;
+        }
+        XSetMemory(loopStartText, (int32_t)sizeof(loopStartText), 0);
+        sprintf(loopStartText, "loopstart=%ld", (long)loopCount);
+        startText = loopStartText;
+    }
+    endText = "loopend";
+
+    result = PV_AddMetaEventToTrack(track,
+                                    startTick,
+                                    0x06,
+                                    (unsigned char const *)startText,
+                                    (uint32_t)strlen(startText));
+    if (result != BAE_NO_ERROR)
+    {
+        return result;
+    }
+    result = PV_AddMetaEventToTrack(track,
+                                    endTick,
+                                    0x06,
+                                    (unsigned char const *)endText,
+                                    (uint32_t)strlen(endText));
+    if (result != BAE_NO_ERROR)
+    {
+        return result;
+    }
     PV_MarkDocumentDirty(document);
     return BAE_NO_ERROR;
 }
@@ -8053,6 +8567,7 @@ BAEResult BAERmfEditorDocument_GetNoteInfo(BAERmfEditorDocument const *document,
     outNoteInfo->durationTicks = note->durationTicks;
     outNoteInfo->note = note->note;
     outNoteInfo->velocity = note->velocity;
+    outNoteInfo->channel = note->channel;
     outNoteInfo->bank = note->bank;
     outNoteInfo->program = note->program;
     return BAE_NO_ERROR;
@@ -8065,7 +8580,7 @@ BAEResult BAERmfEditorDocument_SetNoteInfo(BAERmfEditorDocument *document,
 {
     BAERmfEditorTrack *track;
 
-    if (!noteInfo || noteInfo->durationTicks == 0 || noteInfo->note > 127 || noteInfo->velocity > 127 || noteInfo->program > 127 || noteInfo->bank > 16383)
+    if (!noteInfo || noteInfo->durationTicks == 0 || noteInfo->note > 127 || noteInfo->velocity > 127 || noteInfo->channel > 15 || noteInfo->program > 127 || noteInfo->bank > 16383)
     {
         return BAE_PARAM_ERR;
     }
@@ -8078,6 +8593,7 @@ BAEResult BAERmfEditorDocument_SetNoteInfo(BAERmfEditorDocument *document,
     track->notes[noteIndex].durationTicks = noteInfo->durationTicks;
     track->notes[noteIndex].note = noteInfo->note;
     track->notes[noteIndex].velocity = noteInfo->velocity;
+    track->notes[noteIndex].channel = noteInfo->channel;
     track->notes[noteIndex].bank = noteInfo->bank;
     track->notes[noteIndex].program = noteInfo->program;
     PV_MarkDocumentDirty(document);
@@ -8674,6 +9190,8 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
     BAEResult result;
     XBOOL loopChanged;
     BAE_UNSIGNED_FIXED newSampleRate;
+    unsigned char oldProgram;
+    uint32_t oldInstID;
 
     if (!document || !sampleInfo || sampleIndex >= document->sampleCount)
     {
@@ -8688,6 +9206,8 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
         return BAE_PARAM_ERR;
     }
     sample = &document->samples[sampleIndex];
+    oldProgram = sample->program;
+    oldInstID = sample->instID;
     loopChanged = (sample->sampleInfo.startLoop != sampleInfo->sampleInfo.startLoop) ||
                   (sample->sampleInfo.endLoop != sampleInfo->sampleInfo.endLoop);
     result = PV_SetDocumentString(&sample->displayName, sampleInfo->displayName);
@@ -8696,6 +9216,34 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
         return result;
     }
     sample->program = sampleInfo->program;
+
+    if (oldInstID != 0 && sampleInfo->program != oldProgram)
+    {
+        uint32_t newInstID;
+        uint32_t i;
+
+        /* Preserve the instrument bank namespace and swap only the low 7-bit program. */
+        newInstID = (oldInstID & ~127U) | (uint32_t)sampleInfo->program;
+        if (newInstID != oldInstID)
+        {
+            PV_EnsureInstrumentExtForRemappedID(document,
+                                               (XLongResourceID)oldInstID,
+                                               (XLongResourceID)newInstID);
+            for (i = 0; i < document->sampleCount; ++i)
+            {
+                if (document->samples[i].instID == oldInstID)
+                {
+                    document->samples[i].instID = newInstID;
+                    if (document->samples[i].program == oldProgram)
+                    {
+                        document->samples[i].program = sampleInfo->program;
+                    }
+                }
+            }
+            sample = &document->samples[sampleIndex];
+        }
+    }
+
     sample->rootKey = sampleInfo->rootKey;
     sample->lowKey = sampleInfo->lowKey;
     sample->highKey = sampleInfo->highKey;
@@ -8711,7 +9259,23 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
         }
         else
         {
-            newSampleRate = (44100U << 16);
+            switch (sampleInfo->compressionType)
+            {
+                case BAE_EDITOR_COMPRESSION_OPUS_12K:
+                case BAE_EDITOR_COMPRESSION_OPUS_16K:
+                case BAE_EDITOR_COMPRESSION_OPUS_24K:
+                case BAE_EDITOR_COMPRESSION_OPUS_32K:
+                case BAE_EDITOR_COMPRESSION_OPUS_48K:
+                case BAE_EDITOR_COMPRESSION_OPUS_64K:
+                case BAE_EDITOR_COMPRESSION_OPUS_96K:
+                case BAE_EDITOR_COMPRESSION_OPUS_128K:
+                case BAE_EDITOR_COMPRESSION_OPUS_256K:
+                    newSampleRate = (48000U << 16);
+                    break;
+                default:
+                    newSampleRate = (44100U << 16);
+                    break;
+            }
         }
     }
 

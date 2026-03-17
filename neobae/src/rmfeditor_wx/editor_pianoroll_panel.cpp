@@ -21,7 +21,6 @@ constexpr int kResizeHandlePixels = 6;
 constexpr int kAutomationLaneHeight = 44;
 constexpr int kAutomationLaneGap = 6;
 constexpr uint32_t kDefaultNoteDuration = 480;
-constexpr uint32_t kSnapTicks = 120;
 constexpr int kTempoLaneIndex = 0;
 
 enum class DragMode {
@@ -138,17 +137,31 @@ static uint16_t InternalBankFromDisplay(uint16_t displayBank) {
 
 class NoteEditDialog final : public wxDialog {
 public:
-    explicit NoteEditDialog(wxWindow *parent, BAERmfEditorNoteInfo const &noteInfo)
+    explicit NoteEditDialog(wxWindow *parent,
+                            BAERmfEditorNoteInfo const &noteInfo,
+                            bool hasResonance,
+                            unsigned char resonanceValue,
+                            bool hasBrightness,
+                            unsigned char brightnessValue)
         : wxDialog(parent, wxID_ANY, "Edit Note", wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {
         wxBoxSizer *rootSizer = new wxBoxSizer(wxVERTICAL);
-        wxFlexGridSizer *gridSizer = new wxFlexGridSizer(2, 6, 8, 8);
+        wxFlexGridSizer *gridSizer = new wxFlexGridSizer(0, 2, 8, 8);
 
         m_startTickText = new wxTextCtrl(this, wxID_ANY, wxString::Format("%u", static_cast<unsigned>(noteInfo.startTick)));
         m_durationText = new wxTextCtrl(this, wxID_ANY, wxString::Format("%u", static_cast<unsigned>(noteInfo.durationTicks)));
         m_noteSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, noteInfo.note);
         m_velocitySpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, noteInfo.velocity);
+        m_channelSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, 16, static_cast<int>(noteInfo.channel) + 1);
         m_bankSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, DisplayBankFromInternal(noteInfo.bank));
         m_programSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, noteInfo.program);
+        m_resonanceEnable = new wxCheckBox(this, wxID_ANY, "Set Resonance (CC71)");
+        m_resonanceEnable->SetValue(hasResonance);
+        m_resonanceSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, resonanceValue);
+        m_resonanceSpin->Enable(hasResonance);
+        m_brightnessEnable = new wxCheckBox(this, wxID_ANY, "Set Brightness (CC74)");
+        m_brightnessEnable->SetValue(hasBrightness);
+        m_brightnessSpin = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 127, brightnessValue);
+        m_brightnessSpin->Enable(hasBrightness);
 
         gridSizer->Add(new wxStaticText(this, wxID_ANY, "Start Tick"), 0, wxALIGN_CENTER_VERTICAL);
         gridSizer->Add(m_startTickText, 1, wxEXPAND);
@@ -158,11 +171,28 @@ public:
         gridSizer->Add(m_noteSpin, 1, wxEXPAND);
         gridSizer->Add(new wxStaticText(this, wxID_ANY, "Velocity"), 0, wxALIGN_CENTER_VERTICAL);
         gridSizer->Add(m_velocitySpin, 1, wxEXPAND);
+        gridSizer->Add(new wxStaticText(this, wxID_ANY, "Channel"), 0, wxALIGN_CENTER_VERTICAL);
+        gridSizer->Add(m_channelSpin, 1, wxEXPAND);
         gridSizer->Add(new wxStaticText(this, wxID_ANY, "Bank"), 0, wxALIGN_CENTER_VERTICAL);
         gridSizer->Add(m_bankSpin, 1, wxEXPAND);
         gridSizer->Add(new wxStaticText(this, wxID_ANY, "Program"), 0, wxALIGN_CENTER_VERTICAL);
         gridSizer->Add(m_programSpin, 1, wxEXPAND);
+        gridSizer->Add(m_resonanceEnable, 0, wxALIGN_CENTER_VERTICAL);
+        gridSizer->Add(m_resonanceSpin, 1, wxEXPAND);
+        gridSizer->Add(m_brightnessEnable, 0, wxALIGN_CENTER_VERTICAL);
+        gridSizer->Add(m_brightnessSpin, 1, wxEXPAND);
         gridSizer->AddGrowableCol(1, 1);
+
+        m_resonanceEnable->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &) {
+            if (m_resonanceSpin) {
+                m_resonanceSpin->Enable(m_resonanceEnable->GetValue());
+            }
+        });
+        m_brightnessEnable->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &) {
+            if (m_brightnessSpin) {
+                m_brightnessSpin->Enable(m_brightnessEnable->GetValue());
+            }
+        });
 
         rootSizer->Add(gridSizer, 1, wxEXPAND | wxALL, 12);
         rootSizer->Add(CreateSeparatedButtonSizer(wxOK | wxCANCEL), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
@@ -183,9 +213,28 @@ public:
         outNoteInfo->durationTicks = static_cast<uint32_t>(durationTicks);
         outNoteInfo->note = static_cast<unsigned char>(m_noteSpin->GetValue());
         outNoteInfo->velocity = static_cast<unsigned char>(m_velocitySpin->GetValue());
+        outNoteInfo->channel = static_cast<unsigned char>(std::clamp(m_channelSpin->GetValue() - 1, 0, 15));
         outNoteInfo->bank = InternalBankFromDisplay(static_cast<uint16_t>(m_bankSpin->GetValue()));
         outNoteInfo->program = static_cast<unsigned char>(m_programSpin->GetValue());
         return true;
+    }
+
+    void GetFilterSettings(bool *outSetResonance,
+                           unsigned char *outResonance,
+                           bool *outSetBrightness,
+                           unsigned char *outBrightness) const {
+        if (outSetResonance) {
+            *outSetResonance = m_resonanceEnable && m_resonanceEnable->GetValue();
+        }
+        if (outResonance) {
+            *outResonance = static_cast<unsigned char>(m_resonanceSpin ? m_resonanceSpin->GetValue() : 0);
+        }
+        if (outSetBrightness) {
+            *outSetBrightness = m_brightnessEnable && m_brightnessEnable->GetValue();
+        }
+        if (outBrightness) {
+            *outBrightness = static_cast<unsigned char>(m_brightnessSpin ? m_brightnessSpin->GetValue() : 0);
+        }
     }
 
 private:
@@ -193,8 +242,13 @@ private:
     wxTextCtrl *m_durationText;
     wxSpinCtrl *m_noteSpin;
     wxSpinCtrl *m_velocitySpin;
+    wxSpinCtrl *m_channelSpin;
     wxSpinCtrl *m_bankSpin;
     wxSpinCtrl *m_programSpin;
+    wxCheckBox *m_resonanceEnable;
+    wxSpinCtrl *m_resonanceSpin;
+    wxCheckBox *m_brightnessEnable;
+    wxSpinCtrl *m_brightnessSpin;
 };
 
 class AutomationEditDialog final : public wxDialog {
@@ -823,17 +877,10 @@ private:
     }
 
     int GetPixelsPerQuarter() const {
-        uint32_t bpm;
         int pixels;
 
-        bpm = 120;
-        if (m_document) {
-            BAERmfEditorDocument_GetTempoBPM(m_document, &bpm);
-        }
-        if (bpm == 0) {
-            bpm = 120;
-        }
-        pixels = static_cast<int>((static_cast<double>(kBasePixelsPerQuarter) * m_zoomScale * 120.0) / static_cast<double>(bpm));
+        /* Keep grid spacing tied to musical time (ticks), not playback tempo. */
+        pixels = static_cast<int>(static_cast<double>(kBasePixelsPerQuarter) * m_zoomScale);
         return std::clamp(pixels, 16, 768);
     }
 
@@ -861,7 +908,17 @@ private:
     }
 
     uint32_t SnapTick(uint32_t tick) const {
-        return (tick / kSnapTicks) * kSnapTicks;
+        uint32_t snapTicks;
+
+        snapTicks = GetSnapTicks();
+        return (tick / snapTicks) * snapTicks;
+    }
+
+    uint32_t GetSnapTicks() const {
+        uint16_t ticksPerQuarter;
+
+        ticksPerQuarter = GetTicksPerQuarter();
+        return std::max<uint32_t>(1, static_cast<uint32_t>(ticksPerQuarter) / 4);
     }
 
     bool HasTrack() const {
@@ -1218,6 +1275,82 @@ private:
                                                            static_cast<uint16_t>(value)) == BAE_NO_ERROR;
     }
 
+    bool GetTrackCCValueAtTick(unsigned char cc, uint32_t tick, unsigned char *outValue) const {
+        uint32_t count;
+
+        if (!m_document || !HasTrack()) {
+            return false;
+        }
+        count = 0;
+        if (BAERmfEditorDocument_GetTrackCCEventCount(m_document,
+                                                      static_cast<uint16_t>(m_selectedTrack),
+                                                      cc,
+                                                      &count) != BAE_NO_ERROR) {
+            return false;
+        }
+        for (uint32_t i = 0; i < count; ++i) {
+            uint32_t eventTick;
+            unsigned char eventValue;
+
+            if (BAERmfEditorDocument_GetTrackCCEvent(m_document,
+                                                     static_cast<uint16_t>(m_selectedTrack),
+                                                     cc,
+                                                     i,
+                                                     &eventTick,
+                                                     &eventValue) != BAE_NO_ERROR) {
+                continue;
+            }
+            if (eventTick == tick) {
+                if (outValue) {
+                    *outValue = eventValue;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool UpsertTrackCCAtTick(unsigned char cc, uint32_t tick, unsigned char value) {
+        uint32_t count;
+
+        if (!m_document || !HasTrack()) {
+            return false;
+        }
+        count = 0;
+        if (BAERmfEditorDocument_GetTrackCCEventCount(m_document,
+                                                      static_cast<uint16_t>(m_selectedTrack),
+                                                      cc,
+                                                      &count) != BAE_NO_ERROR) {
+            return false;
+        }
+        for (uint32_t i = 0; i < count; ++i) {
+            uint32_t eventTick;
+            unsigned char eventValue;
+
+            if (BAERmfEditorDocument_GetTrackCCEvent(m_document,
+                                                     static_cast<uint16_t>(m_selectedTrack),
+                                                     cc,
+                                                     i,
+                                                     &eventTick,
+                                                     &eventValue) != BAE_NO_ERROR) {
+                continue;
+            }
+            if (eventTick == tick) {
+                return BAERmfEditorDocument_SetTrackCCEvent(m_document,
+                                                            static_cast<uint16_t>(m_selectedTrack),
+                                                            cc,
+                                                            i,
+                                                            tick,
+                                                            value) == BAE_NO_ERROR;
+            }
+        }
+        return BAERmfEditorDocument_AddTrackCCEvent(m_document,
+                                                    static_cast<uint16_t>(m_selectedTrack),
+                                                    cc,
+                                                    tick,
+                                                    value) == BAE_NO_ERROR;
+    }
+
     DragMode GetDragModeForAutomation(AutomationHitInfo const &hitInfo, wxPoint point) const {
         if (std::abs(point.x - hitInfo.leftX) <= kResizeHandlePixels) {
             return DragMode::ResizeLeft;
@@ -1230,17 +1363,56 @@ private:
 
     bool EditSelectedNote() {
         BAERmfEditorNoteInfo noteInfo;
+        BAERmfEditorTrackInfo trackInfo;
+        bool hasResonance;
+        unsigned char resonanceValue;
+        bool hasBrightness;
+        unsigned char brightnessValue;
+        bool setResonance;
+        bool setBrightness;
 
         if (!GetSelectedNoteInfo(&noteInfo)) {
             return false;
         }
-        NoteEditDialog dialog(this, noteInfo);
+        hasResonance = GetTrackCCValueAtTick(71, noteInfo.startTick, &resonanceValue);
+        if (!hasResonance) {
+            resonanceValue = 64;
+        }
+        hasBrightness = GetTrackCCValueAtTick(74, noteInfo.startTick, &brightnessValue);
+        if (!hasBrightness) {
+            brightnessValue = 64;
+        }
+        NoteEditDialog dialog(this,
+                              noteInfo,
+                              hasResonance,
+                              resonanceValue,
+                              hasBrightness,
+                              brightnessValue);
         if (dialog.ShowModal() != wxID_OK) {
             return false;
         }
         if (!dialog.GetNoteInfo(&noteInfo)) {
             wxMessageBox("Invalid note values.", "Edit Note", wxOK | wxICON_ERROR, this);
             return false;
+        }
+        dialog.GetFilterSettings(&setResonance, &resonanceValue, &setBrightness, &brightnessValue);
+        if ((setResonance || setBrightness) &&
+            BAERmfEditorDocument_GetTrackInfo(m_document, static_cast<uint16_t>(m_selectedTrack), &trackInfo) == BAE_NO_ERROR &&
+            trackInfo.channel != noteInfo.channel) {
+            int answer;
+
+            answer = wxMessageBox(wxString::Format("This note is on channel %u but the track channel is %u.\n"
+                                                   "Filter CC events are track-channel events and will be applied to channel %u at this note tick.\n\n"
+                                                   "Continue?",
+                                                   static_cast<unsigned>(noteInfo.channel + 1),
+                                                   static_cast<unsigned>(trackInfo.channel + 1),
+                                                   static_cast<unsigned>(trackInfo.channel + 1)),
+                                  "Edit Note",
+                                  wxYES_NO | wxICON_WARNING,
+                                  this);
+            if (answer != wxYES) {
+                return false;
+            }
         }
         BeginUndoAction("Edit Note");
         if (BAERmfEditorDocument_SetNoteInfo(m_document,
@@ -1249,6 +1421,16 @@ private:
                                              &noteInfo) != BAE_NO_ERROR) {
             CancelUndoAction();
             wxMessageBox("Failed to update note.", "Edit Note", wxOK | wxICON_ERROR, this);
+            return false;
+        }
+        if (setResonance && !UpsertTrackCCAtTick(71, noteInfo.startTick, resonanceValue)) {
+            CancelUndoAction();
+            wxMessageBox("Failed to set resonance automation (CC71).", "Edit Note", wxOK | wxICON_ERROR, this);
+            return false;
+        }
+        if (setBrightness && !UpsertTrackCCAtTick(74, noteInfo.startTick, brightnessValue)) {
+            CancelUndoAction();
+            wxMessageBox("Failed to set brightness automation (CC74).", "Edit Note", wxOK | wxICON_ERROR, this);
             return false;
         }
         CommitUndoAction("Edit Note");
@@ -1272,7 +1454,7 @@ private:
             return false;
         }
         eventCount = 0;
-        durationTicks = kSnapTicks;
+        durationTicks = GetSnapTicks();
         hasFollowingEvent = false;
         GetAutomationEventCount(laneIndex, &eventCount);
         if (lane.kind == AutomationLaneKind::Tempo) {
@@ -1423,12 +1605,15 @@ private:
                 GetAutomationEvent(laneIndex, eventIndex + 2, &nextNextTick, &nextNextValue);
             }
 
-            minNextTick = tick + kSnapTicks;
+            uint32_t snapTicks;
+
+            snapTicks = GetSnapTicks();
+            minNextTick = tick + snapTicks;
             maxNextTick = minNextTick;
-            if (nextNextTick > kSnapTicks) {
-                maxNextTick = std::max(minNextTick, nextNextTick - kSnapTicks);
+            if (nextNextTick > snapTicks) {
+                maxNextTick = std::max(minNextTick, nextNextTick - snapTicks);
             }
-            requestedNextTick = tick + std::max<uint32_t>(kSnapTicks, durationTicks);
+            requestedNextTick = tick + std::max<uint32_t>(snapTicks, durationTicks);
             requestedNextTick = std::clamp(requestedNextTick, minNextTick, maxNextTick);
 
             if (!SetAutomationEvent(laneIndex, eventIndex + 1, requestedNextTick, nextValueCurrent)) {
@@ -1983,9 +2168,12 @@ private:
         int relLeft;
         int relRight;
         int startOff;
-        int beatOff;
+        uint32_t tick;
+        uint32_t quarterTicks;
+        uint32_t stepTicks;
+        uint32_t tickStart;
+        uint32_t tickEnd;
         int pixelsPerQuarter;
-        int pixelsPerStep;
 
         GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
         if (scrollPixelsX <= 0) scrollPixelsX = 1;
@@ -2017,41 +2205,38 @@ private:
         relLeft  = std::max(0, scrollX - kPianoRollLeftGutter);
         relRight = scrollX + screenW - kPianoRollLeftGutter;
         pixelsPerQuarter = GetPixelsPerQuarter();
-        pixelsPerStep = std::max(1, pixelsPerQuarter / 4);
-        startOff = (relLeft / pixelsPerQuarter) * pixelsPerQuarter;
+        quarterTicks = GetTicksPerQuarter();
+        stepTicks = std::max<uint32_t>(1, quarterTicks / 4);
+        tickStart = (XToTick(kPianoRollLeftGutter + relLeft) / stepTicks) * stepTicks;
+        tickEnd = XToTick(kPianoRollLeftGutter + relRight);
 
         // Sub-beat (16th-note) small ticks
-        for (beatOff = (startOff >= pixelsPerQuarter ? startOff - pixelsPerQuarter : 0);
-             beatOff <= relRight;
-             beatOff += pixelsPerStep) {
+        for (tick = tickStart; tick <= tickEnd; tick += stepTicks) {
             int vx;
 
-            if (beatOff < 0) continue;
-            if ((beatOff % pixelsPerQuarter) == 0) continue;
-            vx = kPianoRollLeftGutter + beatOff;
+            if ((tick % quarterTicks) == 0) continue;
+            vx = TickToX(tick);
             dc.SetPen(wxPen(wxColour(70, 75, 82)));
             dc.DrawLine(vx, rulerBot - 5, vx, rulerBot - 1);
+            if (tickEnd - tick < stepTicks) {
+                break;
+            }
         }
 
         // Quarter-note beat labels and taller ticks
-           for (beatOff = (startOff >= pixelsPerQuarter ? startOff - pixelsPerQuarter : 0);
-             beatOff <= relRight;
-               beatOff += pixelsPerQuarter) {
+        tickStart = (tickStart / quarterTicks) * quarterTicks;
+        for (tick = tickStart; tick <= tickEnd; tick += quarterTicks) {
             int vx;
             int beatNum;
-            uint32_t tick;
             double seconds;
             int mm;
             int ss;
             int ds;
             bool isBar;
 
-            if (beatOff < 0) continue;
-            vx      = kPianoRollLeftGutter + beatOff;
-            beatNum = beatOff / pixelsPerQuarter + 1;
-            isBar   = ((beatOff % (pixelsPerQuarter * 4)) == 0);
-
-            tick = static_cast<uint32_t>((static_cast<uint64_t>(beatOff) * GetTicksPerQuarter()) / pixelsPerQuarter);
+            vx = TickToX(tick);
+            beatNum = static_cast<int>(tick / quarterTicks) + 1;
+            isBar = ((tick % (quarterTicks * 4)) == 0);
             seconds = TickToSeconds(tick);
             mm = static_cast<int>(seconds / 60.0);
             ss = static_cast<int>(seconds) % 60;
@@ -2068,6 +2253,9 @@ private:
             // Time code (bottom row)
             dc.SetTextForeground(wxColour(140, 145, 150));
             dc.DrawText(wxString::Format("%d:%02d.%d", mm, ss, ds), vx + 2, rulerTop + rulerH / 2);
+            if (tickEnd - tick < quarterTicks) {
+                break;
+            }
         }
 
         // Bottom border
@@ -2077,6 +2265,7 @@ private:
         // Left gutter right-edge (re-draw on top of ruler)
         dc.SetPen(wxPen(wxColour(100, 105, 110)));
         dc.DrawLine(scrollX + kPianoRollLeftGutter, rulerTop, scrollX + kPianoRollLeftGutter, rulerBot);
+
     }
 
     bool IsPointInStickyRuler(wxPoint logicalPoint) const {
@@ -2181,14 +2370,14 @@ private:
         int viewBottom;
         int beat;
         int note;
-        int noteStart;
-        int noteEnd;
+        int noteY;
         int gridTop;
         int gridBottom;
-        int beatStart;
-        int beatEnd;
-        int pixelsPerQuarter;
-        int pixelsPerStep;
+        uint32_t gridTick;
+        uint32_t quarterTicks;
+        uint32_t stepTicks;
+        uint32_t tickStart;
+        uint32_t tickEnd;
 
         PrepareDC(dc);
         clientSize = GetVirtualSize();
@@ -2213,42 +2402,44 @@ private:
         dc.SetBackground(wxBrush(wxColour(248, 248, 246)));
         dc.Clear();
 
-        noteStart = std::clamp((visibleRect.GetTop() - kPianoRollTopGutter) / kNoteHeight - 2, 0, 127);
-        noteEnd = std::clamp((visibleRect.GetBottom() - kPianoRollTopGutter) / kNoteHeight + 2, 0, 127);
-        for (note = noteStart; note <= noteEnd; ++note) {
-            int y;
+        for (note = 0; note <= 127; ++note) {
             bool blackKey;
             wxColour fillColor;
 
-            y = NoteToY(note);
+            noteY = NoteToY(note);
+            if (noteY + kNoteHeight < visibleRect.GetTop() || noteY > visibleRect.GetBottom()) {
+                continue;
+            }
             blackKey = (note % 12 == 1) || (note % 12 == 3) || (note % 12 == 6) || (note % 12 == 8) || (note % 12 == 10);
             fillColor = blackKey ? wxColour(235, 238, 240) : wxColour(248, 248, 246);
             dc.SetPen(*wxTRANSPARENT_PEN);
             dc.SetBrush(wxBrush(fillColor));
-            dc.DrawRectangle(visibleRect.GetLeft(), y, visibleRect.GetWidth(), kNoteHeight);
+            dc.DrawRectangle(visibleRect.GetLeft(), noteY, visibleRect.GetWidth(), kNoteHeight);
             dc.SetPen(wxPen(wxColour(220, 224, 226)));
-            dc.DrawLine(kPianoRollLeftGutter, y, visibleRect.GetRight(), y);
+            dc.DrawLine(kPianoRollLeftGutter, noteY, visibleRect.GetRight(), noteY);
             if (note % 12 == 0) {
                 dc.SetTextForeground(wxColour(90, 90, 90));
-                dc.DrawText(wxString::Format("C%d", note / 12), 6, y - 1);
+                dc.DrawText(wxString::Format("C%d", note / 12), 6, noteY - 1);
             }
         }
 
-        pixelsPerQuarter = GetPixelsPerQuarter();
-        pixelsPerStep = std::max(1, pixelsPerQuarter / 4);
-        beatStart = std::max(0, visibleRect.GetLeft() - kPianoRollLeftGutter);
-        beatEnd = std::max(0, visibleRect.GetRight() - kPianoRollLeftGutter);
-        beatStart = (beatStart / pixelsPerStep) * pixelsPerStep;
+        quarterTicks = GetTicksPerQuarter();
+        stepTicks = std::max<uint32_t>(1, quarterTicks / 4);
+        tickStart = (XToTick(visibleRect.GetLeft()) / stepTicks) * stepTicks;
+        tickEnd = XToTick(visibleRect.GetRight());
         gridTop = std::max(kPianoRollTopGutter, visibleRect.GetTop());
         gridBottom = visibleRect.GetBottom();
-        for (beat = beatStart; beat <= beatEnd; beat += pixelsPerStep) {
+        for (gridTick = tickStart; gridTick <= tickEnd; gridTick += stepTicks) {
             int x;
             bool major;
 
-            x = kPianoRollLeftGutter + beat;
-            major = ((beat % pixelsPerQuarter) == 0);
+            x = TickToX(gridTick);
+            major = ((gridTick % quarterTicks) == 0);
             dc.SetPen(wxPen(major ? wxColour(180, 186, 190) : wxColour(222, 226, 228)));
             dc.DrawLine(x, gridTop, x, gridBottom);
+            if (tickEnd - gridTick < stepTicks) {
+                break;
+            }
         }
 
         dc.SetPen(wxPen(wxColour(60, 60, 60)));
@@ -2655,24 +2846,28 @@ private:
                 uint32_t originalEndTick;
                 uint32_t snappedStartTick;
                 uint32_t maxStartTick;
+                uint32_t snapTicks;
 
                 updatedNote = m_dragOriginalNote;
+                snapTicks = GetSnapTicks();
                 originalEndTick = m_dragOriginalNote.startTick + m_dragOriginalNote.durationTicks;
                 snappedStartTick = SnapTick(XToTick(logicalPoint.x));
-                maxStartTick = (originalEndTick > kSnapTicks) ? (originalEndTick - kSnapTicks) : 0;
+                maxStartTick = (originalEndTick > snapTicks) ? (originalEndTick - snapTicks) : 0;
                 updatedNote.startTick = std::min(snappedStartTick, maxStartTick);
-                updatedNote.durationTicks = std::max<uint32_t>(kSnapTicks, originalEndTick - updatedNote.startTick);
+                updatedNote.durationTicks = std::max<uint32_t>(snapTicks, originalEndTick - updatedNote.startTick);
                 BAERmfEditorDocument_SetNoteInfo(m_document,
                                                  static_cast<uint16_t>(m_selectedTrack),
                                                  static_cast<uint32_t>(m_selectedNote),
                                                  &updatedNote);
             } else if (m_dragMode == DragMode::ResizeRight) {
                 uint32_t snappedEndTick;
+                uint32_t snapTicks;
 
                 updatedNote = m_dragOriginalNote;
+                snapTicks = GetSnapTicks();
                 snappedEndTick = SnapTick(XToTick(logicalPoint.x));
-                if (snappedEndTick <= m_dragOriginalNote.startTick + kSnapTicks) {
-                    snappedEndTick = m_dragOriginalNote.startTick + kSnapTicks;
+                if (snappedEndTick <= m_dragOriginalNote.startTick + snapTicks) {
+                    snappedEndTick = m_dragOriginalNote.startTick + snapTicks;
                 }
                 updatedNote.durationTicks = snappedEndTick - m_dragOriginalNote.startTick;
                 BAERmfEditorDocument_SetNoteInfo(m_document,
@@ -2696,6 +2891,7 @@ private:
             int nextValueCurrent;
             uint32_t nextNextTick;
             uint32_t eventCount;
+            uint32_t snapTicks;
 
             if (!GetAutomationEvent(m_selectedAutomationLane, static_cast<uint32_t>(m_selectedAutomationEvent), &currentTick, &currentValue)) {
                 return;
@@ -2717,9 +2913,10 @@ private:
                                    &nextNextTick,
                                    &nextNextValue);
             }
+              snapTicks = GetSnapTicks();
             automationTick = std::clamp(automationTick,
-                                        currentTick + kSnapTicks,
-                                        nextNextTick > kSnapTicks ? (nextNextTick - kSnapTicks) : currentTick + kSnapTicks);
+                                    currentTick + snapTicks,
+                                    nextNextTick > snapTicks ? (nextNextTick - snapTicks) : currentTick + snapTicks);
             if (SetAutomationEvent(m_selectedAutomationLane,
                                    static_cast<uint32_t>(m_selectedAutomationEvent) + 1,
                                    automationTick,
@@ -2735,25 +2932,27 @@ private:
             uint32_t eventCount;
             int previousValue;
             int nextValue;
+            uint32_t snapTicks;
 
             previousTick = 0;
             nextTick = GetDocumentEndTick();
             eventCount = 0;
+            snapTicks = GetSnapTicks();
             GetAutomationEventCount(m_selectedAutomationLane, &eventCount);
             if (m_selectedAutomationEvent > 0) {
                 GetAutomationEvent(m_selectedAutomationLane,
                                    static_cast<uint32_t>(m_selectedAutomationEvent) - 1,
                                    &previousTick,
                                    &previousValue);
-                previousTick += kSnapTicks;
+                previousTick += snapTicks;
             }
             if (static_cast<uint32_t>(m_selectedAutomationEvent) + 1 < eventCount) {
                 GetAutomationEvent(m_selectedAutomationLane,
                                    static_cast<uint32_t>(m_selectedAutomationEvent) + 1,
                                    &nextTick,
                                    &nextValue);
-                if (nextTick > kSnapTicks) {
-                    nextTick -= kSnapTicks;
+                if (nextTick > snapTicks) {
+                    nextTick -= snapTicks;
                 }
             }
             automationTick = std::clamp(automationTick, previousTick, nextTick);

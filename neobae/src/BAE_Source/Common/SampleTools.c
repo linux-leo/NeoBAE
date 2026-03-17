@@ -231,6 +231,8 @@ static void * PV_GetSoundHeaderPtr(XPTR pRes, int16_t  *pEncode)
 
         pSndFormat = (char *)pRes;
         soundFormat = XGetShort(pSndFormat);
+        BAE_PRINTF("[PV_GetSoundHeaderPtr] soundFormat=%d (0x%04x)\n",
+                   (int)soundFormat, (unsigned)soundFormat & 0xFFFF);
         switch (soundFormat)
         {
             case XFirstSoundFormat:
@@ -1028,6 +1030,10 @@ XBYTE               order = X_WORD_ORDER;
         info->loopEnd = XGetLong(&header3->loopEnd[0]);
         info->baseKey = header3->baseKey;
         info->compressionType = XGetLong(&header3->subType);
+        BAE_PRINTF("[XGetSamplePtrFromSnd] Type3: rate=0x%08lx baseKey=%d ch=%d bits=%d frames=%lu subType=%ld\n",
+                   (unsigned long)info->rate, (int)info->baseKey,
+                   (int)info->channels, (int)info->bitSize,
+                   (unsigned long)info->frames, (long)info->compressionType);
 
         switch (info->compressionType)
         {
@@ -2204,7 +2210,7 @@ XSoundFormat1*      header;
         XPutShort(&snd->type, XThirdSoundFormat);
 
         XPutLong(&snd->sndBuffer.subType,      C_OPUS);
-        XPutLong(&snd->sndBuffer.sampleRate,   src.sampledRate);
+        XPutLong(&snd->sndBuffer.sampleRate,   48000 << 16);  // OPUS encoder always uses 48kHz
         XPutLong(&snd->sndBuffer.frameCount,   src.waveFrames);
         XPutLong(&snd->sndBuffer.encodedBytes, encodedBytes);
         XPutLong(&snd->sndBuffer.decodedBytes, (uint32_t)(src.waveFrames * src.channels * (src.bitSize / 8)));

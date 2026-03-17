@@ -313,7 +313,7 @@ BAEFileType X_DetermineFileTypeByPath(const char *filePath)
         return BAE_OPUS_TYPE;
 #endif
     // Check for MIDI/music file extensions
-    else if (strcmp(extLower, ".mid") == 0 || strcmp(extLower, ".midi") == 0)
+    else if (strcmp(extLower, ".mid") == 0 || strcmp(extLower, ".midi") == 0 || strcmp(extLower, ".kar") == 0)
         return BAE_MIDI_TYPE;
     else if (strcmp(extLower, ".rmf") == 0 || strcmp(extLower, ".zmf") == 0)
         return BAE_RMF;

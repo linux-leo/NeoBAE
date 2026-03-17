@@ -82,6 +82,23 @@ static unsigned char NormalizeRootKeyForSingleKeySplit(unsigned char rootKey,
     return rootKey;
 }
 
+static bool IsOpusCompressionType(BAERmfEditorCompressionType compressionType) {
+    switch (compressionType) {
+        case BAE_EDITOR_COMPRESSION_OPUS_12K:
+        case BAE_EDITOR_COMPRESSION_OPUS_16K:
+        case BAE_EDITOR_COMPRESSION_OPUS_24K:
+        case BAE_EDITOR_COMPRESSION_OPUS_32K:
+        case BAE_EDITOR_COMPRESSION_OPUS_48K:
+        case BAE_EDITOR_COMPRESSION_OPUS_64K:
+        case BAE_EDITOR_COMPRESSION_OPUS_96K:
+        case BAE_EDITOR_COMPRESSION_OPUS_128K:
+        case BAE_EDITOR_COMPRESSION_OPUS_256K:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* ====================================================================== */
 /*  Piano keyboard panel                                                  */
 /* ====================================================================== */
@@ -1786,15 +1803,21 @@ private:
 
     void BuildSampleGroup(uint32_t primarySampleIndex) {
         uint32_t sampleCount = 0;
+        uint32_t primaryInstID = 0;
         BAERmfEditorSampleInfo primaryInfo;
         if (!m_document ||
             BAERmfEditorDocument_GetSampleInfo(m_document, primarySampleIndex, &primaryInfo) != BAE_NO_ERROR ||
             BAERmfEditorDocument_GetSampleCount(m_document, &sampleCount) != BAE_NO_ERROR) return;
 
+        BAERmfEditorDocument_GetInstIDForSample(m_document, primarySampleIndex, &primaryInstID);
+
         for (uint32_t i = 0; i < sampleCount; i++) {
             BAERmfEditorSampleInfo info;
+            uint32_t instID = 0;
             if (BAERmfEditorDocument_GetSampleInfo(m_document, i, &info) != BAE_NO_ERROR) continue;
-            if (info.program == primaryInfo.program) {
+            BAERmfEditorDocument_GetInstIDForSample(m_document, i, &instID);
+            if ((primaryInstID != 0 && instID == primaryInstID) ||
+                (primaryInstID == 0 && info.program == primaryInfo.program)) {
                 EditedSample edited;
                 edited.displayName = SanitizeDisplayName(info.displayName ? wxString::FromUTF8(info.displayName) : wxString());
                 edited.sourcePath = info.sourcePath ? wxString::FromUTF8(info.sourcePath) : wxString();
@@ -2223,6 +2246,9 @@ private:
             info.splitVolume = m_samples[i].splitVolume;
             info.sampleInfo = m_samples[i].sampleInfo;
             info.compressionType = m_samples[i].compressionType;
+            if (IsOpusCompressionType(info.compressionType)) {
+                info.sampleInfo.sampledRate = static_cast<BAE_UNSIGNED_FIXED>(48000U << 16);
+            }
             info.hasOriginalData = m_samples[i].hasOriginalData ? TRUE : FALSE;
             if (BAERmfEditorDocument_SetSampleInfo(m_document, sampleIndex, &info) != BAE_NO_ERROR) {
                 if (m_cancelUndoCallback) {

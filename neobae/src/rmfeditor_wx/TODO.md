@@ -82,15 +82,28 @@
 - ~~Expand undo to instrument/sample dialog~~
 - ~~Allow previewing compressed version of sample without overwriting sample~~
 - ~~Instrument panel keyboard plays (pitch shifted) notes outside of split range when should be silent~~
-- `DoorSlam.rmf` door slam note plays at wrong speed
+- ~~Apply changes in instrument/sample dialog instantly (rebuilds preview ZMF each time though)~~
+- ~~`EndGame.rmf` samples arent found~~
+- ~~Segfault when undoing~~
+- ~~Supporting opening .kar (ignore karaoke) and .rmi (ignore embedded sf2/dls for now)~~
+- ~~Channel select for notes~~
+- ~~Advanced note editor (channel, filters, etc)~~
+- ~~Basic BAE reverb for preview player~~
+- ~~Implement loopstart/loopend configuration (variants should be recognized too)~~
+- ~~beat grid may be inaccurate, notes not lining up to 4/4~~
+- ~~Add option to set all samples of a specific instrument to a specific codec (for convenience)~~
+- ~~Add option to set all samples of ALL instruments to a specific codec (for convenience)~~
+- ~~Compressing samples with OPUS wrecks pitch~~
 
 # Future
-- Add option to set all samples of a specific instrument to a specific codec (for convenience)
-- Apply changes in instrument/sample dialog instantly (rebuilds preview ZMF each time though)
+- Allow for automation like Volume to be able have a slide on it so its easy to make a fadeout/fadein for example, the edit dialog could have "start (item)" "end (item)"
+- `DoorSlam.rmf` door slam and fret bass notes play incorrectly (seemingly only this file)
+- Changing the program of an instrument may not reflect in preview/output
+- Resizable tracks (allow user to expand or shrink the track by click/dragging the far right end of the ruler)
+- Neo Reverb for preview player
 - Larger instrument dialog piano not working 100% correctly
 - MP3 externally imported samples (not encoded by us) may have a gap
 - Start from nothing (currently the editor requires you to load a file)
-- Resizable tracks
 - Allow configuration of SysEx and 'non-standard' CC commands
 - SESSIONS! Savable and loadable workspace sessions.
   - Session data should embed all resources (instruments, samples, midi, settings)
@@ -98,7 +111,6 @@
   - Should be compressed before saving and decompressed when loading
      - Use zlib since we already depend on it via dependancy chain
   - Possible file extension: `.nbs`
-- Advanced note editor (channel, filters, etc)
 - Enhanced Exporting
   - Currently we list all tracks and allow exporting a single track.
   - We should enable channel exporting in the same manner.

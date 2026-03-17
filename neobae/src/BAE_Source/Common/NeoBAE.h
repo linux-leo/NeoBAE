@@ -2859,6 +2859,7 @@ typedef struct BAERmfEditorNoteInfo
     uint32_t durationTicks;
     unsigned char note;
     unsigned char velocity;
+    unsigned char channel;
     uint16_t bank;
     unsigned char program;
 } BAERmfEditorNoteInfo;
@@ -3022,6 +3023,16 @@ BAEResult BAERmfEditorDocument_SetTempoEvent(BAERmfEditorDocument *document,
                                              uint32_t microsecondsPerQuarter);
 BAEResult BAERmfEditorDocument_DeleteTempoEvent(BAERmfEditorDocument *document,
                                                 uint32_t eventIndex);
+BAEResult BAERmfEditorDocument_GetMidiLoopMarkers(BAERmfEditorDocument const *document,
+                                                  XBOOL *outEnabled,
+                                                  uint32_t *outStartTick,
+                                                  uint32_t *outEndTick,
+                                                  int32_t *outLoopCount);
+BAEResult BAERmfEditorDocument_SetMidiLoopMarkers(BAERmfEditorDocument *document,
+                                                  XBOOL enabled,
+                                                  uint32_t startTick,
+                                                  uint32_t endTick,
+                                                  int32_t loopCount);
 BAEResult BAERmfEditorDocument_SetTicksPerQuarter(BAERmfEditorDocument *document, uint16_t ticksPerQuarter);
 BAEResult BAERmfEditorDocument_GetTicksPerQuarter(BAERmfEditorDocument const *document, uint16_t *outTicksPerQuarter);
 BAEResult BAERmfEditorDocument_SetInfo(BAERmfEditorDocument *document, BAEInfoType infoType, char const *value);
