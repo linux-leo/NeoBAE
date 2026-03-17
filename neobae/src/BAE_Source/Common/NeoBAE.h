@@ -2920,6 +2920,13 @@ typedef enum BAERmfEditorMidiStorageType
     BAE_EDITOR_MIDI_STORAGE_MIDI
 } BAERmfEditorMidiStorageType;
 
+typedef enum BAERmfEditorSndStorageType
+{
+    BAE_EDITOR_SND_STORAGE_ESND = 0, /* encrypted SND (esnd) – default */
+    BAE_EDITOR_SND_STORAGE_CSND = 1, /* LZSS-compressed SND (csnd) */
+    BAE_EDITOR_SND_STORAGE_SND  = 2  /* plain SND (snd ) */
+} BAERmfEditorSndStorageType;
+
 typedef struct BAERmfEditorSampleInfo
 {
     char const *displayName;
@@ -2932,6 +2939,7 @@ typedef struct BAERmfEditorSampleInfo
     BAESampleInfo sampleInfo;
     BAERmfEditorCompressionType compressionType; /* target compression for saving */
     BAE_BOOL hasOriginalData;                    /* TRUE if DONT_CHANGE is available */
+    BAERmfEditorSndStorageType sndStorageType;   /* file-level container type (esnd/csnd/snd) */
 } BAERmfEditorSampleInfo;
 
 /* Global sample asset model.

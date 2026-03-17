@@ -260,6 +260,9 @@ public:
                     m_hasPendingUndo(false),
                     m_restoringUndo(false) {
                 SetMinSize(wxSize(1280, 720));
+#ifdef __WXMSW__
+        SetIcon(wxICON(APPICON));
+#endif
 
         wxMenu *fileMenu;
         wxMenu *editMenu;

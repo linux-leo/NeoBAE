@@ -53,6 +53,7 @@ struct InstrumentEditorEditedSample {
     BAESampleInfo sampleInfo;
     BAERmfEditorCompressionType compressionType;
     bool hasOriginalData;
+    BAERmfEditorSndStorageType sndStorageType;
 };
 
 bool ShowInstrumentEditorDialog(wxWindow *parent,

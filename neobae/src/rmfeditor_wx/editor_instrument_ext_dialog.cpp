@@ -1080,6 +1080,7 @@ private:
     wxChoice *m_codecChoice;
     wxChoice *m_bitrateChoice;
     wxStaticText *m_codecLabel;
+    wxChoice *m_sndStorageChoice;
     WaveformPanelExt *m_waveformPanel;
     wxButton *m_deleteSampleButton;
 
@@ -1666,6 +1667,19 @@ private:
             });
         }
 
+        /* Storage type (ESND/CSND/SND) */
+        {
+            wxBoxSizer *row = new wxBoxSizer(wxHORIZONTAL);
+            row->Add(new wxStaticText(page, wxID_ANY, "Storage"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+            m_sndStorageChoice = new wxChoice(page, wxID_ANY);
+            m_sndStorageChoice->Append("ESND (encrypted)");
+            m_sndStorageChoice->Append("CSND (LZSS compressed)");
+            m_sndStorageChoice->Append("SND (plain)");
+            m_sndStorageChoice->SetSelection(0);
+            row->Add(m_sndStorageChoice, 0);
+            sizer->Add(row, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+        }
+
         /* Action buttons */
         {
             wxBoxSizer *row = new wxBoxSizer(wxHORIZONTAL);
@@ -1729,6 +1743,7 @@ private:
         memset(&s.sampleInfo, 0, sizeof(s.sampleInfo));
         s.sampleInfo.sampledRate = (BAE_UNSIGNED_FIXED)(22050u << 16);
         s.compressionType = BAE_EDITOR_COMPRESSION_PCM;
+        s.sndStorageType = BAE_EDITOR_SND_STORAGE_ESND;
         s.hasOriginalData = false;
 
         m_samples.push_back(s);
@@ -1829,6 +1844,7 @@ private:
                 edited.sampleInfo = info.sampleInfo;
                 edited.compressionType = info.compressionType;
                 edited.hasOriginalData = (info.hasOriginalData == TRUE);
+                edited.sndStorageType = info.sndStorageType;
                 m_sampleIndices.push_back(i);
                 m_samples.push_back(edited);
             }
@@ -1996,6 +2012,12 @@ private:
         BAERmfEditorCompressionType chosen = CodecBitrateToCompressionType(codecIdx, bitrateIdx);
         if (chosen == BAE_EDITOR_COMPRESSION_DONT_CHANGE && !s.hasOriginalData) chosen = BAE_EDITOR_COMPRESSION_PCM;
         s.compressionType = chosen;
+        {
+            int sel = m_sndStorageChoice->GetSelection();
+            if (sel == 1)      s.sndStorageType = BAE_EDITOR_SND_STORAGE_CSND;
+            else if (sel == 2) s.sndStorageType = BAE_EDITOR_SND_STORAGE_SND;
+            else               s.sndStorageType = BAE_EDITOR_SND_STORAGE_ESND;
+        }
 
         if (m_loopEnableCheck->GetValue()) {
             ApplyLoopFromUI();
@@ -2037,6 +2059,12 @@ private:
             if (bitrateIdx >= 0 && bitrateIdx < (int)m_bitrateChoice->GetCount()) {
                 m_bitrateChoice->SetSelection(bitrateIdx);
             }
+        }
+        {
+            int sel = 0;
+            if (s.sndStorageType == BAE_EDITOR_SND_STORAGE_CSND)      sel = 1;
+            else if (s.sndStorageType == BAE_EDITOR_SND_STORAGE_SND)  sel = 2;
+            m_sndStorageChoice->SetSelection(sel);
         }
         {
             char codecBuf[64] = {};
@@ -2160,6 +2188,7 @@ private:
             s.sampleInfo = info.sampleInfo;
             s.compressionType = info.compressionType;
             s.hasOriginalData = (info.hasOriginalData == TRUE);
+            s.sndStorageType = info.sndStorageType;
         }
         LoadLocalSample(m_currentLocalIndex);
     }
@@ -2247,6 +2276,7 @@ private:
             info.sampleInfo = m_samples[i].sampleInfo;
             info.compressionType = m_samples[i].compressionType;
             info.hasOriginalData = m_samples[i].hasOriginalData ? TRUE : FALSE;
+            info.sndStorageType = m_samples[i].sndStorageType;
             if (BAERmfEditorDocument_SetSampleInfo(m_document, sampleIndex, &info) != BAE_NO_ERROR) {
                 if (m_cancelUndoCallback) {
                     m_cancelUndoCallback();

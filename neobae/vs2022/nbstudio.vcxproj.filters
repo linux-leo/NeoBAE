@@ -216,4 +216,7 @@
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="..\src\rmfeditor_wx\editor.rc" />
+  </ItemGroup>
 </Project>

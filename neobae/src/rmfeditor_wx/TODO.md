@@ -115,14 +115,15 @@
 - ~~Create mid2rmf tool~~
   - ~~defaults to ecmi midi storage, but can have optional --midi-format= with support for midi, ecmi, emid, and cmid~~
   - ~~should take source and dest as arguments~~
-
+- ~~MSB2 Percussion is broken (`DoorSlam.rmf`, `RT_technocracy.rmf`, `opening.rmf`)~~
+- ~~Add SND/CSND/ESND export type option to sample dialog~~
+- ~~Make an icon for the windows app~~
+- ~~Make resource file for the windows app~~
 
 # 0.04.4a
-- MSB2 Percussion is broken (`DoorSlam.rmf`, `RT_technocracy.rmf`, `opening.rmf`)
 - `Crazy Dream fix.rmf` plays bass/gt sample instead of saw lead
 
 # Future
-- Make an icon for the windows app
 - Allow for automation like Volume to be able have a slide on it so its easy to make a fadeout/fadein for example, the edit dialog could have "start (item)" "end (item)"
 - Changing the program of an instrument may not reflect in preview/output
 - Resizable tracks (allow user to expand or shrink the track by click/dragging the far right end of the ruler)

@@ -367,6 +367,7 @@ typedef struct BAERmfEditorSample
     int16_t splitVolume;       /* per-split miscParameter2 (volume), 0 = use default */
     uint32_t sourceCompressionType;
     uint32_t sourceCompressionSubType;
+    XResourceType originalSndResourceType;
     BAESampleInfo sampleInfo;
     GM_Waveform *waveform;
     uint32_t sampleAssetID;              /* shared audio asset identifier */
@@ -464,6 +465,11 @@ struct BAERmfEditorDocument
 {
     uint32_t tempoBPM;
     uint16_t ticksPerQuarter;
+    SongType songType;
+    int32_t songTempo;
+    int16_t songPitchShift;
+    XBOOL songLocked;
+    XBOOL songEmbedded;
     int16_t maxMidiNotes;
     int16_t maxEffects;
     int16_t mixLevel;
@@ -787,9 +793,23 @@ static XBOOL PV_CanReuseSndResourceForSamples(BAERmfEditorSample const *left,
     {
         return FALSE;
     }
+    /* Never dedupe bank-alias samples with embedded samples.
+     * Alias samples must keep their bank SND resource IDs verbatim. */
+    if (left->isBankAlias || right->isBankAlias)
+    {
+        return FALSE;
+    }
     if (left->sampleAssetID == 0 || left->sampleAssetID != right->sampleAssetID)
     {
         return FALSE;
+    }
+    /* For passthrough RMF samples, keep original shared SND topology even when
+     * per-instrument root/loop interpretation differs. */
+    if (left->targetCompressionType == BAE_EDITOR_COMPRESSION_DONT_CHANGE &&
+        right->targetCompressionType == BAE_EDITOR_COMPRESSION_DONT_CHANGE &&
+        left->originalSndData && right->originalSndData)
+    {
+        return TRUE;
     }
     if (left->rootKey != right->rootKey)
     {
@@ -937,6 +957,12 @@ static BAEResult PV_ReadVLQ(unsigned char const *data, uint32_t dataSize, uint32
 static BAEResult PV_AddCCEventToTrack(BAERmfEditorTrack *track, uint32_t tick, unsigned char cc, unsigned char value, unsigned char data2);
 static BAEResult PV_AddSysExEventToTrack(BAERmfEditorTrack *track, uint32_t tick, unsigned char status, unsigned char const *data, uint32_t size);
 static void PV_FreeTrackSysExEvents(BAERmfEditorTrack *track);
+static BAEResult PV_PopulateSongResourceInfoFromDocument(BAERmfEditorDocument const *document,
+                                                         SongResource_Info *songInfo,
+                                                         XLongResourceID midiResourceID);
+static BAERmfEditorResourceEntry const *PV_FindOriginalResourceByTypeAndID(BAERmfEditorDocument const *document,
+                                                                            XResourceType type,
+                                                                            XLongResourceID id);
 static BAEResult PV_AddAuxEventToTrack(BAERmfEditorTrack *track,
                                        uint32_t tick,
                                        unsigned char status,
@@ -2809,6 +2835,54 @@ static BAEResult PV_AssignSongInfoString(SongResource_Info *songInfo, BAEInfoTyp
     }
 }
 
+static BAEResult PV_PopulateSongResourceInfoFromDocument(BAERmfEditorDocument const *document,
+                                                         SongResource_Info *songInfo,
+                                                         XLongResourceID midiResourceID)
+{
+    uint32_t infoIndex;
+    BAEResult result;
+    SongType writeSongType;
+
+    if (!document || !songInfo)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    XClearSongResourceInfo(songInfo);
+
+    writeSongType = document->songType;
+    if (writeSongType == SONG_TYPE_BAD)
+    {
+        writeSongType = SONG_TYPE_RMF;
+    }
+
+    songInfo->songType = writeSongType;
+    songInfo->objectResourceID = (XShortResourceID)midiResourceID;
+    songInfo->maxMidiNotes = document->maxMidiNotes;
+    songInfo->maxEffects = document->maxEffects;
+    songInfo->mixLevel = document->mixLevel;
+    songInfo->reverbType = (int16_t)document->reverbType;
+    songInfo->songVolume = document->songVolume;
+    songInfo->songTempo = document->songTempo;
+    songInfo->songPitchShift = document->songPitchShift;
+    songInfo->songLocked = document->songLocked;
+    songInfo->songEmbedded = document->songEmbedded;
+
+    for (infoIndex = 0; infoIndex < INFO_TYPE_COUNT; ++infoIndex)
+    {
+        if (document->info[infoIndex])
+        {
+            result = PV_AssignSongInfoString(songInfo, (BAEInfoType)infoIndex, document->info[infoIndex]);
+            if (result != BAE_NO_ERROR)
+            {
+                return result;
+            }
+        }
+    }
+
+    return BAE_NO_ERROR;
+}
+
 static BAEResult PV_CreatePascalName(char const *source, char outName[256])
 {
     uint32_t length;
@@ -3858,6 +3932,25 @@ static BAEResult PV_AddEmbeddedSampleVariant(BAERmfEditorDocument *document,
     sample->sourceCompressionSubType = PV_GetStoredCompressionSubTypeFromSnd(sndCopy ? sndCopy : sndData,
                                                                               sndSize,
                                                                               sample->sourceCompressionType);
+    sample->originalSndResourceType = ID_ESND;
+    if (document)
+    {
+        BAERmfEditorResourceEntry const *originalSndEntry;
+
+        originalSndEntry = PV_FindOriginalResourceByTypeAndID(document, ID_ESND, (XLongResourceID)sndID);
+        if (!originalSndEntry)
+        {
+            originalSndEntry = PV_FindOriginalResourceByTypeAndID(document, ID_CSND, (XLongResourceID)sndID);
+        }
+        if (!originalSndEntry)
+        {
+            originalSndEntry = PV_FindOriginalResourceByTypeAndID(document, ID_SND, (XLongResourceID)sndID);
+        }
+        if (originalSndEntry)
+        {
+            sample->originalSndResourceType = originalSndEntry->type;
+        }
+    }
     sample->targetCompressionType = BAE_EDITOR_COMPRESSION_DONT_CHANGE;
     sample->originalSndData = sndCopy;
     sample->originalSndSize = sndCopy ? sndSize : 0;
@@ -4503,6 +4596,29 @@ static XBOOL PV_SndExistsInOriginalResources(BAERmfEditorDocument const *documen
     return FALSE;
 }
 
+static BAERmfEditorResourceEntry const *PV_FindOriginalResourceByTypeAndID(BAERmfEditorDocument const *document,
+                                                                            XResourceType type,
+                                                                            XLongResourceID id)
+{
+    uint32_t i;
+
+    if (!document)
+    {
+        return NULL;
+    }
+    for (i = 0; i < document->originalResourceCount; ++i)
+    {
+        BAERmfEditorResourceEntry const *entry;
+
+        entry = &document->originalResources[i];
+        if (entry->type == type && entry->id == id)
+        {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
 static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE fileRef)
 {
     enum
@@ -4850,6 +4966,11 @@ static BAEResult PV_LoadRmfFileIntoDocument(BAERmfEditorDocument *document, BAEP
         /* Some files store BPM here, while classic RMF stores a master-tempo scalar. */
         document->tempoBPM = (uint32_t)songInfo->songTempo;
     }
+    document->songType = songInfo->songType;
+    document->songTempo = songInfo->songTempo;
+    document->songPitchShift = songInfo->songPitchShift;
+    document->songLocked = songInfo->songLocked;
+    document->songEmbedded = songInfo->songEmbedded;
     document->maxMidiNotes = songInfo->maxMidiNotes;
     document->maxEffects = songInfo->maxEffects;
     document->mixLevel = songInfo->mixLevel;
@@ -6438,8 +6559,22 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
         int32_t loopStart;
         int32_t loopEnd;
         uint32_t loopFrameLimit;
+        XBOOL preserveOriginalSndBlob;
+        XResourceType writeSndType;
 
         sample = &document->samples[index];
+        preserveOriginalSndBlob = FALSE;
+
+        /* Bank alias samples reference external bank SND IDs and must not
+         * participate in local SND dedupe/ID assignment. */
+        if (sample->isBankAlias)
+        {
+            sampleSndIDs[index] = sample->aliasSndResourceID;
+            sampleInstIDs[index] = (sample->instID != 0)
+                                    ? (XLongResourceID)sample->instID
+                                    : (XLongResourceID)(512 + (uint32_t)sample->program);
+            continue;
+        }
 
         /* One SND resource per shared sample asset; additional usages reuse it. */
         for (prior = 0; prior < index; ++prior)
@@ -6457,16 +6592,6 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
         }
         if (prior < index)
         {
-            continue;
-        }
-
-        /* Bank alias samples reference the bank's SND directly; skip embedding. */
-        if (sample->isBankAlias)
-        {
-            sampleSndIDs[index] = sample->aliasSndResourceID;
-            sampleInstIDs[index] = (sample->instID != 0)
-                                    ? (XLongResourceID)sample->instID
-                                    : (XLongResourceID)(512 + (uint32_t)sample->program);
             continue;
         }
 
@@ -6669,6 +6794,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 return BAE_MEMORY_ERR;
             }
             XBlockMove(sample->originalSndData, sndResource, (int32_t)sample->originalSndSize);
+            preserveOriginalSndBlob = TRUE;
             BAE_STDERR("[RMF Save] Sample[%u] using original compressed blob (%ld bytes)\n",
                        (unsigned)index, (long)sample->originalSndSize);
         }
@@ -7122,6 +7248,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                            (unsigned)writeWaveform.endLoop);
             }
         }
+        if (!preserveOriginalSndBlob)
         {
             int32_t sndSampleRate;
 
@@ -7147,10 +7274,57 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
 #endif
             XSetSoundBaseKey(sndResource, sample->rootKey);
             XSetSoundSampleRate(sndResource, sndSampleRate);
+            XSetSoundLoopPoints(sndResource, (int32_t)writeWaveform.startLoop, (int32_t)writeWaveform.endLoop);
+            PV_ForceSndLoopPoints(sndResource, (int32_t)writeWaveform.startLoop, (int32_t)writeWaveform.endLoop);
         }
-        XSetSoundLoopPoints(sndResource, (int32_t)writeWaveform.startLoop, (int32_t)writeWaveform.endLoop);
-        PV_ForceSndLoopPoints(sndResource, (int32_t)writeWaveform.startLoop, (int32_t)writeWaveform.endLoop);
-        XSetSoundEmbeddedStatus(sndResource, TRUE);
+        if (!preserveOriginalSndBlob)
+        {
+            XSetSoundEmbeddedStatus(sndResource, TRUE);
+        }
+        writeSndType = sample->originalSndResourceType;
+        if (writeSndType != ID_ESND && writeSndType != ID_CSND && writeSndType != ID_SND)
+        {
+            writeSndType = ID_ESND;
+        }
+        switch (writeSndType)
+        {
+            case ID_ESND:
+                if (!preserveOriginalSndBlob)
+                {
+                    XEncryptData(sndResource, (uint32_t)XGetPtrSize(sndResource));
+                }
+                break;
+            case ID_CSND:
+                if (!preserveOriginalSndBlob)
+                {
+                    XPTR compressedSnd;
+                    int32_t compressedSize;
+
+                    compressedSnd = NULL;
+                    compressedSize = XCompressPtr(&compressedSnd,
+                                                  sndResource,
+                                                  (uint32_t)XGetPtrSize(sndResource),
+                                                  X_RAW,
+                                                  NULL,
+                                                  NULL);
+                    if (compressedSize <= 0 || !compressedSnd)
+                    {
+                        XDisposePtr(sndResource);
+                        XDisposePtr((XPTR)sampleSndIDs);
+                        XDisposePtr((XPTR)sampleInstIDs);
+                        return BAE_BAD_FILE;
+                    }
+                    XDisposePtr(sndResource);
+                    sndResource = compressedSnd;
+                }
+                break;
+            case ID_SND:
+                /* plain – no transformation needed */
+                break;
+            default:
+                writeSndType = ID_SND;
+                break;
+        }
         {
             XBYTE *dbgBytes = (XBYTE *)sndResource;
             int32_t dbgSize = XGetPtrSize(sndResource);
@@ -7165,7 +7339,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             }
             BAE_PRINTF("\n");
         }
-        if (XAddFileResource(fileRef, ID_SND, sndID, pascalName, sndResource, XGetPtrSize(sndResource)) != 0)
+        if (XAddFileResource(fileRef, writeSndType, sndID, pascalName, sndResource, XGetPtrSize(sndResource)) != 0)
         {
             XDisposePtr(sndResource);
             XDisposePtr((XPTR)sampleSndIDs);
@@ -7596,7 +7770,6 @@ static BAEResult PV_AddSongResource(BAERmfEditorDocument *document, XFILE fileRe
     SongResource *songResource;
     XLongResourceID songID;
     char pascalName[256];
-    uint32_t infoIndex;
     BAEResult result;
 
     BAE_STDERR("[RMF Save] PV_AddSongResource entered midiID=%ld\n", (long)midiResourceID);
@@ -7605,30 +7778,11 @@ static BAEResult PV_AddSongResource(BAERmfEditorDocument *document, XFILE fileRe
     {
         return BAE_MEMORY_ERR;
     }
-    XClearSongResourceInfo(songInfo);
-    songInfo->songType = SONG_TYPE_RMF;
-    songInfo->objectResourceID = (XShortResourceID)midiResourceID;
-    songInfo->maxMidiNotes = document->maxMidiNotes;
-    songInfo->maxEffects = document->maxEffects;
-    songInfo->mixLevel = document->mixLevel;
-    songInfo->reverbType = (int16_t)document->reverbType;
-    songInfo->songVolume = document->songVolume;
-    /* RMF songTempo is a legacy master-tempo scalar where 16667 == 100% speed. */
-    songInfo->songTempo = 16667;
-    songInfo->songPitchShift = 0;
-    songInfo->songLocked = FALSE;
-    songInfo->songEmbedded = FALSE;
-    for (infoIndex = 0; infoIndex < INFO_TYPE_COUNT; ++infoIndex)
+    result = PV_PopulateSongResourceInfoFromDocument(document, songInfo, midiResourceID);
+    if (result != BAE_NO_ERROR)
     {
-        if (document->info[infoIndex])
-        {
-            result = PV_AssignSongInfoString(songInfo, (BAEInfoType)infoIndex, document->info[infoIndex]);
-            if (result != BAE_NO_ERROR)
-            {
-                XDisposeSongResourceInfo(songInfo);
-                return result;
-            }
-        }
+        XDisposeSongResourceInfo(songInfo);
+        return result;
     }
     songResource = XNewSongFromSongResourceInfo(songInfo);
     XDisposeSongResourceInfo(songInfo);
@@ -7657,42 +7811,59 @@ static BAEResult PV_AddSongResourceWithID(BAERmfEditorDocument *document,
                                           XLongResourceID songID,
                                           unsigned char const *pascalName)
 {
+    BAERmfEditorResourceEntry const *originalSongEntry;
+    uint32_t resourceIndex;
     SongResource_Info *songInfo;
     SongResource *songResource;
-    uint32_t infoIndex;
     BAEResult result;
     char fallbackPascalName[256];
-    void const *songName;
+    unsigned char const *songName;
+
+    originalSongEntry = NULL;
+    if (document && document->loadedFromRmf && document->originalResourceCount > 0)
+    {
+        for (resourceIndex = 0; resourceIndex < document->originalResourceCount; ++resourceIndex)
+        {
+            BAERmfEditorResourceEntry const *entry;
+
+            entry = &document->originalResources[resourceIndex];
+            if (entry->type != ID_SONG || !entry->data || entry->size < (int32_t)sizeof(XShortResourceID))
+            {
+                continue;
+            }
+            if (document->originalSongID != 0 && entry->id != document->originalSongID)
+            {
+                continue;
+            }
+            originalSongEntry = entry;
+            break;
+        }
+        if (!originalSongEntry)
+        {
+            for (resourceIndex = 0; resourceIndex < document->originalResourceCount; ++resourceIndex)
+            {
+                BAERmfEditorResourceEntry const *entry;
+
+                entry = &document->originalResources[resourceIndex];
+                if (entry->type == ID_SONG && entry->data && entry->size >= (int32_t)sizeof(XShortResourceID))
+                {
+                    originalSongEntry = entry;
+                    break;
+                }
+            }
+        }
+    }
 
     songInfo = XNewSongResourceInfo();
     if (!songInfo)
     {
         return BAE_MEMORY_ERR;
     }
-    XClearSongResourceInfo(songInfo);
-    songInfo->songType = SONG_TYPE_RMF;
-    songInfo->objectResourceID = (XShortResourceID)midiResourceID;
-    songInfo->maxMidiNotes = document->maxMidiNotes;
-    songInfo->maxEffects = document->maxEffects;
-    songInfo->mixLevel = document->mixLevel;
-    songInfo->reverbType = (int16_t)document->reverbType;
-    songInfo->songVolume = document->songVolume;
-    /* RMF songTempo is a legacy master-tempo scalar where 16667 == 100% speed. */
-    songInfo->songTempo = 16667;
-    songInfo->songPitchShift = 0;
-    songInfo->songLocked = FALSE;
-    songInfo->songEmbedded = FALSE;
-    for (infoIndex = 0; infoIndex < INFO_TYPE_COUNT; ++infoIndex)
+    result = PV_PopulateSongResourceInfoFromDocument(document, songInfo, midiResourceID);
+    if (result != BAE_NO_ERROR)
     {
-        if (document->info[infoIndex])
-        {
-            result = PV_AssignSongInfoString(songInfo, (BAEInfoType)infoIndex, document->info[infoIndex]);
-            if (result != BAE_NO_ERROR)
-            {
-                XDisposeSongResourceInfo(songInfo);
-                return result;
-            }
-        }
+        XDisposeSongResourceInfo(songInfo);
+        return result;
     }
     songResource = XNewSongFromSongResourceInfo(songInfo);
     XDisposeSongResourceInfo(songInfo);
@@ -7705,10 +7876,14 @@ static BAEResult PV_AddSongResourceWithID(BAERmfEditorDocument *document,
     {
         songName = pascalName;
     }
+    else if (originalSongEntry && originalSongEntry->pascalName[0])
+    {
+        songName = originalSongEntry->pascalName;
+    }
     else
     {
         PV_CreatePascalName(document->info[TITLE_INFO] ? document->info[TITLE_INFO] : "Untitled RMF", fallbackPascalName);
-        songName = fallbackPascalName;
+        songName = (unsigned char const *)fallbackPascalName;
     }
 
     if (XAddFileResource(fileRef, ID_SONG, songID, songName, songResource, XGetPtrSize(songResource)) != 0)
@@ -7730,6 +7905,11 @@ BAERmfEditorDocument *BAERmfEditorDocument_New(void)
         XSetMemory(document, sizeof(BAERmfEditorDocument), 0);
         document->tempoBPM = 120;
         document->ticksPerQuarter = 480;
+        document->songType = SONG_TYPE_RMF;
+        document->songTempo = 16667;
+        document->songPitchShift = 0;
+        document->songLocked = FALSE;
+        document->songEmbedded = FALSE;
         document->maxMidiNotes = 24;
         document->maxEffects = 4;
         document->mixLevel = 8;
@@ -9325,6 +9505,12 @@ BAEResult BAERmfEditorDocument_GetSampleInfo(BAERmfEditorDocument const *documen
     outSampleInfo->sampleInfo = sample->sampleInfo;
     outSampleInfo->compressionType = sample->targetCompressionType;
     outSampleInfo->hasOriginalData = (sample->originalSndData != NULL) ? TRUE : FALSE;
+    switch (sample->originalSndResourceType)
+    {
+        case ID_CSND: outSampleInfo->sndStorageType = BAE_EDITOR_SND_STORAGE_CSND; break;
+        case ID_SND:  outSampleInfo->sndStorageType = BAE_EDITOR_SND_STORAGE_SND;  break;
+        default:      outSampleInfo->sndStorageType = BAE_EDITOR_SND_STORAGE_ESND; break;
+    }
     return BAE_NO_ERROR;
 }
 
@@ -9707,6 +9893,12 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
                                                        sampleInfo->compressionType);
     }
 
+    switch (sampleInfo->sndStorageType)
+    {
+        case BAE_EDITOR_SND_STORAGE_CSND: sample->originalSndResourceType = ID_CSND; break;
+        case BAE_EDITOR_SND_STORAGE_SND:  sample->originalSndResourceType = ID_SND;  break;
+        default:                          sample->originalSndResourceType = ID_ESND; break;
+    }
     PV_MarkDocumentDirty(document);
     return BAE_NO_ERROR;
 }
@@ -11158,8 +11350,19 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
             char midiPascalName[256];
             XPTR encodedMidi;
             int32_t encodedMidiSize;
+            BAERmfEditorResourceEntry const *originalMidiEntry;
 
-            PV_CreatePascalName(document->info[TITLE_INFO] ? document->info[TITLE_INFO] : "Song", midiPascalName);
+            originalMidiEntry = PV_FindOriginalResourceByTypeAndID(document,
+                                                                   document->originalMidiType,
+                                                                   document->originalObjectResourceID);
+            if (originalMidiEntry && originalMidiEntry->pascalName[0])
+            {
+                XBlockMove(originalMidiEntry->pascalName, midiPascalName, 256);
+            }
+            else
+            {
+                PV_CreatePascalName(document->info[TITLE_INFO] ? document->info[TITLE_INFO] : "Song", midiPascalName);
+            }
             {
                 XResourceType usedMidiType;
                 result = PV_EncodeMidiForStorageType(document->midiStorageType,
