@@ -103,10 +103,17 @@
 # 0.04.1a
 - ~~Embedded instruments seen as alias~~
 
+# 0.04.2a
+- ~~OPUS samples are played at wrong pitch (except `EndGame.rmf`?)~~
+- ~~`EndGame.rmf` plays off key (slow, -13 semitones slower)~~
+
+# 0.04.3a
+- MSB2 Percussion is broken (`DoorSlam.rmf`, `RT_technocracy.rmf`, `opening.rmf`)
+- `Crazy Dream fix.rmf` plays bass/gt sample instead of saw lead
+
 # Future
 - Allow for automation like Volume to be able have a slide on it so its easy to make a fadeout/fadein for example, the edit dialog could have "start (item)" "end (item)"
-- `DoorSlam.rmf` door slam and fret bass notes play incorrectly (seemingly only this file)
-- `RT_technocracy.rmf` weird note in drum track
+
 - Changing the program of an instrument may not reflect in preview/output
 - Resizable tracks (allow user to expand or shrink the track by click/dragging the far right end of the ruler)
 - Neo Reverb for preview player

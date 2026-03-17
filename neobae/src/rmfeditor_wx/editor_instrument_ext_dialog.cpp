@@ -2246,9 +2246,6 @@ private:
             info.splitVolume = m_samples[i].splitVolume;
             info.sampleInfo = m_samples[i].sampleInfo;
             info.compressionType = m_samples[i].compressionType;
-            if (IsOpusCompressionType(info.compressionType)) {
-                info.sampleInfo.sampledRate = static_cast<BAE_UNSIGNED_FIXED>(48000U << 16);
-            }
             info.hasOriginalData = m_samples[i].hasOriginalData ? TRUE : FALSE;
             if (BAERmfEditorDocument_SetSampleInfo(m_document, sampleIndex, &info) != BAE_NO_ERROR) {
                 if (m_cancelUndoCallback) {

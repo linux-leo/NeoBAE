@@ -42,7 +42,7 @@ extern "C" {
 
 namespace {
 
-constexpr char const *kVersionString = "0.04.1 alpha";
+constexpr char const *kVersionString = "0.04.2 alpha";
 
 static bool IsOpusCompressionType(BAERmfEditorCompressionType compressionType) {
     switch (compressionType) {
@@ -2235,9 +2235,6 @@ private:
         displayName = info.displayName ? info.displayName : "";
         info.displayName = const_cast<char *>(displayName.c_str());
         info.compressionType = compressionType;
-        if (IsOpusCompressionType(compressionType)) {
-            info.sampleInfo.sampledRate = static_cast<BAE_UNSIGNED_FIXED>(48000U << 16);
-        }
         if (BAERmfEditorDocument_SetSampleInfo(tempDoc, sampleIndex, &info) != BAE_NO_ERROR) {
             BAERmfEditorDocument_Delete(tempDoc);
             return false;
@@ -4434,9 +4431,6 @@ private:
                 BAERmfEditorSampleInfo info;
                 if (BAERmfEditorDocument_GetSampleInfo(m_document, sampleIndex, &info) == BAE_NO_ERROR) {
                     info.compressionType = compressionType;
-                    if (IsOpusCompressionType(compressionType)) {
-                        info.sampleInfo.sampledRate = static_cast<BAE_UNSIGNED_FIXED>(48000U << 16);
-                    }
                     BAERmfEditorDocument_SetSampleInfo(m_document, sampleIndex, &info);
                 }
             }
@@ -4471,9 +4465,6 @@ private:
                 BAERmfEditorSampleInfo info;
                 if (BAERmfEditorDocument_GetSampleInfo(m_document, sampleIndex, &info) == BAE_NO_ERROR) {
                     info.compressionType = compressionType;
-                    if (IsOpusCompressionType(compressionType)) {
-                        info.sampleInfo.sampledRate = static_cast<BAE_UNSIGNED_FIXED>(48000U << 16);
-                    }
                     BAERmfEditorDocument_SetSampleInfo(m_document, sampleIndex, &info);
                 }
             }
@@ -4639,9 +4630,6 @@ private:
                 info.splitVolume = editedSamples[i].splitVolume;
                 info.sampleInfo = editedSamples[i].sampleInfo;
                 info.compressionType = editedSamples[i].compressionType;
-                if (IsOpusCompressionType(info.compressionType)) {
-                    info.sampleInfo.sampledRate = static_cast<BAE_UNSIGNED_FIXED>(48000U << 16);
-                }
                 info.hasOriginalData = editedSamples[i].hasOriginalData ? TRUE : FALSE;
                 if (BAERmfEditorDocument_SetSampleInfo(m_document, sampleIndices[i], &info) != BAE_NO_ERROR) {
                     ok = false;

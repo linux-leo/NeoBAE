@@ -557,6 +557,25 @@ static uint32_t PV_CountSamplesForAsset(BAERmfEditorDocument const *document, ui
     return count;
 }
 
+static XBOOL PV_IsOpusCompression(BAERmfEditorCompressionType ct)
+{
+    switch (ct)
+    {
+        case BAE_EDITOR_COMPRESSION_OPUS_12K:
+        case BAE_EDITOR_COMPRESSION_OPUS_16K:
+        case BAE_EDITOR_COMPRESSION_OPUS_24K:
+        case BAE_EDITOR_COMPRESSION_OPUS_32K:
+        case BAE_EDITOR_COMPRESSION_OPUS_48K:
+        case BAE_EDITOR_COMPRESSION_OPUS_64K:
+        case BAE_EDITOR_COMPRESSION_OPUS_96K:
+        case BAE_EDITOR_COMPRESSION_OPUS_128K:
+        case BAE_EDITOR_COMPRESSION_OPUS_256K:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
 static XBOOL PV_AssetSupportsDontChange(BAERmfEditorDocument const *document, uint32_t assetID)
 {
     uint32_t i;
@@ -6895,6 +6914,160 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             }
 #endif
 
+#if USE_OPUS_ENCODER == TRUE && (USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE)
+            /*
+             * Opus always operates at 48 kHz.  Resample the PCM to 48 kHz
+             * before encoding so that the encoder receives native-rate data
+             * and the stored frame count matches the decoded output.
+             * The original sample rate is preserved in the editor metadata
+             * so playback pitch remains correct.
+             */
+            if (compType == C_OPUS)
+            {
+                uint32_t srcRate;
+
+                srcRate = (uint32_t)(writeWaveform.sampledRate >> 16);
+                if (srcRate == 0)
+                {
+                    srcRate = 48000;
+                }
+                if (srcRate != 48000)
+                {
+                    uint32_t srcFrames;
+                    uint32_t dstFrames;
+                    uint32_t dstBytes;
+                    uint32_t ch;
+                    XPTR resampledData;
+
+                    srcFrames = writeWaveform.waveFrames;
+                    dstFrames = (uint32_t)((uint64_t)srcFrames * 48000ULL / (uint64_t)srcRate);
+                    if (dstFrames == 0)
+                    {
+                        dstFrames = 1;
+                    }
+                    ch = writeWaveform.channels;
+                    dstBytes = dstFrames * ch * (uint32_t)(writeWaveform.bitSize / 8);
+                    resampledData = XNewPtr((int32_t)dstBytes);
+                    if (!resampledData)
+                    {
+                        XDisposePtr((XPTR)sampleSndIDs);
+                        XDisposePtr((XPTR)sampleInstIDs);
+                        return BAE_MEMORY_ERR;
+                    }
+
+                    if (writeWaveform.bitSize == 16)
+                    {
+                        int16_t const *srcPcm;
+                        int16_t *dstPcm;
+                        double step;
+                        double pos;
+                        uint32_t f;
+
+                        srcPcm = (int16_t const *)writeWaveform.theWaveform;
+                        dstPcm = (int16_t *)resampledData;
+                        step = (double)srcRate / 48000.0;
+                        pos = 0.0;
+                        for (f = 0; f < dstFrames; ++f)
+                        {
+                            uint32_t i0 = (uint32_t)pos;
+                            double frac = pos - (double)i0;
+                            uint32_t c;
+                            if (i0 + 1 < srcFrames)
+                            {
+                                for (c = 0; c < ch; ++c)
+                                {
+                                    double s0 = (double)srcPcm[i0 * ch + c];
+                                    double s1 = (double)srcPcm[(i0 + 1) * ch + c];
+                                    double v = s0 + (s1 - s0) * frac;
+                                    if (v > 32767.0) v = 32767.0;
+                                    if (v < -32768.0) v = -32768.0;
+                                    dstPcm[f * ch + c] = (int16_t)v;
+                                }
+                            }
+                            else
+                            {
+                                for (c = 0; c < ch; ++c)
+                                {
+                                    dstPcm[f * ch + c] = (i0 < srcFrames)
+                                        ? srcPcm[i0 * ch + c] : 0;
+                                }
+                            }
+                            pos += step;
+                        }
+                    }
+                    else /* 8-bit */
+                    {
+                        unsigned char const *srcPcm;
+                        unsigned char *dstPcm;
+                        double step;
+                        double pos;
+                        uint32_t f;
+
+                        srcPcm = (unsigned char const *)writeWaveform.theWaveform;
+                        dstPcm = (unsigned char *)resampledData;
+                        step = (double)srcRate / 48000.0;
+                        pos = 0.0;
+                        for (f = 0; f < dstFrames; ++f)
+                        {
+                            uint32_t i0 = (uint32_t)pos;
+                            double frac = pos - (double)i0;
+                            uint32_t c;
+                            if (i0 + 1 < srcFrames)
+                            {
+                                for (c = 0; c < ch; ++c)
+                                {
+                                    double s0 = (double)srcPcm[i0 * ch + c];
+                                    double s1 = (double)srcPcm[(i0 + 1) * ch + c];
+                                    double v = s0 + (s1 - s0) * frac;
+                                    if (v > 255.0) v = 255.0;
+                                    if (v < 0.0) v = 0.0;
+                                    dstPcm[f * ch + c] = (unsigned char)v;
+                                }
+                            }
+                            else
+                            {
+                                for (c = 0; c < ch; ++c)
+                                {
+                                    dstPcm[f * ch + c] = (i0 < srcFrames)
+                                        ? srcPcm[i0 * ch + c] : 128;
+                                }
+                            }
+                            pos += step;
+                        }
+                    }
+
+                    /* Remap loop points to 48 kHz frame space */
+                    if (writeWaveform.startLoop != 0 || writeWaveform.endLoop != 0)
+                    {
+                        writeWaveform.startLoop = (uint32_t)((uint64_t)writeWaveform.startLoop * 48000ULL / (uint64_t)srcRate);
+                        writeWaveform.endLoop = (uint32_t)((uint64_t)writeWaveform.endLoop * 48000ULL / (uint64_t)srcRate);
+                        if (writeWaveform.endLoop > dstFrames)
+                        {
+                            writeWaveform.endLoop = dstFrames;
+                        }
+                        if (writeWaveform.startLoop >= writeWaveform.endLoop)
+                        {
+                            writeWaveform.startLoop = 0;
+                            writeWaveform.endLoop = 0;
+                        }
+                    }
+
+                    if (encodeWaveDataOwner)
+                    {
+                        XDisposePtr(encodeWaveDataOwner);
+                    }
+                    encodeWaveDataOwner = resampledData;
+                    writeWaveform.theWaveform = resampledData;
+                    writeWaveform.waveFrames = dstFrames;
+                    writeWaveform.waveSize = (int32_t)dstBytes;
+                    writeWaveform.sampledRate = 48000L << 16;
+                    BAE_STDERR("[RMF Save] Sample[%u] resampled %uHz -> 48000Hz (%u -> %u frames)\n",
+                               (unsigned)index, (unsigned)srcRate,
+                               (unsigned)srcFrames, (unsigned)dstFrames);
+                }
+            }
+#endif
+
             opErr = XCreateSoundObjectFromData(&sndResource,
                                                &writeWaveform,
                                                compType,
@@ -7163,6 +7336,23 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                     writeFlags1 = extForInst->flags1;
                     writeFlags2 = extForInst->flags2;
                 }
+                /* Opus decodes to 48 kHz which differs from the engine's 22050 Hz
+                 * base rate.  The engine must factor in the SND sample rate when
+                 * computing pitch, otherwise the resampled data plays too slowly.
+                 * Force ZBF_useSampleRate for any instrument that contains an
+                 * Opus-compressed split. */
+                {
+                    uint32_t si;
+                    for (si = 0; si < document->sampleCount; ++si)
+                    {
+                        if (sampleInstIDs[si] == instID &&
+                            PV_IsOpusCompression(document->samples[si].targetCompressionType))
+                        {
+                            writeFlags1 |= ZBF_useSampleRate;
+                            break;
+                        }
+                    }
+                }
 
                 headerMiscParam1 = 0;
                 headerMiscParam2 = 0;
@@ -7288,6 +7478,11 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 {
                     writeFlags1 = extForInst->flags1;
                     writeFlags2 = extForInst->flags2;
+                }
+                /* Force ZBF_useSampleRate for Opus — see multi-split comment above. */
+                if (PV_IsOpusCompression(leaderSample->targetCompressionType))
+                {
+                    writeFlags1 |= ZBF_useSampleRate;
                 }
 
                 if (extForInst && extForInst->originalInstData && extForInst->originalInstSize >= 12)
