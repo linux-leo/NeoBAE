@@ -100,6 +100,9 @@
   - ~~like stealing, but we don't copy the samples, and point to the bank's samples~~
 - ~~SESSIONS! Savable and loadable workspace sessions.~~
 
+# 0.05a
+- Saving an file with aliased instruments doesnt play in player
+
 # Future
 - Allow for automation like Volume to be able have a slide on it so its easy to make a fadeout/fadein for example, the edit dialog could have "start (item)" "end (item)"
 - `DoorSlam.rmf` door slam and fret bass notes play incorrectly (seemingly only this file)
