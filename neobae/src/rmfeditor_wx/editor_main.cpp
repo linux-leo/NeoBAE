@@ -42,7 +42,7 @@ extern "C" {
 
 namespace {
 
-constexpr char const *kVersionString = "0.04 alpha";
+constexpr char const *kVersionString = "0.04.1 alpha";
 
 static bool IsOpusCompressionType(BAERmfEditorCompressionType compressionType) {
     switch (compressionType) {

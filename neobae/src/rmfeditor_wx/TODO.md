@@ -100,8 +100,8 @@
   - ~~like stealing, but we don't copy the samples, and point to the bank's samples~~
 - ~~SESSIONS! Savable and loadable workspace sessions.~~
 
-# 0.05a
-- Saving an file with aliased instruments doesnt play in player
+# 0.04.1a
+- ~~Embedded instruments seen as alias~~
 
 # Future
 - Allow for automation like Volume to be able have a slide on it so its easy to make a fadeout/fadein for example, the edit dialog could have "start (item)" "end (item)"

@@ -4459,6 +4459,25 @@ static XPTR PV_SerializeExtendedInstTail(BAERmfEditorInstrumentExt const *ext, i
 
 /* Extract INST + SND resources from an open RMF resource file and add them
    as editable samples in the document. Includes all key-split variants. */
+/* Check whether a SND resource ID exists among the document's captured original resources. */
+static XBOOL PV_SndExistsInOriginalResources(BAERmfEditorDocument const *document, XShortResourceID sndID)
+{
+    uint32_t i;
+    for (i = 0; i < document->originalResourceCount; ++i)
+    {
+        if (document->originalResources[i].type == ID_SND ||
+            document->originalResources[i].type == ID_CSND ||
+            document->originalResources[i].type == ID_ESND)
+        {
+            if (document->originalResources[i].id == (XLongResourceID)sndID)
+            {
+                return TRUE;
+            }
+        }
+    }
+    return FALSE;
+}
+
 static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE fileRef)
 {
     enum
@@ -4567,7 +4586,7 @@ static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE 
                 }
 
                 /* If the SND doesn't exist in this file, treat it as a bank alias. */
-                if (!XExistsFileResource(fileRef, ID_SND, (XLongResourceID)split.sndResourceID))
+                if (!PV_SndExistsInOriginalResources(document, split.sndResourceID))
                 {
                     if (PV_AddBankAliasSample(document,
                                               NULL,
@@ -4626,7 +4645,7 @@ static void PV_LoadEmbeddedSamplesFromRmf(BAERmfEditorDocument *document, XFILE 
             }
 
             /* If the SND doesn't exist in this file, treat it as a bank alias. */
-            if (!XExistsFileResource(fileRef, ID_SND, (XLongResourceID)baseSndID))
+            if (!PV_SndExistsInOriginalResources(document, baseSndID))
             {
                 if (PV_AddBankAliasSample(document,
                                           NULL,
