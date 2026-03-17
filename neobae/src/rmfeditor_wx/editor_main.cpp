@@ -42,7 +42,7 @@ extern "C" {
 
 namespace {
 
-constexpr char const *kVersionString = "0.04.2 alpha";
+constexpr char const *kVersionString = "0.04.3 alpha";
 
 static bool IsOpusCompressionType(BAERmfEditorCompressionType compressionType) {
     switch (compressionType) {
@@ -59,6 +59,11 @@ static bool IsOpusCompressionType(BAERmfEditorCompressionType compressionType) {
         default:
             return false;
     }
+}
+
+static bool IsMidiSaveExtension(wxString const &path) {
+    wxString ext = wxFileName(path).GetExt().Lower();
+    return ext == "mid" || ext == "midi";
 }
 
 enum {
@@ -270,7 +275,7 @@ public:
 
         fileMenu = new wxMenu();
         fileMenu->Append(wxID_OPEN, "&Open\tCtrl+O");
-        fileMenu->Append(wxID_SAVEAS, "Save As &RMF\tCtrl+Shift+S");
+        fileMenu->Append(wxID_SAVEAS, "Save &As...\tCtrl+Shift+S");
         fileMenu->Append(ID_SaveSession, "Save S&ession\tCtrl+S");
         fileMenu->Append(ID_SaveSessionAs, "Save Session &As (.nbs)...");
         fileMenu->AppendSeparator();
@@ -532,6 +537,20 @@ public:
             m_previewSound = nullptr;
         }
         ShutdownPlaybackEngine();
+    }
+
+    void OpenPathFromCli(wxString const &path) {
+        wxString ext;
+
+        if (path.empty()) {
+            return;
+        }
+        ext = wxFileName(path).GetExt().Lower();
+        if (ext == "nbs") {
+            LoadSession(path);
+        } else {
+            LoadDocument(path);
+        }
     }
 
 private:
@@ -2867,6 +2886,7 @@ private:
         bool saveCurrentTrack;
         int selectedTrack;
         bool requiresZmf;
+        bool canSaveAsMidi;
 
         if (!m_document) {
             wxMessageBox("Nothing is loaded.", "Save As RMF", wxOK | wxICON_INFORMATION, this);
@@ -2899,15 +2919,20 @@ private:
         }
 
         requiresZmf = BAERmfEditorDocument_RequiresZmf(saveDoc) != 0;
+          canSaveAsMidi = (BAERmfEditorDocument_CanSaveAsMidi(saveDoc) != 0);
         BAERmfEditorDocument_SetMidiStorageType(saveDoc, GetSelectedMidiStorageType());
 
         wxFileDialog dialog(this,
                             requiresZmf ? "Save As ZMF (required by FLAC/Vorbis/Opus samples)"
-                                        : "Save As RMF",
+                                                     : (canSaveAsMidi
+                                                         ? "Save As RMF/ZMF/MIDI"
+                                                         : "Save As RMF/ZMF (MIDI disabled: custom instruments/samples)"),
                             wxEmptyString,
                             wxEmptyString,
                             requiresZmf ? "ZMF files (*.zmf)|*.zmf"
-                                        : "RMF and ZMF files (*.rmf;*.zmf)|*.rmf;*.zmf",
+                                                     : (canSaveAsMidi
+                                                         ? "RMF, ZMF, and MIDI files (*.rmf;*.zmf;*.mid;*.midi)|*.rmf;*.zmf;*.mid;*.midi|RMF and ZMF files (*.rmf;*.zmf)|*.rmf;*.zmf|MIDI files (*.mid;*.midi)|*.mid;*.midi"
+                                                         : "RMF and ZMF files (*.rmf;*.zmf)|*.rmf;*.zmf"),
                             wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
         if (dialog.ShowModal() != wxID_OK) {
             if (saveDoc != m_document) {
@@ -2917,6 +2942,40 @@ private:
         }
         {
             wxString targetPath = dialog.GetPath();
+            BAEResult saveResult;
+
+            if (IsMidiSaveExtension(targetPath)) {
+                wxFileName fn(targetPath);
+                if (!canSaveAsMidi) {
+                    if (saveDoc != m_document) {
+                        BAERmfEditorDocument_Delete(saveDoc);
+                    }
+                    wxMessageBox("Cannot save as MIDI when the document contains custom instruments or samples.",
+                                 "MIDI Save Disabled",
+                                 wxOK | wxICON_INFORMATION,
+                                 this);
+                    return;
+                }
+                if (fn.GetExt().Lower() != "mid" && fn.GetExt().Lower() != "midi") {
+                    fn.SetExt("mid");
+                    targetPath = fn.GetFullPath();
+                }
+                wxScopedCharBuffer utf8TargetPath = targetPath.utf8_str();
+                saveResult = BAERmfEditorDocument_SaveAsMidi(saveDoc, const_cast<char *>(utf8TargetPath.data()));
+                if (saveResult != BAE_NO_ERROR) {
+                    if (saveDoc != m_document) {
+                        BAERmfEditorDocument_Delete(saveDoc);
+                    }
+                    wxMessageBox("Failed to save MIDI file.", "Save Failed", wxOK | wxICON_ERROR, this);
+                    return;
+                }
+                if (saveDoc != m_document) {
+                    BAERmfEditorDocument_Delete(saveDoc);
+                }
+                SetStatusText(targetPath, 1);
+                return;
+            }
+
             /* Enforce .zmf extension when document contains FLAC/Vorbis/Opus samples */
             if (requiresZmf) {
                 wxFileName fn(targetPath);
@@ -2926,7 +2985,6 @@ private:
                 }
             }
             wxScopedCharBuffer utf8TargetPath = targetPath.utf8_str();
-            BAEResult saveResult;
             bool wroteTarget;
 
             saveResult = BAERmfEditorDocument_SaveAsRmf(saveDoc, const_cast<char *>(utf8TargetPath.data()));
@@ -4673,6 +4731,14 @@ public:
     bool OnInit() override {
         auto *frame = new MainFrame();
         frame->Show(true);
+
+        if (argc > 1 && (argv[1].IsEmpty() == false)) {
+            wxString startupPath(argv[1]);
+            frame->CallAfter([frame, startupPath]() {
+                frame->OpenPathFromCli(startupPath);
+            });
+        }
+
         return true;
     }
 };

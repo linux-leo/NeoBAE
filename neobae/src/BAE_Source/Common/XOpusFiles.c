@@ -778,10 +778,12 @@ OPErr XEncodeOpusToMemory(GM_Waveform const *src, uint32_t bitrate,
     XOpusMemBuf buf;
     uint32_t frames;
     uint32_t channels;
+    uint32_t encodeChannels;
     uint32_t f;
     uint32_t chunkFrames;
     INT16 *chunkPcm;
     long wrote;
+    XBOOL collapseDualMono;
 
     if (!src || !src->theWaveform || !outData || !outSize)
     {
@@ -800,8 +802,60 @@ OPErr XEncodeOpusToMemory(GM_Waveform const *src, uint32_t bitrate,
     *outSize = 0;
     XSetMemory(&buf, sizeof(buf), 0);
 
+    channels = src->channels;
+    collapseDualMono = FALSE;
+    encodeChannels = channels;
+
+    /*
+     * Preserve mono quality when upstream hands us dual-mono stereo PCM.
+     * If every L/R frame pair matches exactly, encode a single channel.
+     */
+    if (channels == 2 && src->waveFrames > 0)
+    {
+        uint32_t frame;
+        XBOOL isDualMono;
+
+        isDualMono = TRUE;
+        if (src->bitSize == 16)
+        {
+            INT16 const *pcm16;
+            pcm16 = (INT16 const *)src->theWaveform;
+            for (frame = 0; frame < src->waveFrames; ++frame)
+            {
+                if (pcm16[frame * 2] != pcm16[frame * 2 + 1])
+                {
+                    isDualMono = FALSE;
+                    break;
+                }
+            }
+        }
+        else if (src->bitSize == 8)
+        {
+            unsigned char const *pcm8;
+            pcm8 = (unsigned char const *)src->theWaveform;
+            for (frame = 0; frame < src->waveFrames; ++frame)
+            {
+                if (pcm8[frame * 2] != pcm8[frame * 2 + 1])
+                {
+                    isDualMono = FALSE;
+                    break;
+                }
+            }
+        }
+        else
+        {
+            isDualMono = FALSE;
+        }
+
+        if (isDualMono)
+        {
+            collapseDualMono = TRUE;
+            encodeChannels = 1;
+        }
+    }
+
     enc = (XOpusEncoder *)XInitOpusEncoder((UINT32)(src->sampledRate >> 16),
-                                           (UINT32)src->channels,
+                                           encodeChannels,
                                            bitrate);
     if (!enc)
     {
@@ -816,10 +870,9 @@ OPErr XEncodeOpusToMemory(GM_Waveform const *src, uint32_t bitrate,
         return BAD_FILE;
     }
 
-    channels = src->channels;
     frames = src->waveFrames;
     chunkFrames = 4096;
-    chunkPcm = (INT16 *)XNewPtr((int32_t)(chunkFrames * channels * sizeof(INT16)));
+    chunkPcm = (INT16 *)XNewPtr((int32_t)(chunkFrames * encodeChannels * sizeof(INT16)));
     if (!chunkPcm)
     {
         XCloseOpusEncoder(enc);
@@ -835,17 +888,41 @@ OPErr XEncodeOpusToMemory(GM_Waveform const *src, uint32_t bitrate,
 
         if (src->bitSize == 16)
         {
-            XBlockMove(((INT16 const *)src->theWaveform) + (f * channels),
-                       chunkPcm,
-                       (int32_t)(count * channels * sizeof(INT16)));
+            if (collapseDualMono)
+            {
+                uint32_t i;
+                INT16 const *src16;
+
+                src16 = ((INT16 const *)src->theWaveform) + (f * channels);
+                for (i = 0; i < count; ++i)
+                {
+                    chunkPcm[i] = src16[i * 2];
+                }
+            }
+            else
+            {
+                XBlockMove(((INT16 const *)src->theWaveform) + (f * channels),
+                           chunkPcm,
+                           (int32_t)(count * channels * sizeof(INT16)));
+            }
         }
         else if (src->bitSize == 8)
         {
             uint32_t i;
             unsigned char const *pcm8 = (unsigned char const *)src->theWaveform;
-            for (i = 0; i < count * channels; ++i)
+            if (collapseDualMono)
             {
-                chunkPcm[i] = (INT16)(((int)pcm8[(f * channels) + i] - 128) << 8);
+                for (i = 0; i < count; ++i)
+                {
+                    chunkPcm[i] = (INT16)(((int)pcm8[(f * channels) + (i * 2)] - 128) << 8);
+                }
+            }
+            else
+            {
+                for (i = 0; i < count * channels; ++i)
+                {
+                    chunkPcm[i] = (INT16)(((int)pcm8[(f * channels) + i] - 128) << 8);
+                }
             }
         }
         else

@@ -425,41 +425,43 @@ ifeq ($(BUILD_GUI),1)
 		SRC_BIN += src/gui/gui_debug_console.c
 	endif
 else
-
-
-
-ifeq ($(RMFINFO),1)
-	# libNeoBAE srcs + rmfinfo.c
-	SRC_BIN	:= $(SRC) src/rmfinfo/rmfinfo.c
-else
-ifeq ($(INSTDUMP),1)
-	# libNeoBAE srcs + instdump.c
-	SRC_BIN	:= $(SRC) src/rmfinfo/instdump.c
-else
-ifeq ($(RMF2MID),1)
-	# libNeoBAE srcs + rmf2mid.c
-	SRC_BIN	:= $(SRC) src/rmf2mid/rmf2mid.c
-else
-	ifeq ($(MID2RMI),1)
-		# libNeoBAE srcs + mid2rmi.c
-		SRC_BIN	:= $(SRC) src/mid2rmi/mid2rmi.c
+	ifeq ($(RMFINFO),1)
+		# libNeoBAE srcs + rmfinfo.c
+		SRC_BIN	:= $(SRC) src/rmfinfo/rmfinfo.c
 	else
-		ifeq ($(NBSTUDIO),1)
-			SRC_BIN := $(SRC) \
-				src/rmfeditor_wx/editor_main.cpp \
-				src/rmfeditor_wx/editor_instrument_ext_dialog.cpp \
-				src/rmfeditor_wx/editor_metadata_dialog.cpp \
-				src/rmfeditor_wx/editor_pianoroll_panel.cpp \
-				src/rmfeditor_wx/batch_compress_dialog.cpp
-			BAE_LIBS += -lz
+		ifeq ($(INSTDUMP),1)
+			# libNeoBAE srcs + instdump.c
+			SRC_BIN	:= $(SRC) src/rmfinfo/instdump.c
 		else
-			# playbae = libNeoBAE srcs + playbae.c
-			SRC_BIN	:= $(SRC) src/playbae/playbae.c
+			ifeq ($(RMF2MID),1)
+				# libNeoBAE srcs + rmf2mid.c
+				SRC_BIN	:= $(SRC) src/rmf2mid/rmf2mid.c
+			else
+				ifeq ($(MID2RMF),1)
+					# libNeoBAE srcs + rmf2mid.c
+					SRC_BIN	:= $(SRC) src/mid2rmf/mid2rmf.c
+				else
+					ifeq ($(MID2RMI),1)
+						# libNeoBAE srcs + mid2rmi.c
+						SRC_BIN	:= $(SRC) src/mid2rmi/mid2rmi.c
+					else
+						ifeq ($(NBSTUDIO),1)
+							SRC_BIN := $(SRC) \
+								src/rmfeditor_wx/editor_main.cpp \
+								src/rmfeditor_wx/editor_instrument_ext_dialog.cpp \
+								src/rmfeditor_wx/editor_metadata_dialog.cpp \
+								src/rmfeditor_wx/editor_pianoroll_panel.cpp \
+								src/rmfeditor_wx/batch_compress_dialog.cpp
+							BAE_LIBS += -lz
+						else
+							# playbae = libNeoBAE srcs + playbae.c
+							SRC_BIN	:= $(SRC) src/playbae/playbae.c
+						endif
+					endif
+				endif
+			endif
 		endif
 	endif
-endif
-endif
-endif
 endif
 
 ifeq ($(KARAOKE),1)

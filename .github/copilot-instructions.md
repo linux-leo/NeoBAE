@@ -6,7 +6,7 @@ miniBAE is a cross-platform audio engine with these core components:
 
 - **Audio Engine**: Core synthesis and playback in `src/BAE_Source/Common/`
 - **Platform Layer**: OS abstraction in `src/BAE_Source/Platform/` 
-- **Format Handlers**: Support for MIDI, RMF, WAV, AIFF, AU, FLAC, OGG VORBIS, MP3
+- **Format Handlers**: Support for MIDI, RMF, ZMF, WAV, AIFF, AU, FLAC, OGG VORBIS, MP3
 - **Optional Formats**: SoundFont 2.0, SoundFont 3.0, DLS, XMF, MXMF
 - **Applications**: `playbae` (CLI) and `zefidi` (GUI) frontends
 - **Sample Cache**: Efficient memory management for audio samples
@@ -22,19 +22,24 @@ miniBAE is a cross-platform audio engine with these core components:
 - `MP3_DEC=1/MP3_ENC=1`: MP3 support
 - `FLAC_DEC=1/FLAC_ENC=1`: FLAC support  
 - `VORBIS_DEC=1/VORBIS_ENC=1`: OGG Vorbis support
+- `OPUS_DEC=1/OPUS_ENC=1`: Opus support
 - `SF2_SUPPORT=1`: SoundFont 2.0 support
-    - `USE_BASSMIDI=1`: BASSMIDI SoundFont playback (no DLS)
-    - `USE_FLUIDSYNTH=1`: FluidSnyth SF2 with DLS support, required for `XMF_SUPPORT=1`
-    - `USE_TSF=1`: TinySoundFont SF2 (no DLS)
+    - `USE_FLUIDSYNTH=1`: FluidSynth SF2 with DLS support, required for `XMF_SUPPORT=1` 
 - `XMF_SUPPORT=1`: Support for XMF files (requires FluidSynth)
+- `ZMF_SUPPORT=1`: Support for ZMF files with modern codecs (FLAC, Vorbis, Opus)
 - `KARAOKE=1`: MIDI karaoke lyrics support
 
 ### XMF and MXMF Support
-- Requires `USE_FLUIDSYNTH=1` for DLS support
+- Requires `USE_FLUIDSYNTH=1`, due to DLS requirement
 - XMF: Extended MIDI with DLS samples
 - MXMF: Beatnik's proprietary format with DLS samples
 - Loader in `src/BAE_Source/Common/GenXMF.c`
-- Details in [XMF.md](XMF.md)
+
+## RMF Editor
+- Does not currently support XMF/MXMF
+- Does not support SoundFont 2.0 or DLS instruments
+- Focused on RMF/ZMF authoring with support for modern codecs
+- Editor code in `src/rmfeditor_wx/`
 
 ### Build Commands
 ```bash
@@ -62,6 +67,9 @@ make DEBUG=1 LDEBUG=1 -j$(nproc)
 # When debugging XMF or MXMF files (requires FluidSynth)
 make DEBUG=1 USE_FLUIDSYNTH=1 -j$(nproc)
 
+# Building the RMF Editor
+make -f Makefile.rmfeditor-wx -j$(nproc)
+
 # Debugging with playbae (XMF)
 bin/playbae -f ../content/xmf/midnightsoul.xmf -t 3 2>&1
 ```
@@ -70,10 +78,60 @@ bin/playbae -f ../content/xmf/midnightsoul.xmf -t 3 2>&1
 - When loading a DLS, it will always report `fluidsynth: error: Not a SoundFont file`, we must ignore that "error".
 
 ### Platform Support
-- **Linux**: SDL2, ALSA/JACK (GUI)
-- **Windows**: MinGW, DirectSound/SDL2
+- **Linux**: SDL2/SDL3, ALSA/JACK (GUI)
+- **Windows**: MinGW, DirectSound/SDL2/SDL3, WinMM MIDI (zefidi GUI)
 - **macOS**: Native audio (TODO)
 - **WebAssembly**: Emscripten
+
+## RMF and ZMF Reference
+
+### Container IDs and Detection
+- **RMF** uses the `IREZ` resource-map header (`XFILERESOURCE_ID`)
+- **ZMF (Zefie Music Format)** uses the `ZREZ` resource-map header (`XFILERESOURCE_ZMF_ID`)
+- Content-based detection in `src/BAE_Source/Common/XFileTypes.c` recognizes both `IREZ` and `ZREZ`
+- Tooling in `src/rmfinfo/rmfinfo.c` also treats both headers as valid RMF-family containers
+
+### RMF Structure (High-Level)
+- Resource files start with `XFILERESOURCEMAP` (`mapID`, `version`, `totalResources`)
+- Resources are stored as linked entries (`nextentry`, `resourceType`, `resourceID`, name, length, payload)
+- Common resources for authored songs:
+    - `ID_SONG`: song object metadata and MIDI relationship
+    - `ID_INST`: instrument definitions, splits, and synthesis parameters
+    - `ID_SND` / `ID_CSND` / `ID_ESND`: sample payloads (raw or encoded)
+    - `ID_BANK`: bank metadata where applicable
+
+### ZMF Compatibility Rules
+- ZMF keeps RMF resource structure, but is used when samples rely on modern codecs
+- Runtime load path rejects **IREZ** files containing FLAC/Vorbis/Opus sample subtypes with `BAE_UNSUPPORTED_FORMAT`
+- Editor save logic chooses header by extension:
+    - `.zmf` -> `ZREZ`
+    - anything else (including `.rmf`) -> `IREZ`
+- `BAERmfEditorDocument_RequiresZmf()` forces ZMF workflows when document samples target or preserve FLAC/Vorbis/Opus
+
+## Engine Quirks and Gotchas
+
+### Build and Flags
+- Keep `clean` separate from parallel build (`make clean && make -j$(nproc)`), do not combine `clean` with `-j` target chains
+- `ZMF_SUPPORT=1` cascades codec support (OGG, MP3, FLAC, Vorbis, Opus; decode and encode)
+- `SF2_SUPPORT=1` forces `USE_FLUIDSYNTH=1`; if FluidSynth is off, `XMF_SUPPORT` is disabled
+- `USE_SDL2` and `USE_SDL3` are mutually exclusive in `inc/Makefile.common`
+
+### Runtime and Platform Behavior
+- FluidSynth DLS load path logs `Not a SoundFont file`; this message is expected and should not be treated as fatal
+- On Linux/WSL systems without `/dev/snd/seq`, ALSA-enabled GUI MIDI device access can segfault
+- `zefidi` file dialogs rely on `zenity`, `kdialog`, or `yad`; missing tools can break Open/Load/Export/Record actions
+
+### Audio Engine and Data Handling
+- Mixer pipeline uses high-precision intermediate buffers and hard saturation on final 16-bit output (no soft limiter)
+- Many timing/rate values in RMF and engine internals are fixed-point (16.16); treat raw Hz and fixed values carefully in tooling
+- Memory APIs are manual (`XNewPtr`/`XDisposePtr`); leaked `XPTR` blocks are a common failure mode in new code
+
+## Debugging Fast-Path
+
+1. Start with `make DEBUG=1` for verbose logs; use `make DEBUG=1 LDEBUG=1` for symbolized crash debugging.
+2. For RMF/ZMF load failures, verify the header first (`IREZ` vs `ZREZ`) using `rmfinfo`.
+3. If an RMF with modern codecs fails to load, re-save as `.zmf` so the container header is `ZREZ`.
+4. When debugging DLS/SF2 behavior with FluidSynth, ignore the expected `Not a SoundFont file` noise and focus on subsequent errors.
 
 ## Code Patterns
 

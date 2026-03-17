@@ -3211,6 +3211,7 @@ BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
                                          BAEPathName filePath);
 BAEResult BAERmfEditorDocument_SaveAsMidi(BAERmfEditorDocument *document,
                                           BAEPathName filePath);
+BAE_BOOL BAERmfEditorDocument_CanSaveAsMidi(BAERmfEditorDocument const *document);
 BAEResult BAERmfEditorDocument_DebugReportMidiRoundTripDiff(BAERmfEditorDocument *document);
 BAEResult BAERmfEditorDocument_Validate(BAERmfEditorDocument *document);
 BAE_BOOL BAERmfEditorDocument_RequiresZmf(BAERmfEditorDocument const *document);

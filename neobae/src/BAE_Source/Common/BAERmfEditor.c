@@ -186,6 +186,7 @@ static uint32_t PV_GetStoredCompressionSubTypeFromSnd(XPTR sndData,
     {
         return (uint32_t)CS_DEFAULT;
     }
+#if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE
     if (compressionType != (uint32_t)C_VORBIS
 #if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
         && compressionType != (uint32_t)C_OPUS
@@ -194,6 +195,7 @@ static uint32_t PV_GetStoredCompressionSubTypeFromSnd(XPTR sndData,
     {
         return (uint32_t)CS_DEFAULT;
     }
+#endif    
     header3 = (XSndHeader3 const *)sndData;
     if (XGetShort(&header3->type) != XThirdSoundFormat)
     {
@@ -222,8 +224,11 @@ static uint32_t PV_GetStoredCompressionSubTypeFromSnd(XPTR sndData,
         case CS_VORBIS_160K:
         case CS_VORBIS_192K:
         case CS_VORBIS_256K:
+        case CS_OPUS_12K:
         case CS_OPUS_16K:
+        case CS_OPUS_24K:
         case CS_OPUS_32K:
+        case CS_OPUS_48K:
         case CS_OPUS_64K:
         case CS_OPUS_96K:
         case CS_OPUS_128K:
@@ -246,6 +251,7 @@ static void PV_StoreCompressionSubTypeInSnd(XPTR sndData,
     {
         return;
     }
+#if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE
     if (compressionType != C_VORBIS
 #if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
         && compressionType != C_OPUS
@@ -254,7 +260,7 @@ static void PV_StoreCompressionSubTypeInSnd(XPTR sndData,
     {
         return;
     }
-
+#endif
     header3 = (XSndHeader3 *)sndData;
     if (XGetShort(&header3->type) != XThirdSoundFormat)
     {
@@ -9957,6 +9963,7 @@ BAEResult BAERmfEditorDocument_GetSampleCodecDescription(BAERmfEditorDocument co
     }
     sample = &document->samples[sampleIndex];
     outCodec[0] = 0;
+#if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE    
     if (sample->sourceCompressionType == (uint32_t)C_VORBIS)
     {
         switch ((SndCompressionSubType)sample->sourceCompressionSubType)
@@ -9993,6 +10000,7 @@ BAEResult BAERmfEditorDocument_GetSampleCodecDescription(BAERmfEditorDocument co
                 break;
         }
     }
+#endif    
 #if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
     else if (sample->sourceCompressionType == (uint32_t)C_OPUS)
     {
@@ -10031,7 +10039,9 @@ BAEResult BAERmfEditorDocument_GetSampleCodecDescription(BAERmfEditorDocument co
         }
     }
 #endif
+#if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE || USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
     else
+#endif        
     {
         XGetCompressionName((int32_t)sample->sourceCompressionType, outCodec);
     }
@@ -10512,6 +10522,7 @@ BAEResult BAERmfEditorDocument_Validate(BAERmfEditorDocument *document)
     return BAE_NO_ERROR;
 }
 
+#if USE_ZMF_SUPPORT == TRUE
 BAE_BOOL BAERmfEditorDocument_RequiresZmf(BAERmfEditorDocument const *document)
 {
     uint32_t i;
@@ -10549,10 +10560,8 @@ BAE_BOOL BAERmfEditorDocument_RequiresZmf(BAERmfEditorDocument const *document)
             case BAE_EDITOR_COMPRESSION_DONT_CHANGE:
                 /* Original data may contain a modern codec */
                 if (sample->sourceCompressionType == (uint32_t)C_FLAC ||
-                    sample->sourceCompressionType == (uint32_t)C_VORBIS
-#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE
-                    || sample->sourceCompressionType == (uint32_t)C_OPUS
-#endif
+                    sample->sourceCompressionType == (uint32_t)C_VORBIS ||
+                    sample->sourceCompressionType == (uint32_t)C_OPUS
                 )
                 {
                     return TRUE;
@@ -10564,6 +10573,7 @@ BAE_BOOL BAERmfEditorDocument_RequiresZmf(BAERmfEditorDocument const *document)
     }
     return FALSE;
 }
+#endif
 
 /* ---------- Bank instrument enumeration and cloning ---------- */
 
@@ -11288,6 +11298,16 @@ BAEResult BAERmfEditorDocument_GetMidiStorageType(BAERmfEditorDocument const *do
     return BAE_NO_ERROR;
 }
 
+BAE_BOOL BAERmfEditorDocument_CanSaveAsMidi(BAERmfEditorDocument const *document)
+{
+    if (!document)
+    {
+        return FALSE;
+    }
+    /* Raw MIDI export is valid only for documents without custom sample/instrument data. */
+    return (document->sampleCount == 0) ? TRUE : FALSE;
+}
+
 BAEResult BAERmfEditorDocument_SaveAsMidi(BAERmfEditorDocument *document,
                                           BAEPathName filePath)
 {
@@ -11299,6 +11319,10 @@ BAEResult BAERmfEditorDocument_SaveAsMidi(BAERmfEditorDocument *document,
     if (!document || !filePath)
     {
         return BAE_PARAM_ERR;
+    }
+    if (!BAERmfEditorDocument_CanSaveAsMidi(document))
+    {
+        return BAE_UNSUPPORTED_FORMAT;
     }
     result = BAERmfEditorDocument_Validate(document);
     if (result != BAE_NO_ERROR)
