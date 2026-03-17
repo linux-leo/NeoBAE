@@ -182,7 +182,7 @@
     </ClCompile>
     <ClCompile Include="..\src\rmfeditor_wx\batch_compress_dialog.cpp">
       <Filter>Source Files\RMF Editor</Filter>
-    </ClCompile>	
+    </ClCompile>
     <ClCompile Include="..\src\BAE_Source\Common\XOpusFiles.c">
       <Filter>Source Files\BAE Common</Filter>
     </ClCompile>
@@ -215,8 +215,5 @@
     <ClInclude Include="..\src\rmfeditor_wx\editor_metadata_dialog.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\src\rmfeditor_wx\batch_compress_dialog.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>	
   </ItemGroup>
 </Project>
