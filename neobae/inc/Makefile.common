@@ -451,6 +451,7 @@ else
 				src/rmfeditor_wx/editor_metadata_dialog.cpp \
 				src/rmfeditor_wx/editor_pianoroll_panel.cpp \
 				src/rmfeditor_wx/batch_compress_dialog.cpp
+			BAE_LIBS += -lz
 		else
 			# playbae = libNeoBAE srcs + playbae.c
 			SRC_BIN	:= $(SRC) src/playbae/playbae.c

@@ -94,10 +94,16 @@
 - ~~Add option to set all samples of a specific instrument to a specific codec (for convenience)~~
 - ~~Add option to set all samples of ALL instruments to a specific codec (for convenience)~~
 - ~~Compressing samples with OPUS wrecks pitch~~
+- ~~Instrument "stealing" ("Clone Instrument")~~
+  - ~~Import an instrument from the loaded HSB bank into NBStudio's instrument list~~
+- ~~Instrument sample pointers ("Sample Alias (Pointer)")~~
+  - ~~like stealing, but we don't copy the samples, and point to the bank's samples~~
+- ~~SESSIONS! Savable and loadable workspace sessions.~~
 
 # Future
 - Allow for automation like Volume to be able have a slide on it so its easy to make a fadeout/fadein for example, the edit dialog could have "start (item)" "end (item)"
 - `DoorSlam.rmf` door slam and fret bass notes play incorrectly (seemingly only this file)
+- `RT_technocracy.rmf` weird note in drum track
 - Changing the program of an instrument may not reflect in preview/output
 - Resizable tracks (allow user to expand or shrink the track by click/dragging the far right end of the ruler)
 - Neo Reverb for preview player
@@ -105,19 +111,9 @@
 - MP3 externally imported samples (not encoded by us) may have a gap
 - Start from nothing (currently the editor requires you to load a file)
 - Allow configuration of SysEx and 'non-standard' CC commands
-- SESSIONS! Savable and loadable workspace sessions.
-  - Session data should embed all resources (instruments, samples, midi, settings)
-  - Should not rely on original files
-  - Should be compressed before saving and decompressed when loading
-     - Use zlib since we already depend on it via dependancy chain
-  - Possible file extension: `.nbs`
 - Enhanced Exporting
   - Currently we list all tracks and allow exporting a single track.
   - We should enable channel exporting in the same manner.
   - It should allow exporting certain channels (multiple possible, eg ch9 and ch10 only).
   - It should also allow exporting of each selected channel to a seperate RMF files (eg `user_selected_name[chX].rmf`)
-- Instrument "stealing" ("Clone Instrument")
-  - Import an instrument from the loaded HSB bank into NBStudio's instrument list
-- Instrument sample pointers ("Sample Alias (Pointer)")
-  - like stealing, but we don't copy the samples, and point to the bank's samples
 - MIDI In (record to track)

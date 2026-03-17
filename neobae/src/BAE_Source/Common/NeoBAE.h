@@ -3215,6 +3215,47 @@ BAEResult BAERmfEditorDocument_DebugReportMidiRoundTripDiff(BAERmfEditorDocument
 BAEResult BAERmfEditorDocument_Validate(BAERmfEditorDocument *document);
 BAE_BOOL BAERmfEditorDocument_RequiresZmf(BAERmfEditorDocument const *document);
 
+/* ---------- Bank instrument enumeration and cloning ---------- */
+
+typedef struct BAERmfEditorBankInstrumentInfo
+{
+    uint32_t instID;                /* INST resource ID from bank */
+    char name[256];                 /* INST resource name from bank */
+    unsigned char program;          /* instID % 128 */
+    uint16_t bank;                  /* instID / 128 (bank select) */
+    int16_t keySplitCount;          /* number of key splits (0 = non-split) */
+    unsigned char flags1;           /* ZBF_ bitmask from INST header */
+    unsigned char flags2;           /* ZBF_ bitmask from INST header */
+} BAERmfEditorBankInstrumentInfo;
+
+/* Count INST resources available in a loaded bank file. */
+BAEResult BAERmfEditorBank_GetInstrumentCount(BAEBankToken bankToken,
+                                              uint32_t *outCount);
+
+/* Retrieve info about the Nth INST resource in a loaded bank. */
+BAEResult BAERmfEditorBank_GetInstrumentInfo(BAEBankToken bankToken,
+                                             uint32_t instrumentIndex,
+                                             BAERmfEditorBankInstrumentInfo *outInfo);
+
+/* Clone a full instrument (INST + all SND samples) from a bank into the document.
+ * targetProgram is the MIDI program number (0-127) to assign in the document. */
+BAEResult BAERmfEditorDocument_CloneInstrumentFromBank(BAERmfEditorDocument *document,
+                                                       BAEBankToken bankToken,
+                                                       uint32_t instrumentIndex,
+                                                       unsigned char targetProgram);
+
+/* Alias an instrument from a bank: creates INST metadata referencing the bank's SND
+ * resources without copying sample data. The bank must remain loaded for playback. */
+BAEResult BAERmfEditorDocument_AliasInstrumentFromBank(BAERmfEditorDocument *document,
+                                                       BAEBankToken bankToken,
+                                                       uint32_t instrumentIndex,
+                                                       unsigned char targetProgram);
+
+/* Query whether a sample is a bank alias (pointer to bank SND, no embedded data). */
+BAEResult BAERmfEditorDocument_IsSampleBankAlias(BAERmfEditorDocument const *document,
+                                                  uint32_t sampleIndex,
+                                                  XBOOL *outIsAlias);
+
 /* Wrapper that accepts a BAEMixer (opaque) and returns whether the audio tail is active.
  * Implemented in NeoBAE.c so callers without access to sBAEMixer internals can use it. */
 XBOOL BAEMixer_IsAudioTailActive(BAEMixer mixer);

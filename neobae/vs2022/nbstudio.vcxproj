@@ -281,6 +281,7 @@ wxbase33u.lib;libmp3lame.lib;FLAC.lib;vorbisfile.lib;vorbisenc.lib;vorbis.lib;op
     <!-- FLAC Windows UTF-8 I/O shim -->
     <ClCompile Include="..\src\rmfeditor_wx\editor_metadata_dialog.cpp" />
     <ClCompile Include="..\src\rmfeditor_wx\editor_pianoroll_panel.cpp" />
+    <ClCompile Include="..\src\rmfeditor_wx\batch_compress_dialog.cpp" />
     <ClCompile Include="..\src\thirdparty\flac\src\share\win_utf8_io\win_utf8_io.c">
       <CompileAs>CompileAsC</CompileAs>
       <AdditionalIncludeDirectories>
