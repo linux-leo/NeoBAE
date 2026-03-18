@@ -819,7 +819,7 @@ public:
                               std::function<void(wxString const &)> beginUndoCallback,
                               std::function<void(wxString const &)> commitUndoCallback,
                               std::function<void()> cancelUndoCallback,
-                              std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType)> playCallback,
+                              std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool)> playCallback,
                               std::function<void()> stopCallback,
                               std::function<bool(uint32_t, wxString const &)> replaceCallback,
                               std::function<bool(uint32_t, wxString const &)> exportCallback)
@@ -875,7 +875,8 @@ public:
                                &m_samples[(size_t)best].sampleInfo,
                                m_samples[(size_t)best].splitVolume,
                                m_samples[(size_t)best].rootKey,
-                               m_samples[(size_t)best].compressionType);
+                               m_samples[(size_t)best].compressionType,
+                               m_samples[(size_t)best].opusRoundTripResample);
             },
             [this]() {
                 if (m_stopCallback) m_stopCallback();
@@ -1024,7 +1025,7 @@ private:
     std::function<void(wxString const &)> m_beginUndoCallback;
     std::function<void(wxString const &)> m_commitUndoCallback;
     std::function<void()> m_cancelUndoCallback;
-    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType)> m_playCallback;
+    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool)> m_playCallback;
     std::function<void()> m_stopCallback;
     std::function<bool(uint32_t, wxString const &)> m_replaceCallback;
     std::function<bool(uint32_t, wxString const &)> m_exportCallback;
@@ -1693,13 +1694,14 @@ private:
                 /* Auto-update sample rate when codec changes only if the user has not
                  * manually edited the rate field (current == stored).
                  * Round-Trip preserves source rate — skip auto-update. */
+                bool keepRateForOpus = (newCodecIdx == 6 || newCodecIdx == 7);
                 if (m_sampleRateSpin &&
                     sampleIndex != static_cast<uint32_t>(-1) &&
                     oldCodecIdx >= 0 &&
                     newCodecIdx >= 0 &&
                     oldCodecIdx != newCodecIdx &&
-                    newCodecIdx != 7 &&
-                    currentRateHz == storedRateHz) {
+                    currentRateHz == storedRateHz &&
+                    !keepRateForOpus) {
                     int bitrateIdx = m_bitrateChoice && m_bitrateChoice->IsEnabled()
                         ? m_bitrateChoice->GetSelection()
                         : 0;
@@ -2405,7 +2407,7 @@ bool ShowInstrumentExtEditorDialog(
     std::function<void(wxString const &)> beginUndoCallback,
     std::function<void(wxString const &)> commitUndoCallback,
     std::function<void()> cancelUndoCallback,
-    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType)> playCallback,
+    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool)> playCallback,
     std::function<void()> stopCallback,
     std::function<bool(uint32_t, wxString const &)> replaceCallback,
     std::function<bool(uint32_t, wxString const &)> exportCallback,

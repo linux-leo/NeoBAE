@@ -1077,6 +1077,31 @@ static void PV_ForceSndLoopPoints(XPTR sndResource, int32_t loopStart, int32_t l
     }
 }
 
+static void PV_ForceSndDecodedFrameCount(XPTR sndResource, uint32_t frameCount)
+{
+    XSndHeader3 *snd;
+    uint32_t bytesPerFrame;
+
+    if (!sndResource)
+    {
+        return;
+    }
+
+    snd = (XSndHeader3 *)sndResource;
+    if (XGetShort(&snd->type) != XThirdSoundFormat)
+    {
+        return;
+    }
+
+    XPutLong(&snd->sndBuffer.frameCount, frameCount);
+
+    bytesPerFrame = (uint32_t)snd->sndBuffer.channels * ((uint32_t)snd->sndBuffer.bitSize / 8U);
+    if (bytesPerFrame > 0)
+    {
+        XPutLong(&snd->sndBuffer.decodedBytes, frameCount * bytesPerFrame);
+    }
+}
+
 /* Lossy encoders can alter decoded frame count (resampling, padding/trimming).
  * Keep loop points valid by mapping them to the encoded stream's frame domain. */
 static void PV_RemapLoopPointsToFrameCount(uint32_t sourceFrames,
@@ -1120,11 +1145,13 @@ static void PV_RemapLoopPointsToFrameCount(uint32_t sourceFrames,
         uint32_t mappedStart;
         uint32_t mappedEnd;
 
-        mappedStart = (uint32_t)((((uint64_t)(uint32_t)loopStart * (uint64_t)targetFrames) +
-                                  ((uint64_t)sourceFrames / 2ULL)) /
+        /* Loop points are a half-open interval [start, end). Preserve the
+         * covered region by flooring the start boundary and ceiling the end
+         * boundary instead of rounding both inward. */
+        mappedStart = (uint32_t)(((uint64_t)(uint32_t)loopStart * (uint64_t)targetFrames) /
                                  (uint64_t)sourceFrames);
         mappedEnd = (uint32_t)((((uint64_t)(uint32_t)loopEnd * (uint64_t)targetFrames) +
-                                ((uint64_t)sourceFrames / 2ULL)) /
+                                ((uint64_t)sourceFrames - 1ULL)) /
                                (uint64_t)sourceFrames);
 
         if (mappedStart > targetFrames)
@@ -7019,9 +7046,27 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
         uint32_t loopFrameLimit;
         XResourceType writeSndType;
         int32_t roundTripSourceRate;  /* non-zero when encoding Opus round-trip */
+        XBOOL samplePlayAtSampledFreq;
+        XBOOL sampleWasEncodedOpus;
+        uint32_t decodedFramesForRate;
 
         sample = &document->samples[index];
         roundTripSourceRate = 0;
+        samplePlayAtSampledFreq = FALSE;
+        sampleWasEncodedOpus = FALSE;
+        decodedFramesForRate = 0;
+
+        if (sample->instID != 0)
+        {
+            BAERmfEditorInstrumentExt const *sampleExt;
+
+            sampleExt = PV_FindInstrumentExt((BAERmfEditorDocument *)document,
+                                             (XLongResourceID)sample->instID);
+            if (sampleExt && TEST_FLAG_VALUE(sampleExt->flags2, ZBF_playAtSampledFreq))
+            {
+                samplePlayAtSampledFreq = TRUE;
+            }
+        }
 
         /* Bank alias samples reference external bank SND IDs and must not
          * participate in local SND dedupe/ID assignment. */
@@ -7400,7 +7445,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                     compSubType = CS_DEFAULT;
                     break;
 #endif /* USE_FLAC_ENCODER && USE_FLAC_DECODER */
-#if USE_OPUS_ENCODER == TRUE && (USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE)
+#if USE_OPUS_ENCODER == TRUE || USE_OPUS_DECODER == TRUE
                 case BAE_EDITOR_COMPRESSION_OPUS_12K:
                     compType    = C_OPUS;
                     compSubType = CS_OPUS_12K;
@@ -7448,6 +7493,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             if (compType == C_OPUS)
             {
                 encodeCompSubType = PV_ComposeOpusEncodeSubType(compSubType, sample->targetOpusMode);
+                sampleWasEncodedOpus = TRUE;
             }
 
             if (sample->sourceCompressionType == (uint32_t)C_OPUS &&
@@ -7476,7 +7522,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 }
             }
 
-#if USE_OPUS_ENCODER == TRUE && (USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE)
+#if USE_OPUS_ENCODER == TRUE || USE_OPUS_DECODER == TRUE
             /*
              * Some editor paths can leave a mono source represented as dual-mono
              * PCM (L == R) while preserving sampleInfo.channels = 1. Keep Opus
@@ -7566,7 +7612,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             }
 #endif
 
-#if USE_OPUS_ENCODER == TRUE && (USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE)
+#if USE_OPUS_ENCODER == TRUE || USE_OPUS_DECODER == TRUE
             /*
              * Opus encoder accepts multiple source rates; choose a codec-aware
              * target rate (e.g. 24k for ~22k sources, 48k for high-rate sources)
@@ -7643,26 +7689,86 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
 
             {
                 uint32_t encodedFrames;
+                SampleDataInfo decodedInfo;
+                XPTR decodedOwner;
 
-                encodedFrames = PV_GetDecodedFrameCountFromSnd(sndResource);
+                XSetMemory(&decodedInfo, (int32_t)sizeof(decodedInfo), 0);
+                decodedOwner = NULL;
+                (void)XGetSamplePtrFromSnd(sndResource, &decodedInfo);
+
+                encodedFrames = decodedInfo.frames;
                 if (encodedFrames == 0)
                 {
                     encodedFrames = writeWaveform.waveFrames;
                 }
+                decodedFramesForRate = encodedFrames;
+                PV_ForceSndDecodedFrameCount(sndResource, encodedFrames);
                 loopStart = (int32_t)writeWaveform.startLoop;
                 loopEnd = (int32_t)writeWaveform.endLoop;
-                PV_RemapLoopPointsToFrameCount(writeWaveform.waveFrames,
-                                               encodedFrames,
-                                               &loopStart,
-                                               &loopEnd);
+
+                if (compType == C_OPUS && sample->opusUseRoundTripResampling)
+                {
+                    if (loopStart < 0 || loopEnd <= loopStart ||
+                        (uint32_t)loopStart >= encodedFrames)
+                    {
+                        loopStart = 0;
+                        loopEnd = 0;
+                    }
+                    else if ((uint32_t)loopEnd > encodedFrames)
+                    {
+                        int32_t overflow;
+
+                        overflow = loopEnd - (int32_t)encodedFrames;
+                        loopStart -= overflow;
+                        loopEnd = (int32_t)encodedFrames;
+                        if (loopStart < 0)
+                        {
+                            loopStart = 0;
+                        }
+                        if (loopEnd <= loopStart)
+                        {
+                            loopStart = 0;
+                            loopEnd = 0;
+                        }
+                    }
+                }
+                else
+                {
+                    PV_RemapLoopPointsToFrameCount(writeWaveform.waveFrames,
+                                                   encodedFrames,
+                                                   &loopStart,
+                                                   &loopEnd);
+                }
+
                 writeWaveform.startLoop = (uint32_t)loopStart;
                 writeWaveform.endLoop = (uint32_t)loopEnd;
-                BAE_STDERR("[RMF Save] Sample[%u] loop remap srcFrames=%u encFrames=%u -> %u-%u\n",
-                           (unsigned)index,
-                           (unsigned)writeWaveform.waveFrames,
-                           (unsigned)encodedFrames,
-                           (unsigned)writeWaveform.startLoop,
-                           (unsigned)writeWaveform.endLoop);
+                if (compType == C_OPUS && sample->opusUseRoundTripResampling)
+                {
+                    BAE_STDERR("[RMF Save] Sample[%u] Opus RT loop keep/clamp srcFrames=%u encFrames=%u -> %u-%u\n",
+                               (unsigned)index,
+                               (unsigned)writeWaveform.waveFrames,
+                               (unsigned)encodedFrames,
+                               (unsigned)writeWaveform.startLoop,
+                               (unsigned)writeWaveform.endLoop);
+                }
+                else
+                {
+                    BAE_STDERR("[RMF Save] Sample[%u] loop remap srcFrames=%u encFrames=%u -> %u-%u\n",
+                               (unsigned)index,
+                               (unsigned)writeWaveform.waveFrames,
+                               (unsigned)encodedFrames,
+                               (unsigned)writeWaveform.startLoop,
+                               (unsigned)writeWaveform.endLoop);
+                }
+
+                if (decodedInfo.pMasterPtr && decodedInfo.pMasterPtr != sndResource)
+                {
+                    decodedOwner = decodedInfo.pMasterPtr;
+                }
+                if (decodedOwner)
+                {
+                    XDisposePtr(decodedOwner);
+                }
             }
         }
         if (sndResource)
@@ -7670,19 +7776,66 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             int32_t sndSampleRate;
 
             sndSampleRate = writeWaveform.sampledRate;
+            if (sampleWasEncodedOpus && samplePlayAtSampledFreq &&
+                writeWaveform.waveFrames > 0 && decodedFramesForRate > 0 &&
+                decodedFramesForRate != writeWaveform.waveFrames)
+            {
+                uint64_t scaledRate;
+
+                scaledRate = (((uint64_t)(uint32_t)sndSampleRate * (uint64_t)writeWaveform.waveFrames) +
+                              ((uint64_t)decodedFramesForRate / 2ULL)) /
+                             (uint64_t)decodedFramesForRate;
+                if (scaledRate < ((uint64_t)4000U << 16))
+                {
+                    scaledRate = ((uint64_t)4000U << 16);
+                }
+                if (scaledRate > (uint64_t)0xFFFF0000u)
+                {
+                    scaledRate = (uint64_t)0xFFFF0000u;
+                }
+                BAE_STDERR("[RMF Save] Sample[%u] playAtSampledFreq Opus rate adjust %uHz -> %uHz (srcFrames=%u decodedFrames=%u)\n",
+                           (unsigned)index,
+                           (unsigned)(((uint32_t)sndSampleRate) >> 16),
+                           (unsigned)(((uint32_t)scaledRate) >> 16),
+                           (unsigned)writeWaveform.waveFrames,
+                           (unsigned)decodedFramesForRate);
+                sndSampleRate = (int32_t)scaledRate;
+            }
             XSetSoundBaseKey(sndResource, sample->rootKey);
             XSetSoundSampleRate(sndResource, sndSampleRate);
             XSetSoundLoopPoints(sndResource, (int32_t)writeWaveform.startLoop, (int32_t)writeWaveform.endLoop);
             PV_ForceSndLoopPoints(sndResource, (int32_t)writeWaveform.startLoop, (int32_t)writeWaveform.endLoop);
-#if USE_OPUS_ENCODER == TRUE && (USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE)
+#if USE_OPUS_ENCODER == TRUE || USE_OPUS_DECODER == TRUE
             if (roundTripSourceRate != 0)
             {
+                int32_t roundTripWriteRate;
+
+                roundTripWriteRate = roundTripSourceRate;
+                if (samplePlayAtSampledFreq &&
+                    writeWaveform.waveFrames > 0 && decodedFramesForRate > 0 &&
+                    decodedFramesForRate != writeWaveform.waveFrames)
+                {
+                    uint64_t scaledRate;
+
+                    scaledRate = (((uint64_t)(uint32_t)roundTripWriteRate * (uint64_t)writeWaveform.waveFrames) +
+                                  ((uint64_t)decodedFramesForRate / 2ULL)) /
+                                 (uint64_t)decodedFramesForRate;
+                    if (scaledRate < ((uint64_t)4000U << 16))
+                    {
+                        scaledRate = ((uint64_t)4000U << 16);
+                    }
+                    if (scaledRate > (uint64_t)0xFFFF0000u)
+                    {
+                        scaledRate = (uint64_t)0xFFFF0000u;
+                    }
+                    roundTripWriteRate = (int32_t)scaledRate;
+                }
                 /* Override the spoofed 48000 rate with the true source rate so
                  * the engine can time-stretch correctly on decode. */
-                XSetSoundSampleRate(sndResource, roundTripSourceRate);
+                XSetSoundSampleRate(sndResource, roundTripWriteRate);
                 XSetSoundOpusRoundTripFlag(sndResource, TRUE);
                 BAE_STDERR("[RMF Save] Sample[%u] round-trip: SND rate fixed to %uHz + XSOUND_OPUS_ROUNDTRIP_RESAMPLE set\n",
-                           (unsigned)index, (unsigned)(roundTripSourceRate >> 16));
+                           (unsigned)index, (unsigned)(((uint32_t)roundTripWriteRate) >> 16));
             }
 #endif
         }
@@ -10306,6 +10459,7 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
     BAEResult result;
     XBOOL loopChanged;
     XBOOL sampleRateTouched;
+    XBOOL keepRateForOpus;
     BAE_UNSIGNED_FIXED newSampleRate;
     BAE_UNSIGNED_FIXED incomingSampleRate;
     BAE_UNSIGNED_FIXED oldSampleRate;
@@ -10326,6 +10480,7 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
         return BAE_PARAM_ERR;
     }
     sample = &document->samples[sampleIndex];
+    keepRateForOpus = PV_IsOpusCompression(sampleInfo->compressionType) ? TRUE : FALSE;
     oldProgram = sample->program;
     oldInstID = sample->instID;
     oldCompressionType = sample->targetCompressionType;
@@ -10386,8 +10541,15 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
     newSampleRate = incomingSampleRate;
     if (newSampleRate == 0)
     {
-        newSampleRate = PV_RecommendSampleRateForCompression(sample,
-                                                             sampleInfo->compressionType);
+        if (keepRateForOpus)
+        {
+            newSampleRate = oldSampleRate;
+        }
+        else
+        {
+            newSampleRate = PV_RecommendSampleRateForCompression(sample,
+                                                                 sampleInfo->compressionType);
+        }
     }
     else if (newSampleRate >= 4000U && newSampleRate <= 384000U)
     {
@@ -10400,7 +10562,8 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
      * codec-aware recommended rate from source material metadata. */
     if (!sampleRateTouched &&
         sampleInfo->compressionType != BAE_EDITOR_COMPRESSION_DONT_CHANGE &&
-        sampleInfo->compressionType != oldCompressionType)
+        sampleInfo->compressionType != oldCompressionType &&
+        !keepRateForOpus)
     {
         newSampleRate = PV_RecommendSampleRateForCompression(sample,
                                                              sampleInfo->compressionType);

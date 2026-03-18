@@ -222,6 +222,7 @@ typedef struct {
     UINT32 input_sample_rate;
     UINT32 channels;
     UINT32 bitrate;
+    UINT32 preskip;
 
     double resample_step;
     double resample_pos;
@@ -350,8 +351,8 @@ static int PV_QueueOpusHeaders(XOpusEncoder *enc)
     XBlockMove((void *)"OpusHead", head, 8);
     head[8] = 1;
     head[9] = (unsigned char)enc->channels;
-    head[10] = 0;
-    head[11] = 0;
+    head[10] = (unsigned char)(enc->preskip & 0xFFU);
+    head[11] = (unsigned char)((enc->preskip >> 8) & 0xFFU);
     head[12] = (unsigned char)(enc->input_sample_rate & 0xFF);
     head[13] = (unsigned char)((enc->input_sample_rate >> 8) & 0xFF);
     head[14] = (unsigned char)((enc->input_sample_rate >> 16) & 0xFF);
@@ -611,6 +612,7 @@ void* XInitOpusEncoder(UINT32 sample_rate, UINT32 channels, UINT32 bitrate, UINT
     XOpusEncoder *enc;
     int err;
     int application;
+    opus_int32 lookahead;
 
     if (channels < 1 || channels > 2)
     {
@@ -691,6 +693,17 @@ void* XInitOpusEncoder(UINT32 sample_rate, UINT32 channels, UINT32 bitrate, UINT
     {
         opus_encoder_ctl(enc->encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
     }
+
+    lookahead = 0;
+    if (opus_encoder_ctl(enc->encoder, OPUS_GET_LOOKAHEAD(&lookahead)) == OPUS_OK && lookahead > 0)
+    {
+        enc->preskip = (UINT32)lookahead;
+    }
+    else
+    {
+        enc->preskip = 0;
+    }
+    enc->granule_pos = (ogg_int64_t)enc->preskip;
 
     if (ogg_stream_init(&enc->os, rand()) != 0)
     {

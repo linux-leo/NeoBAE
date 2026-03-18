@@ -3,10 +3,12 @@
 - Sus out sample codec issues
   - Multiple codec speed/pitch issues
   - MP3 gap + loop points (MUST BE CAREFUL WHAT WE CHANGE)
-  - opus to mp3 = wrong pitch
-  - OPUS loop points
-  - Dynamic frequency scaling
+  - Opus to mp3 = wrong pitch
+  - ~~Opus loop points~~
+  - ~~Opus Dynamic frequency scaling~~
   - ~~neho's crazy compression tactic (Round‑Trip Resampling)~~
+  - ~~Opus (std and RT) sped up~~
+  - ~~Opus RT preview needs speed down~~
   - ~~ADPCM~~
   - ~~VORBIS~~
   - ~~FLAC~~

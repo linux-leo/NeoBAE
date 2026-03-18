@@ -1412,7 +1412,8 @@ private:
                             BAESampleInfo const *overrideInfo = nullptr,
                             int16_t splitVolumeOverride = 0,
                             unsigned char rootKeyOverride = 0xFF,
-                            BAERmfEditorCompressionType compressionOverride = BAE_EDITOR_COMPRESSION_DONT_CHANGE) {
+                            BAERmfEditorCompressionType compressionOverride = BAE_EDITOR_COMPRESSION_DONT_CHANGE,
+                            bool opusRoundTripOverride = false) {
         BAERmfEditorSampleInfo sampleInfo;
         BAEResult loadResult;
         BAEResult startResult;
@@ -1425,7 +1426,12 @@ private:
         int loadRateOctaveShift;
         bool preserveIntendedSampleRate;
         bool sourceIsOpus;
+        bool sourceIsOpusRoundTrip;
+        bool effectiveIsOpusRoundTrip;
         bool retimeDecodedPreviewToIntendedRate;
+        bool previewNeedsFrameRateComp;
+        uint32_t previewSourceFramesForRate;
+        uint32_t previewDecodedFramesForRate;
         constexpr double kMinRateFixed = static_cast<double>(4000U << 16);
         constexpr double kMaxRateFixed = static_cast<double>(0xFFFF0000u);
 
@@ -1454,6 +1460,8 @@ private:
         }
         baseSampleRate = intendedSampleRate;
         sourceIsOpus = false;
+        sourceIsOpusRoundTrip = (sampleInfo.opusRoundTripResample == TRUE);
+        effectiveIsOpusRoundTrip = sourceIsOpusRoundTrip || opusRoundTripOverride;
         {
             char codecName[64] = {};
             if (BAERmfEditorDocument_GetSampleCodecDescription(m_document,
@@ -1463,12 +1471,17 @@ private:
                 sourceIsOpus = wxString::FromUTF8(codecName).Lower().Contains("opus");
             }
         }
-        preserveIntendedSampleRate = IsOpusCompressionType(compressionOverride);
-        retimeDecodedPreviewToIntendedRate = preserveIntendedSampleRate ||
+        preserveIntendedSampleRate = IsOpusCompressionType(compressionOverride) ||
+                                     effectiveIsOpusRoundTrip;
+        retimeDecodedPreviewToIntendedRate = (preserveIntendedSampleRate && !effectiveIsOpusRoundTrip) ||
                                              (sourceIsOpus &&
                                               compressionOverride != BAE_EDITOR_COMPRESSION_DONT_CHANGE &&
                                               compressionOverride != BAE_EDITOR_COMPRESSION_PCM &&
                                               !IsOpusCompressionType(compressionOverride));
+        previewNeedsFrameRateComp = (sourceIsOpus || IsOpusCompressionType(compressionOverride)) &&
+                                    !effectiveIsOpusRoundTrip;
+        previewSourceFramesForRate = 0;
+        previewDecodedFramesForRate = 0;
         if (!EnsurePlaybackEngine()) {
             return false;
         }
@@ -1928,6 +1941,8 @@ private:
             if (targetFrames == 0) {
                 targetFrames = sourceFrames;
             }
+            previewSourceFramesForRate = sourceFrames;
+            previewDecodedFramesForRate = targetFrames;
             if (loopEnd > loopStart && sourceFrames > 0 && targetFrames > 0) {
                 if (sourceFrames != targetFrames) {
                     uint32_t mappedStart;
@@ -2006,15 +2021,34 @@ private:
         if (playAtSampledFreq) {
             /* Play at the sample's native rate with no transposition, matching
              * the engine's behaviour (GenSynth: NotePitch = 1.0 * sampleRate/22050).
-             * Use the document's sample rate directly — baseSampleRate may have
-             * been halved by adaptLoadRateForPitch which we must not honour here. */
-            BAE_UNSIGNED_FIXED nativeRate = sampleInfo.sampleInfo.sampledRate;
+             * Use intendedSampleRate so live instrument-editor overrides (including
+             * Opus Round-Trip preview rate edits) are honoured. */
+            BAE_UNSIGNED_FIXED nativeRate = intendedSampleRate;
             if (nativeRate < (4000U << 16)) {
                 if (nativeRate >= 4000U && nativeRate <= 384000U) {
                     nativeRate <<= 16;
                 } else {
                     nativeRate = (44100U << 16);
                 }
+            }
+            if (previewNeedsFrameRateComp &&
+                previewSourceFramesForRate > 0 &&
+                previewDecodedFramesForRate > 0 &&
+                previewDecodedFramesForRate != previewSourceFramesForRate) {
+                double adjustedRate = (static_cast<double>(nativeRate) *
+                                       static_cast<double>(previewSourceFramesForRate)) /
+                                      static_cast<double>(previewDecodedFramesForRate);
+                BAE_UNSIGNED_FIXED scaledRate = static_cast<BAE_UNSIGNED_FIXED>(std::clamp(adjustedRate,
+                                                                                            kMinRateFixed,
+                                                                                            kMaxRateFixed));
+                fprintf(stderr,
+                        "[nbstudio] Preview sample %u playAtSampledFreq rate adjust %lu -> %lu (sourceFrames=%u decodedFrames=%u)\n",
+                        static_cast<unsigned>(sampleIndex),
+                        static_cast<unsigned long>(nativeRate),
+                        static_cast<unsigned long>(scaledRate),
+                        static_cast<unsigned>(previewSourceFramesForRate),
+                        static_cast<unsigned>(previewDecodedFramesForRate));
+                nativeRate = scaledRate;
             }
             rate = nativeRate;
         } else {
@@ -4786,8 +4820,14 @@ private:
             [this](wxString const &label) { BeginUndoAction(label); },
             [this](wxString const &label) { CommitUndoAction(label); },
             [this]() { CancelUndoAction(); },
-            [this](uint32_t sampleIndex, int key, BAESampleInfo const *overrideInfo, int16_t splitVolumeOverride, unsigned char rootKeyOverride, BAERmfEditorCompressionType compressionOverride) {
-                if (!PreviewSampleAtKey(sampleIndex, key, overrideInfo, splitVolumeOverride, rootKeyOverride, compressionOverride)) {
+            [this](uint32_t sampleIndex, int key, BAESampleInfo const *overrideInfo, int16_t splitVolumeOverride, unsigned char rootKeyOverride, BAERmfEditorCompressionType compressionOverride, bool opusRoundTripOverride) {
+                if (!PreviewSampleAtKey(sampleIndex,
+                                        key,
+                                        overrideInfo,
+                                        splitVolumeOverride,
+                                        rootKeyOverride,
+                                        compressionOverride,
+                                        opusRoundTripOverride)) {
                     wxMessageBox("Preview playback failed for this sample.",
                                  "Sample Preview", wxOK | wxICON_ERROR, this);
                 }
