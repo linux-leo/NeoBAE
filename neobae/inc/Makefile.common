@@ -29,13 +29,16 @@ ifneq ($(WASM),1)
 		EMBED_FONT := 1
 		XMF_SUPPORT := 1
 		DISABLE_NOKIA := 0			    
-		DISABLE_BEATNIK_SF2_NRPN := 0   
+		DISABLE_BEATNIK_SF2_NRPN := 0
+		CREATION_API := 0
 	endif
 endif
 
 ifeq ($(NBSTUDIO),1)
 	# NBStudio requires ZMF support
+	# and the creation API
 	ZMF_SUPPORT := 1
+	CREATION_API := 1
 endif
 
 ifeq ($(ZMF_SUPPORT),1)
@@ -262,7 +265,6 @@ endif
 # Primary libNeoBAE sources
 SRC		+=	src/BAE_Source/Common/DriverTools.c \
 			src/BAE_Source/Common/GenAudioStreams.c \
-			src/BAE_Source/Common/BAERmfEditor.c \
 			src/BAE_Source/Common/GenCache.c \
 			src/BAE_Source/Common/GenChorus.c \
 			src/BAE_Source/Common/GenFiltersReverbU3232.c \
@@ -347,6 +349,13 @@ endif
 # Include XMPEGFilesSun.c when either encoder or decoder is enabled
 ifneq ($(filter 1,$(MP3_ENC) $(MP3_DEC)),) 
 	SRC += src/BAE_MPEG_Source_II/XMPEGFilesSun.c
+endif
+
+# RMF editing and creation API, used by NeoBAE Studio
+# This API enables numerous exports in the DLL and LIB
+# for interacting with the BAE system
+ifeq ($(CREATION_API),1)
+	SRC += src/BAE_Source/Common/BAERmfEditor.c
 endif
 
 # Optional MP3 encoder integration

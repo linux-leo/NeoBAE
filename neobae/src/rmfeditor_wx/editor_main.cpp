@@ -45,7 +45,7 @@ extern "C" {
 #include <wx/msw/winundef.h>
 #endif // __WXMSW__
 
-#define VERSION "0.06-alpha"
+#define VERSION "0.07a"
 
 namespace {
 
@@ -500,10 +500,11 @@ public:
         PianoRollPanel_SetNotePreviewRequestedCallback(m_pianoRoll,
                                                        [this](uint16_t bank,
                                                               unsigned char program,
+                                                                                  unsigned char channel,
                                                               unsigned char note,
                                                               uint32_t durationTicks,
                                                               int trackIndex) {
-                                                           PreviewPianoRollNote(bank, program, note, durationTicks, trackIndex);
+                                                                              PreviewPianoRollNote(bank, program, channel, note, durationTicks, trackIndex);
                                                        });
         PianoRollPanel_SetNotePreviewStopRequestedCallback(m_pianoRoll,
                                                            [this]() {
@@ -3094,6 +3095,7 @@ private:
 
     void PreviewPianoRollNote(uint16_t bank,
                               unsigned char program,
+                              unsigned char noteChannel,
                               unsigned char note,
                               uint32_t durationTicks,
                               int trackIndex) {
@@ -3115,7 +3117,7 @@ private:
             return;
         }
 
-        channel = trackInfo.channel;
+        channel = (noteChannel <= 15) ? noteChannel : trackInfo.channel;
         StopPianoRollPreview(false);
 
         /* Start from the song end so tick-0 events do not fire during manual note preview. */
@@ -3138,13 +3140,15 @@ private:
         BAESong_ControlChange(m_notePreviewSong, channel, 7, 127, 0);
         BAESong_ControlChange(m_notePreviewSong, channel, 11, 127, 0);
 
-        programResult = BAESong_ProgramBankChange(m_notePreviewSong,
-                                                  channel,
-                                                  program,
-                                                  RawMidiBankFromInternal(bank),
-                                                  0);
-        if (programResult != BAE_NO_ERROR) {
-            return;
+        if (channel != 9) {
+            programResult = BAESong_ProgramBankChange(m_notePreviewSong,
+                                                      channel,
+                                                      program,
+                                                      RawMidiBankFromInternal(bank),
+                                                      0);
+            if (programResult != BAE_NO_ERROR) {
+                return;
+            }
         }
         startResult = BAESong_NoteOnWithLoad(m_notePreviewSong, channel, note, 100, 0);
         if (startResult != BAE_NO_ERROR) {
@@ -4519,10 +4523,22 @@ private:
         }
     }
 
-    void OnTrackContextMenu(wxContextMenuEvent &) {
+    void OnTrackContextMenu(wxContextMenuEvent &event) {
         wxMenu menu;
         bool hasTrackSelection;
 
+        {
+            wxPoint screenPos = event.GetPosition();
+            if (screenPos != wxDefaultPosition) {
+                wxPoint clientPos = m_trackList->ScreenToClient(screenPos);
+                int hitIndex = m_trackList->HitTest(clientPos);
+                if (hitIndex != wxNOT_FOUND && hitIndex != m_trackList->GetSelection()) {
+                    m_trackList->SetSelection(hitIndex);
+                    wxCommandEvent selEvent(wxEVT_LISTBOX, m_trackList->GetId());
+                    OnTrackSelected(selEvent);
+                }
+            }
+        }
         hasTrackSelection = GetSelectedTrack() >= 0;
 
         menu.Append(ID_TrackAdd, "Add Track");

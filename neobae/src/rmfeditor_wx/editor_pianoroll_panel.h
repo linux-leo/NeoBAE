@@ -23,6 +23,7 @@ void PianoRollPanel_SetSeekRequestedCallback(PianoRollPanel *panel, std::functio
 void PianoRollPanel_SetNotePreviewRequestedCallback(PianoRollPanel *panel,
                                                     std::function<void(uint16_t bank,
                                                                        unsigned char program,
+                                                                       unsigned char channel,
                                                                        unsigned char note,
                                                                        uint32_t durationTicks,
                                                                        int trackIndex)> callback);

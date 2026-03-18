@@ -580,6 +580,7 @@ struct BAERmfEditorDocument
 static uint32_t PV_AllocateSampleAssetID(BAERmfEditorDocument *document)
 {
     uint32_t newID;
+    uint32_t i;
 
     if (!document)
     {
@@ -590,7 +591,51 @@ static uint32_t PV_AllocateSampleAssetID(BAERmfEditorDocument *document)
         document->nextSampleAssetID = 1;
     }
     newID = document->nextSampleAssetID;
-    document->nextSampleAssetID++;
+
+    /* Some legacy INST entries use sndResourceID=0. In that case we synthesize
+       an internal asset ID, but it must never collide with real SND IDs present
+       in the loaded resource map (or already assigned sample assets), otherwise
+       unrelated instruments become grouped under the same asset in the editor. */
+    for (;;)
+    {
+        XBOOL reserved;
+
+        reserved = FALSE;
+        for (i = 0; i < document->originalResourceCount; ++i)
+        {
+            XResourceType type;
+
+            type = document->originalResources[i].type;
+            if ((type == ID_ESND || type == ID_CSND || type == ID_SND) &&
+                (uint32_t)document->originalResources[i].id == newID)
+            {
+                reserved = TRUE;
+                break;
+            }
+        }
+        if (!reserved)
+        {
+            for (i = 0; i < document->sampleCount; ++i)
+            {
+                if (document->samples[i].sampleAssetID == newID)
+                {
+                    reserved = TRUE;
+                    break;
+                }
+            }
+        }
+        if (!reserved)
+        {
+            break;
+        }
+        newID++;
+        if (newID == 0)
+        {
+            return 0;
+        }
+    }
+
+    document->nextSampleAssetID = newID + 1;
     return newID;
 }
 
@@ -3527,6 +3572,111 @@ static BAEResult PV_ReadWholeFile(BAEPathName filePath, unsigned char **outData,
     return BAE_NO_ERROR;
 }
 
+/* Scan forward from peekOffset over events at the same tick (zero-delta VLQs),
+   updating *bank and *program with the final values seen for the given channel.
+   This is used when a NoteOn is parsed before a same-tick Program Change or
+   Bank Select — a common authoring pattern where the instrument is set just
+   after the first note at the same tick. */
+static void PV_PeekSameTickBankProgram(unsigned char const *trackData,
+                                       uint32_t trackSize,
+                                       uint32_t peekOffset,
+                                       unsigned char channel,
+                                       unsigned char peekRunningStatus,
+                                       uint16_t *bank,
+                                       unsigned char *program)
+{
+    while (peekOffset < trackSize)
+    {
+        uint32_t delta;
+        unsigned char s;
+        unsigned char evtype;
+        unsigned char evch;
+        int twoBytes;
+        int oneByte;
+
+        /* Read VLQ delta; stop if this is a future tick */
+        delta = 0;
+        while (peekOffset < trackSize)
+        {
+            unsigned char vb = trackData[peekOffset++];
+            delta = (delta << 7) | (vb & 0x7F);
+            if (!(vb & 0x80))
+            {
+                break;
+            }
+        }
+        if (delta != 0)
+        {
+            break;
+        }
+        if (peekOffset >= trackSize)
+        {
+            break;
+        }
+
+        s = trackData[peekOffset];
+        if (s == 0xFF || s == 0xF0 || s == 0xF7)
+        {
+            break; /* meta/sysex: stop lookahead */
+        }
+        if (s >= 0x80)
+        {
+            peekRunningStatus = s;
+            peekOffset++;
+        }
+        else
+        {
+            if (!peekRunningStatus)
+            {
+                break;
+            }
+        }
+
+        evtype = (unsigned char)(peekRunningStatus & 0xF0);
+        evch   = (unsigned char)(peekRunningStatus & 0x0F);
+        twoBytes = (evtype == NOTE_OFF || evtype == NOTE_ON  ||
+                    evtype == 0xA0    || evtype == CONTROL_CHANGE ||
+                    evtype == PITCH_BEND);
+        oneByte  = (evtype == PROGRAM_CHANGE || evtype == CHANNEL_AFTERTOUCH);
+
+        if (peekOffset + (uint32_t)(twoBytes ? 2 : oneByte ? 1 : 0) > trackSize)
+        {
+            break;
+        }
+
+        if (evch == channel)
+        {
+            if (evtype == CONTROL_CHANGE)
+            {
+                unsigned char cc  = trackData[peekOffset];
+                unsigned char val = trackData[peekOffset + 1];
+                if (cc == BANK_MSB)
+                {
+                    *bank = (uint16_t)(((uint16_t)val << 7) | (*bank & 0x7F));
+                }
+                else if (cc == BANK_LSB)
+                {
+                    *bank = (uint16_t)((*bank & 0x3F80) | (val & 0x7F));
+                }
+                peekOffset += 2;
+            }
+            else if (evtype == PROGRAM_CHANGE)
+            {
+                *program = trackData[peekOffset];
+                peekOffset += 1;
+            }
+            else
+            {
+                peekOffset += (unsigned)(twoBytes ? 2 : oneByte ? 1 : 0);
+            }
+        }
+        else
+        {
+            peekOffset += (unsigned)(twoBytes ? 2 : oneByte ? 1 : 0);
+        }
+    }
+}
+
 static BAERmfEditorActiveNote *PV_PushActiveNote(BAERmfEditorActiveNote **head,
                                                  uint32_t startTick,
                                                  uint32_t noteOnOrder,
@@ -3643,6 +3793,263 @@ static BAEResult PV_FinalizeActiveNotes(BAERmfEditorTrack *track,
         XDisposePtr(activeNote);
     }
     return result;
+}
+
+typedef struct PV_ChannelStateEvent
+{
+    uint32_t tick;
+    uint16_t trackIndex;
+    uint32_t sequence;
+    unsigned char kind;      /* 0=bank msb, 1=bank lsb, 2=program, 3=note-on */
+    unsigned char channel;
+    unsigned char value;
+    uint32_t noteIndex;      /* valid when kind==3 */
+} PV_ChannelStateEvent;
+
+static int PV_CompareChannelStateEvents(void const *left, void const *right)
+{
+    PV_ChannelStateEvent const *a;
+    PV_ChannelStateEvent const *b;
+
+    a = (PV_ChannelStateEvent const *)left;
+    b = (PV_ChannelStateEvent const *)right;
+    if (a->tick < b->tick)
+    {
+        return -1;
+    }
+    if (a->tick > b->tick)
+    {
+        return 1;
+    }
+    if (a->trackIndex < b->trackIndex)
+    {
+        return -1;
+    }
+    if (a->trackIndex > b->trackIndex)
+    {
+        return 1;
+    }
+    if (a->sequence < b->sequence)
+    {
+        return -1;
+    }
+    if (a->sequence > b->sequence)
+    {
+        return 1;
+    }
+    if (a->kind < b->kind)
+    {
+        return -1;
+    }
+    if (a->kind > b->kind)
+    {
+        return 1;
+    }
+    return 0;
+}
+
+/* Reconcile imported note bank/program against a merged (format-1 style)
+   channel-state timeline across all tracks. This preserves compatibility with
+   MIDI files that put channel setup on one track and notes on another. */
+static BAEResult PV_ReconcileImportedMidiNotePrograms(BAERmfEditorDocument *document)
+{
+    uint32_t eventCount;
+    uint32_t trackIndex;
+    uint16_t currentBank[BAE_MAX_MIDI_CHANNELS];
+    unsigned char currentProgram[BAE_MAX_MIDI_CHANNELS];
+    PV_ChannelStateEvent *events;
+
+    if (!document)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    eventCount = 0;
+    for (trackIndex = 0; trackIndex < document->trackCount; ++trackIndex)
+    {
+        BAERmfEditorTrack const *track;
+        uint32_t i;
+
+        track = &document->tracks[trackIndex];
+        eventCount += track->noteCount;
+        for (i = 0; i < track->auxEventCount; ++i)
+        {
+            BAERmfEditorAuxEvent const *aux;
+            unsigned char eventType;
+
+            aux = &track->auxEvents[i];
+            eventType = (unsigned char)(aux->status & 0xF0);
+            if (eventType == PROGRAM_CHANGE && aux->dataBytes >= 1)
+            {
+                eventCount++;
+            }
+            else if (eventType == CONTROL_CHANGE && aux->dataBytes >= 2 &&
+                     (aux->data1 == BANK_MSB || aux->data1 == BANK_LSB))
+            {
+                eventCount++;
+            }
+        }
+    }
+
+    if (eventCount == 0)
+    {
+        return BAE_NO_ERROR;
+    }
+
+    events = (PV_ChannelStateEvent *)XNewPtr((int32_t)(sizeof(PV_ChannelStateEvent) * eventCount));
+    if (!events)
+    {
+        return BAE_MEMORY_ERR;
+    }
+
+    {
+        uint32_t writeIndex;
+
+        writeIndex = 0;
+        for (trackIndex = 0; trackIndex < document->trackCount; ++trackIndex)
+        {
+            BAERmfEditorTrack const *track;
+            uint32_t i;
+
+            track = &document->tracks[trackIndex];
+
+            for (i = 0; i < track->auxEventCount; ++i)
+            {
+                BAERmfEditorAuxEvent const *aux;
+                unsigned char eventType;
+                PV_ChannelStateEvent *ev;
+
+                aux = &track->auxEvents[i];
+                eventType = (unsigned char)(aux->status & 0xF0);
+                if (eventType == PROGRAM_CHANGE && aux->dataBytes >= 1)
+                {
+                    ev = &events[writeIndex++];
+                    ev->tick = aux->tick;
+                    ev->trackIndex = (uint16_t)trackIndex;
+                    ev->sequence = aux->eventOrder;
+                    ev->kind = 2;
+                    ev->channel = (unsigned char)(aux->status & 0x0F);
+                    ev->value = aux->data1;
+                    ev->noteIndex = 0;
+                }
+                else if (eventType == CONTROL_CHANGE && aux->dataBytes >= 2 &&
+                         (aux->data1 == BANK_MSB || aux->data1 == BANK_LSB))
+                {
+                    ev = &events[writeIndex++];
+                    ev->tick = aux->tick;
+                    ev->trackIndex = (uint16_t)trackIndex;
+                    ev->sequence = aux->eventOrder;
+                    ev->kind = (aux->data1 == BANK_MSB) ? 0 : 1;
+                    ev->channel = (unsigned char)(aux->status & 0x0F);
+                    ev->value = aux->data2;
+                    ev->noteIndex = 0;
+                }
+            }
+
+            for (i = 0; i < track->noteCount; ++i)
+            {
+                BAERmfEditorNote const *note;
+                PV_ChannelStateEvent *ev;
+
+                note = &track->notes[i];
+                ev = &events[writeIndex++];
+                ev->tick = note->startTick;
+                ev->trackIndex = (uint16_t)trackIndex;
+                ev->sequence = note->noteOnOrder;
+                ev->kind = 3;
+                ev->channel = note->channel;
+                ev->value = 0;
+                ev->noteIndex = i;
+            }
+        }
+        eventCount = writeIndex;
+    }
+
+    qsort(events, eventCount, sizeof(PV_ChannelStateEvent), PV_CompareChannelStateEvents);
+
+    for (trackIndex = 0; trackIndex < BAE_MAX_MIDI_CHANNELS; ++trackIndex)
+    {
+        currentBank[trackIndex] = 0;
+        currentProgram[trackIndex] = 0;
+    }
+
+    {
+        uint32_t i;
+
+        for (i = 0; i < eventCount; ++i)
+        {
+            PV_ChannelStateEvent const *ev;
+            unsigned char ch;
+
+            ev = &events[i];
+            ch = ev->channel;
+
+            if (ev->kind == 0)
+            {
+                currentBank[ch] = (uint16_t)((((uint16_t)ev->value) << 7) | (currentBank[ch] & 0x7F));
+            }
+            else if (ev->kind == 1)
+            {
+                currentBank[ch] = (uint16_t)((currentBank[ch] & 0x3F80) | ((uint16_t)ev->value & 0x7F));
+            }
+            else if (ev->kind == 2)
+            {
+                currentProgram[ch] = ev->value;
+            }
+            else if (ev->kind == 3)
+            {
+                BAERmfEditorTrack *track;
+                BAERmfEditorNote *note;
+                uint16_t noteBank;
+                unsigned char noteProgram;
+                uint32_t j;
+
+                track = &document->tracks[ev->trackIndex];
+                if (ev->noteIndex >= track->noteCount)
+                {
+                    continue;
+                }
+                note = &track->notes[ev->noteIndex];
+                noteBank = currentBank[ch];
+                noteProgram = currentProgram[ch];
+
+                /* Keep compatibility with same-tick setup that appears after the
+                   note-on in the same track by scanning forward at the same tick. */
+                for (j = i + 1; j < eventCount; ++j)
+                {
+                    PV_ChannelStateEvent const *next;
+
+                    next = &events[j];
+                    if (next->tick != ev->tick || next->trackIndex != ev->trackIndex)
+                    {
+                        break;
+                    }
+                    if (next->channel != ch)
+                    {
+                        continue;
+                    }
+                    if (next->kind == 0)
+                    {
+                        noteBank = (uint16_t)((((uint16_t)next->value) << 7) | (noteBank & 0x7F));
+                    }
+                    else if (next->kind == 1)
+                    {
+                        noteBank = (uint16_t)((noteBank & 0x3F80) | ((uint16_t)next->value & 0x7F));
+                    }
+                    else if (next->kind == 2)
+                    {
+                        noteProgram = next->value;
+                    }
+                }
+
+                note->bank = noteBank;
+                note->program = noteProgram;
+            }
+        }
+    }
+
+    XDisposePtr(events);
+    return BAE_NO_ERROR;
 }
 
 static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
@@ -3860,6 +4267,19 @@ static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
                 if (eventType == NOTE_ON && velocity > 0)
                 {
                     uint32_t noteOnOrder;
+                    uint16_t noteBank;
+                    unsigned char noteProgram;
+
+                    /* Look ahead over any remaining zero-delta events at this
+                       tick so that a Program Change or Bank Select that follows
+                       the NoteOn at the same tick is picked up.  This is a
+                       common authoring pattern (e.g. Rhodium.rmf) where the
+                       instrument is finalised just after the first note. */
+                    noteBank    = channelBank[channel];
+                    noteProgram = channelProgram[channel];
+                    PV_PeekSameTickBankProgram(trackData, trackSize, offset,
+                                              channel, runningStatus,
+                                              &noteBank, &noteProgram);
 
                     noteOnOrder = track->nextEventOrder++;
                     activeNote = PV_PushActiveNote(&activeNotes,
@@ -3868,8 +4288,8 @@ static BAEResult PV_LoadMidiTrackIntoDocument(BAERmfEditorDocument *document,
                                                    channel,
                                                    noteValue,
                                                    velocity,
-                                                   channelBank[channel],
-                                                   channelProgram[channel]);
+                                                   noteBank,
+                                                   noteProgram);
                     if (!activeNote)
                     {
                         PV_DisposeActiveNotes(&activeNotes);
@@ -4177,6 +4597,17 @@ static BAEResult PV_LoadMidiBytesIntoDocument(BAERmfEditorDocument *document,
         }
         offset += trackLength;
     }
+
+    {
+        BAEResult reconcileResult;
+
+        reconcileResult = PV_ReconcileImportedMidiNotePrograms(document);
+        if (reconcileResult != BAE_NO_ERROR)
+        {
+            return reconcileResult;
+        }
+    }
+
     if (document->tempoEventCount > 0 && document->tempoEvents[0].microsecondsPerQuarter > 0)
     {
         document->tempoBPM = 60000000UL / document->tempoEvents[0].microsecondsPerQuarter;

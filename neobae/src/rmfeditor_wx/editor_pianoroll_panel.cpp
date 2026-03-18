@@ -399,6 +399,7 @@ public:
     void SetNotePreviewRequestedCallback(std::function<void(uint16_t,
                                                             unsigned char,
                                                             unsigned char,
+                                                            unsigned char,
                                                             uint32_t,
                                                             int)> callback) {
         m_notePreviewRequestedCallback = std::move(callback);
@@ -641,7 +642,7 @@ private:
     unsigned char m_newNoteProgram;
     std::function<void()> m_selectionChangedCallback;
     std::function<void(uint32_t)> m_seekRequestedCallback;
-    std::function<void(uint16_t, unsigned char, unsigned char, uint32_t, int)> m_notePreviewRequestedCallback;
+    std::function<void(uint16_t, unsigned char, unsigned char, unsigned char, uint32_t, int)> m_notePreviewRequestedCallback;
     std::function<void()> m_notePreviewStopRequestedCallback;
     std::function<void(wxString const &)> m_beginUndoCallback;
     std::function<void(wxString const &)> m_commitUndoCallback;
@@ -703,6 +704,7 @@ private:
         }
         m_notePreviewRequestedCallback(noteInfo.bank,
                                        noteInfo.program,
+                                       noteInfo.channel,
                                        noteInfo.note,
                                        noteInfo.durationTicks,
                                        m_selectedTrack);
@@ -3224,6 +3226,7 @@ void PianoRollPanel_SetSeekRequestedCallback(PianoRollPanel *panel, std::functio
 
 void PianoRollPanel_SetNotePreviewRequestedCallback(PianoRollPanel *panel,
                                                     std::function<void(uint16_t,
+                                                                       unsigned char,
                                                                        unsigned char,
                                                                        unsigned char,
                                                                        uint32_t,

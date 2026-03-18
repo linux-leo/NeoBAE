@@ -108,6 +108,45 @@ static int extract_midi_from_rmf(const char *rmf_path, const char *mid_path)
         {
             midi_data = XGetIndexedFileResource(rmf_file, ID_MIDI_OLD, &resource_id, 0, NULL, &midi_size);
         }
+
+        // Try encrypted MIDI type (emid) and decode via XGetMidiData
+        if (!midi_data)
+        {
+            XPTR encoded_data;
+
+            encoded_data = XGetIndexedFileResource(rmf_file, ID_EMID, &resource_id, 0, NULL, &midi_size);
+            if (encoded_data)
+            {
+                XDisposePtr(encoded_data);
+                midi_data = XGetMidiData(resource_id, &midi_size, &resource_type);
+            }
+        }
+
+        // Try compressed MIDI type (cmid) and decode via XGetMidiData
+        if (!midi_data)
+        {
+            XPTR encoded_data;
+
+            encoded_data = XGetIndexedFileResource(rmf_file, ID_CMID, &resource_id, 0, NULL, &midi_size);
+            if (encoded_data)
+            {
+                XDisposePtr(encoded_data);
+                midi_data = XGetMidiData(resource_id, &midi_size, &resource_type);
+            }
+        }
+
+        // Try encrypted+compressed MIDI type (ecmi) and decode via XGetMidiData
+        if (!midi_data)
+        {
+            XPTR encoded_data;
+
+            encoded_data = XGetIndexedFileResource(rmf_file, ID_ECMI, &resource_id, 0, NULL, &midi_size);
+            if (encoded_data)
+            {
+                XDisposePtr(encoded_data);
+                midi_data = XGetMidiData(resource_id, &midi_size, &resource_type);
+            }
+        }
     }
     
     if (!midi_data || midi_size <= 0)
