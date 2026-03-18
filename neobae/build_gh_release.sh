@@ -165,7 +165,29 @@ if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 9 ]; then
 	runcmd make -f Makefile.rmf2mid-mingw clean
 fi
 
+
+if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 9 ]; then
+	export BITS=32
+	echo "Building MID2RMF (x32)..."
+	runcmd make clean
+	runcmd make -f Makefile.mid2rmf-mingw "-j$(nproc)" all
+	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9u "${ODIR}/clitools_win_x32.zip" -- mid2rmf.exe
+	runcmd cd "${RDIR}" || exit 1
+	runcmd make -f Makefile.mid2rmf-mingw clean
+fi
+
 if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 10 ]; then
+	export BITS=64
+	echo "Building MID2RMF (x64)..."
+	runcmd make clean
+	runcmd make -f Makefile.mid2rmf-mingw "-j$(nproc)" all
+	runcmd cd "${BDIR}" || exit 1 && runcmd zip -9u "${ODIR}/clitools_win_x64.zip" -- mid2rmf.exe
+	runcmd cd "${RDIR}" || exit 1
+	runcmd make -f Makefile.mid2rmf-mingw clean
+fi
+
+
+if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 11 ]; then
 	export BITS=32
 	echo "Building MID2RMI (x32)..."
 	runcmd make clean
@@ -175,7 +197,8 @@ if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 10 ]; then
 	runcmd make -f Makefile.mid2rmi-mingw clean
 fi
 
-if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 11 ]; then
+
+if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 12 ]; then
 	export BITS=64
 	echo "Building MID2RMI (x64)..."
 	runcmd make clean
@@ -184,6 +207,7 @@ if [ -z "${SKIPTO}" ] || [ "${SKIPTO}" -le 11 ]; then
 	runcmd cd "${RDIR}" || exit 1
 	runcmd make -f Makefile.mid2rmi-mingw clean
 fi
+
 
 cd "${RDIR}" || exit 1
 ls -l "${ODIR}"

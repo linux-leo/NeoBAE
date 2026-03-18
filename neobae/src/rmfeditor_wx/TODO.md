@@ -14,19 +14,19 @@
 
 # 0.07a
 - ~~Non-fatal assertion error when right clicking a sample or instrument~~
-- tick0 note seen as 2:0 instead of 2:4, missing CC? (`Rhodium.rmf`) (tick0 seems fine (2:1) for `DoorSlam.rmf`)
 - ~~"Musical Keyboard"~~
   - ~~releasing key sometimes doesnt stop playback~~
   - ~~cannot play multiple notes~~
   - ~~highlight ALL active notes~~
   - ~~center "musical keyboard" around rootKey~~
-- Changing the program/bank of a note does not reflect in song preview or export
-- "Clone all used instruments" - Clone used instruments from MIDI stream to RMF instruments, reassigning the notes and events banks/programs as needed
-  - Example: A MIDI uses 0:1 piano. We clone it, it becomes 2:0, we reassign all 0:1 notes to 2:0.  
-- ~~Musical keyboard doesn't stop when key released~~
 - ~~Make it easier to get back to the channel dialog~~
 - ~~Allow export of RMF/ZMF to MIDI with warning about the output file not having custom instruments/samples.~~
 - ~~Visible/editable MIDI Loop representation in piano roll~~
+- Changing the program/bank of a note does not reflect in song preview or export
+- Right clicking a track in the track list should select the item under cursor like sample tree does
+- tick0 note seen as 2:0 instead of 2:4, missing CC? (`Rhodium.rmf`) (tick0 seems fine (2:1) for `DoorSlam.rmf`)
+- "Clone all used instruments" - Clone used instruments from MIDI stream to RMF instruments, reassigning the notes and events banks/programs as needed
+  - Example: A MIDI uses 0:1 piano. We clone it, it becomes 2:0, we reassign all 0:1 notes to 2:0.  
 - Interpolation configuration (none, linear, cubic, etc, current is just on/off)
 
 # Future
