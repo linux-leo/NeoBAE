@@ -32,7 +32,7 @@ void XCloseOpusFile(void *decoder_handle);
 #if USE_OPUS_ENCODER == TRUE
 
 // Opus encoder functions
-void* XInitOpusEncoder(UINT32 sample_rate, UINT32 channels, UINT32 bitrate);
+void* XInitOpusEncoder(UINT32 sample_rate, UINT32 channels, UINT32 bitrate, UINT32 mode);
 long XWriteOpusHeader(void *encoder_handle, XFILE output_file);
 long XEncodeOpusData(void *encoder_handle, const INT16 *pcm_interleaved, long frames, XFILE output_file);
 long XFlushOpusEncoder(void *encoder_handle, XFILE output_file);

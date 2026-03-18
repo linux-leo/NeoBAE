@@ -11,10 +11,12 @@ public:
     ~BatchCompressDialog();
 
     BAERmfEditorCompressionType GetSelectedCompressionType() const;
+    BAERmfEditorOpusMode GetSelectedOpusMode() const;
 
 private:
     wxChoice *m_codecChoice = nullptr;
     wxChoice *m_bitrateChoice = nullptr;
+    wxChoice *m_opusModeChoice = nullptr;
     wxStaticText *m_samplesLabel = nullptr;
 
     void OnCodecSelected(wxCommandEvent &event);

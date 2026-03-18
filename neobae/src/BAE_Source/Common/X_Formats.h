@@ -1253,7 +1253,7 @@ OPErr XExpandOpus(GM_Waveform const* src, UINT32 startFrame, GM_Waveform* dst);
 /* Encode a PCM GM_Waveform to an Ogg Opus bitstream in memory.
  * bitrate is total stream bitrate in bits/sec (e.g. 64000, 96000, 128000, 256000).
  * On success allocates *outData (caller must XDisposePtr) and sets *outSize. */
-OPErr XEncodeOpusToMemory(GM_Waveform const *src, uint32_t bitrate,
+OPErr XEncodeOpusToMemory(GM_Waveform const *src, uint32_t bitrate, uint32_t mode,
                           XPTR *outData, uint32_t *outSize);
 #endif
 

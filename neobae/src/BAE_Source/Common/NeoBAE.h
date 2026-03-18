@@ -2927,6 +2927,13 @@ typedef enum BAERmfEditorSndStorageType
     BAE_EDITOR_SND_STORAGE_SND  = 2  /* plain SND (snd ) */
 } BAERmfEditorSndStorageType;
 
+typedef enum BAERmfEditorOpusMode
+{
+    BAE_EDITOR_OPUS_MODE_AUDIO = 0,
+    BAE_EDITOR_OPUS_MODE_MUSIC = 1,
+    BAE_EDITOR_OPUS_MODE_VOICE = 2
+} BAERmfEditorOpusMode;
+
 typedef struct BAERmfEditorSampleInfo
 {
     char const *displayName;
@@ -2940,6 +2947,7 @@ typedef struct BAERmfEditorSampleInfo
     BAERmfEditorCompressionType compressionType; /* target compression for saving */
     BAE_BOOL hasOriginalData;                    /* TRUE if DONT_CHANGE is available */
     BAERmfEditorSndStorageType sndStorageType;   /* file-level container type (esnd/csnd/snd) */
+    BAERmfEditorOpusMode opusMode;               /* Opus encoder application/hint mode */
 } BAERmfEditorSampleInfo;
 
 /* Global sample asset model.
@@ -2952,6 +2960,7 @@ typedef struct BAERmfEditorSampleAssetInfo
     char const *displayName;
     char const *sourcePath;
     BAERmfEditorCompressionType compressionType;
+    BAERmfEditorOpusMode opusMode;
     BAE_BOOL hasOriginalData;
     uint32_t usageCount;
 } BAERmfEditorSampleAssetInfo;

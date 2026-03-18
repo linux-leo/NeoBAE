@@ -606,10 +606,11 @@ static long PV_FlushEncoderInternal(XOpusEncoder *enc, XFILE output_file, XOpusM
     return totalWritten;
 }
 
-void* XInitOpusEncoder(UINT32 sample_rate, UINT32 channels, UINT32 bitrate)
+void* XInitOpusEncoder(UINT32 sample_rate, UINT32 channels, UINT32 bitrate, UINT32 mode)
 {
     XOpusEncoder *enc;
     int err;
+    int application;
 
     if (channels < 1 || channels > 2)
     {
@@ -654,7 +655,20 @@ void* XInitOpusEncoder(UINT32 sample_rate, UINT32 channels, UINT32 bitrate)
         return NULL;
     }
 
-    enc->encoder = opus_encoder_create(48000, (int)channels, OPUS_APPLICATION_AUDIO, &err);
+    application = OPUS_APPLICATION_AUDIO;
+    switch (mode)
+    {
+        case 2:
+            application = OPUS_APPLICATION_VOIP;
+            break;
+        case 1:
+        case 0:
+        default:
+            application = OPUS_APPLICATION_AUDIO;
+            break;
+    }
+
+    enc->encoder = opus_encoder_create(48000, (int)channels, application, &err);
     if (!enc->encoder || err != OPUS_OK)
     {
         if (enc->encoder)
@@ -669,6 +683,14 @@ void* XInitOpusEncoder(UINT32 sample_rate, UINT32 channels, UINT32 bitrate)
 
     opus_encoder_ctl(enc->encoder, OPUS_SET_BITRATE((opus_int32)bitrate));
     opus_encoder_ctl(enc->encoder, OPUS_SET_VBR(1));
+    if (mode == 1)
+    {
+        opus_encoder_ctl(enc->encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
+    }
+    else if (mode == 2)
+    {
+        opus_encoder_ctl(enc->encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
+    }
 
     if (ogg_stream_init(&enc->os, rand()) != 0)
     {
@@ -771,7 +793,7 @@ void XCloseOpusEncoder(void *encoder_handle)
     XDisposePtr((XPTR)enc);
 }
 
-OPErr XEncodeOpusToMemory(GM_Waveform const *src, uint32_t bitrate,
+OPErr XEncodeOpusToMemory(GM_Waveform const *src, uint32_t bitrate, uint32_t mode,
                           XPTR *outData, uint32_t *outSize)
 {
     XOpusEncoder *enc;
@@ -856,7 +878,8 @@ OPErr XEncodeOpusToMemory(GM_Waveform const *src, uint32_t bitrate,
 
     enc = (XOpusEncoder *)XInitOpusEncoder((UINT32)(src->sampledRate >> 16),
                                            encodeChannels,
-                                           bitrate);
+                                           bitrate,
+                                           mode);
     if (!enc)
     {
         return MEMORY_ERR;

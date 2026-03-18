@@ -54,6 +54,7 @@ struct InstrumentEditorEditedSample {
     BAERmfEditorCompressionType compressionType;
     bool hasOriginalData;
     BAERmfEditorSndStorageType sndStorageType;
+    BAERmfEditorOpusMode opusMode;
 };
 
 bool ShowInstrumentEditorDialog(wxWindow *parent,

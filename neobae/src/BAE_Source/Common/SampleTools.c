@@ -2169,6 +2169,8 @@ XSoundFormat1*      header;
     OPErr       err;
     XSndHeader3 *snd;
     uint32_t    bitrate;
+    uint32_t    opusMode;
+    uint32_t    packedSubType;
     GM_Waveform pcmSrc;
 
         pcmSrc = src;
@@ -2178,21 +2180,30 @@ XSoundFormat1*      header;
             return PARAM_ERR;
         }
 
-        switch (dstCompressionSubType)
+        packedSubType = (uint32_t)dstCompressionSubType;
+        opusMode = (packedSubType >> 16) & 0xFFFFU;
+        if (opusMode > 2U)
         {
-        case CS_OPUS_12K:  bitrate =  12000; break;
-        case CS_OPUS_16K:  bitrate =  16000; break;
-        case CS_OPUS_24K:  bitrate =  24000; break;
-        case CS_OPUS_32K:  bitrate =  32000; break;
-        case CS_OPUS_48K:  bitrate =  48000; break;
-        case CS_OPUS_64K:  bitrate =  64000; break;
-        case CS_OPUS_96K:  bitrate =  96000; break;
-        case CS_OPUS_256K: bitrate = 256000; break;
-        case CS_OPUS_128K:
-        default:           bitrate = 128000; break;
+            opusMode = 0U;
         }
 
-        err = XEncodeOpusToMemory(&pcmSrc, bitrate, &encodedData, &encodedBytes);
+        /* Low 16 bits encode a bitrate index; see PV_SubTypeToOpusBitrateIndex()
+         * in BAERmfEditor.c for the canonical mapping. */
+        switch (packedSubType & 0xFFFFU)
+        {
+        case 0: bitrate =  12000; break;  /* CS_OPUS_12K  */
+        case 1: bitrate =  16000; break;  /* CS_OPUS_16K  */
+        case 2: bitrate =  24000; break;  /* CS_OPUS_24K  */
+        case 3: bitrate =  32000; break;  /* CS_OPUS_32K  */
+        case 4: bitrate =  48000; break;  /* CS_OPUS_48K  */
+        case 5: bitrate =  64000; break;  /* CS_OPUS_64K  */
+        case 6: bitrate =  96000; break;  /* CS_OPUS_96K  */
+        case 8: bitrate = 256000; break;  /* CS_OPUS_256K */
+        case 7:                           /* CS_OPUS_128K */
+        default: bitrate = 128000; break;
+        }
+
+        err = XEncodeOpusToMemory(&pcmSrc, bitrate, opusMode, &encodedData, &encodedBytes);
         XDisposePtr(intermediateData);
         if (err != NO_ERR || !encodedData)
         {

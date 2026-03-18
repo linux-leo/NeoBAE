@@ -275,6 +275,45 @@ static void PV_StoreCompressionSubTypeInSnd(XPTR sndData,
     XPutLong(&header3->sndBuffer.reserved3[1], (uint32_t)compressionSubType);
 }
 
+static XBOOL PV_IsValidEditorOpusMode(BAERmfEditorOpusMode opusMode)
+{
+    return (opusMode == BAE_EDITOR_OPUS_MODE_AUDIO ||
+            opusMode == BAE_EDITOR_OPUS_MODE_MUSIC ||
+            opusMode == BAE_EDITOR_OPUS_MODE_VOICE) ? TRUE : FALSE;
+}
+
+/* Map CS_OPUS_*K FourCC -> small index that fits in 16 bits for transport via
+ * SndCompressionSubType.  The CS_OPUS_*K constants are 32-bit FourCCs and
+ * cannot be packed into 16 bits directly.  Both PV_ComposeOpusEncodeSubType
+ * and the matching switch in SampleTools.c must use this same mapping. */
+static uint32_t PV_SubTypeToOpusBitrateIndex(SndCompressionSubType subType)
+{
+    switch (subType)
+    {
+        case CS_OPUS_12K:  return 0;
+        case CS_OPUS_16K:  return 1;
+        case CS_OPUS_24K:  return 2;
+        case CS_OPUS_32K:  return 3;
+        case CS_OPUS_48K:  return 4;
+        case CS_OPUS_64K:  return 5;
+        case CS_OPUS_96K:  return 6;
+        case CS_OPUS_256K: return 8;
+        case CS_OPUS_128K:
+        default:           return 7;
+    }
+}
+
+static SndCompressionSubType PV_ComposeOpusEncodeSubType(SndCompressionSubType baseSubType,
+                                                         BAERmfEditorOpusMode opusMode)
+{
+    uint32_t packed;
+
+    /* Low 16 bits: bitrate index (0-8); high 16 bits: opus mode (0-2). */
+    packed = PV_SubTypeToOpusBitrateIndex(baseSubType) & 0xFFFFU;
+    packed |= ((uint32_t)(PV_IsValidEditorOpusMode(opusMode) ? opusMode : BAE_EDITOR_OPUS_MODE_MUSIC) & 0xFFFFU) << 16;
+    return (SndCompressionSubType)packed;
+}
+
 typedef struct BAERmfEditorNote
 {
     uint32_t startTick;
@@ -373,7 +412,8 @@ typedef struct BAERmfEditorSample
     uint32_t sampleAssetID;              /* shared audio asset identifier */
     /* Compression control */
     BAERmfEditorCompressionType targetCompressionType; /* desired output codec */
-    XPTR    originalSndData;   /* raw SND resource blob from RMF (for DONT_CHANGE) */
+    BAERmfEditorOpusMode targetOpusMode;
+    XPTR    originalSndData;   /* normalized plain SND blob (ESND/CSND already unwrapped) */
     int32_t originalSndSize;   /* byte count of originalSndData */
     /* Bank alias fields: sample references a loaded bank's SND without PCM decode */
     XBOOL   isBankAlias;       /* TRUE if this sample is a bank alias (no waveform) */
@@ -800,6 +840,14 @@ static XBOOL PV_CanReuseSndResourceForSamples(BAERmfEditorSample const *left,
         return FALSE;
     }
     if (left->sampleAssetID == 0 || left->sampleAssetID != right->sampleAssetID)
+    {
+        return FALSE;
+    }
+    if (left->originalSndResourceType != right->originalSndResourceType)
+    {
+        return FALSE;
+    }
+    if (left->targetOpusMode != right->targetOpusMode)
     {
         return FALSE;
     }
@@ -3825,7 +3873,8 @@ static BAEResult PV_AddEmbeddedSampleVariant(BAERmfEditorDocument *document,
     {
         return BAE_BAD_FILE;
     }
-    /* Preserve original compressed blob so the editor can save it unchanged. */
+    /* Keep the normalized plain SND blob so save can re-wrap it as esnd/csnd/snd later
+     * without re-encoding the codec payload inside the SND body. */
     sndCopy = XNewPtr(sndSize);
     if (sndCopy)
     {
@@ -3952,6 +4001,7 @@ static BAEResult PV_AddEmbeddedSampleVariant(BAERmfEditorDocument *document,
         }
     }
     sample->targetCompressionType = BAE_EDITOR_COMPRESSION_DONT_CHANGE;
+    sample->targetOpusMode = BAE_EDITOR_OPUS_MODE_MUSIC;
     sample->originalSndData = sndCopy;
     sample->originalSndSize = sndCopy ? sndSize : 0;
     if (displayName && displayName[0])
@@ -4053,6 +4103,7 @@ static BAEResult PV_AddBankAliasSample(BAERmfEditorDocument *document,
     sample->waveform = NULL;
     sample->originalSndData = NULL;
     sample->originalSndSize = 0;
+    sample->targetOpusMode = BAE_EDITOR_OPUS_MODE_MUSIC;
     sample->isBankAlias = TRUE;
     sample->aliasBankToken = bankToken;
     sample->aliasSndResourceID = sndID;
@@ -6553,17 +6604,15 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
         BAEResult result;
         char pascalName[256];
         GM_Waveform writeWaveform;
-        int32_t writeSampleRate;
+        uint32_t writeSampleRate;
         int32_t bytesPerFrame;
         uint32_t maxFramesBySize;
         int32_t loopStart;
         int32_t loopEnd;
         uint32_t loopFrameLimit;
-        XBOOL preserveOriginalSndBlob;
         XResourceType writeSndType;
 
         sample = &document->samples[index];
-        preserveOriginalSndBlob = FALSE;
 
         /* Bank alias samples reference external bank SND IDs and must not
          * participate in local SND dedupe/ID assignment. */
@@ -6721,36 +6770,66 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
         }
         writeWaveform.waveSize = (int32_t)(writeWaveform.waveFrames * (uint32_t)bytesPerFrame);
 
-        writeSampleRate = writeWaveform.sampledRate;
-        if (writeSampleRate < (4000L << 16))
+        writeSampleRate = (uint32_t)writeWaveform.sampledRate;
+        BAE_STDERR("[RMF Save] Sample[%u] sampledRate check: writeRate=0x%08lx\n",
+                   (unsigned)index,
+                   (unsigned long)writeSampleRate);
+        
+        /* Handle sample rate normalization for saves.
+         * Opus always encodes at 48kHz (handled separately).
+         * Other codecs should preserve the original sample rate.
+         * If rate is in raw Hz (< 4000<<16), convert to fixed-point if valid.
+         * If rate is already fixed-point (>= 4000<<16), keep as-is.
+         * Only default to 44100 if rate is 0 or invalid. */
+        if (writeSampleRate == 0)
         {
-            if (writeSampleRate >= 4000L && writeSampleRate <= 384000L)
+            /* Rate is invalid/uninitialized */
+            if (sample->targetCompressionType >= BAE_EDITOR_COMPRESSION_OPUS_12K &&
+                sample->targetCompressionType <= BAE_EDITOR_COMPRESSION_OPUS_256K)
             {
-                /* Legacy/mixed paths can carry raw Hz instead of 16.16 fixed-point. */
-                writeSampleRate <<= 16;
+                writeSampleRate = 48000L << 16;
+                BAE_STDERR("[RMF Save] Sample[%u] defaulting to 48000 Hz for Opus (was 0)\n", (unsigned)index);
             }
             else
             {
-                switch (sample->targetCompressionType)
+                writeSampleRate = 44100L << 16;
+                BAE_STDERR("[RMF Save] Sample[%u] defaulting to 44100 Hz (was 0)\n", (unsigned)index);
+            }
+        }
+        else if (writeSampleRate < (4000U << 16))
+        {
+            /* Looks like raw Hz instead of fixed-point */
+            if (writeSampleRate >= 4000U && writeSampleRate <= 384000U)
+            {
+                /* Valid raw Hz range, convert to fixed-point */
+                BAE_STDERR("[RMF Save] Sample[%u] converting raw Hz to fixed-point: %lu -> ", 
+                           (unsigned)index, (unsigned long)writeSampleRate);
+                writeSampleRate <<= 16;
+                BAE_STDERR("0x%08lx\n", (unsigned long)writeSampleRate);
+            }
+            else
+            {
+                /* Out of range raw Hz, default */
+                BAE_STDERR("[RMF Save] Sample[%u] raw Hz out of range (%lu), defaulting\n", 
+                           (unsigned)index, (unsigned long)writeSampleRate);
+                if (sample->targetCompressionType >= BAE_EDITOR_COMPRESSION_OPUS_12K &&
+                    sample->targetCompressionType <= BAE_EDITOR_COMPRESSION_OPUS_256K)
                 {
-                    case BAE_EDITOR_COMPRESSION_OPUS_12K:
-                    case BAE_EDITOR_COMPRESSION_OPUS_16K:
-                    case BAE_EDITOR_COMPRESSION_OPUS_24K:
-                    case BAE_EDITOR_COMPRESSION_OPUS_32K:
-                    case BAE_EDITOR_COMPRESSION_OPUS_48K:
-                    case BAE_EDITOR_COMPRESSION_OPUS_64K:
-                    case BAE_EDITOR_COMPRESSION_OPUS_96K:
-                    case BAE_EDITOR_COMPRESSION_OPUS_128K:
-                    case BAE_EDITOR_COMPRESSION_OPUS_256K:
-                        writeSampleRate = 48000L << 16;
-                        break;
-                    default:
-                        writeSampleRate = 44100L << 16;
-                        break;
+                    writeSampleRate = 48000L << 16;
+                }
+                else
+                {
+                    writeSampleRate = 44100L << 16;
                 }
             }
-            writeWaveform.sampledRate = writeSampleRate;
         }
+        else
+        {
+            /* Already in fixed-point format, preserve as-is */
+            BAE_STDERR("[RMF Save] Sample[%u] preserving fixed-point rate 0x%08lx\n", 
+                       (unsigned)index, (unsigned long)writeSampleRate);
+        }
+        writeWaveform.sampledRate = (int32_t)writeSampleRate;
 
         loopFrameLimit = writeWaveform.waveFrames;
         if (sample->sampleInfo.waveFrames > 0 && sample->sampleInfo.waveFrames < loopFrameLimit)
@@ -6782,7 +6861,8 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                    (unsigned)writeWaveform.startLoop,
                    (unsigned)writeWaveform.endLoop);
         sndResource = NULL;
-        /* DONT_CHANGE: reuse the original compressed SND blob directly. */
+        /* DONT_CHANGE: reuse the cached plain SND blob directly, then apply the
+         * selected storage wrapper (esnd/csnd/snd) later in this save path. */
         if (sample->targetCompressionType == BAE_EDITOR_COMPRESSION_DONT_CHANGE &&
             sample->originalSndData && sample->originalSndSize > 0)
         {
@@ -6794,8 +6874,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 return BAE_MEMORY_ERR;
             }
             XBlockMove(sample->originalSndData, sndResource, (int32_t)sample->originalSndSize);
-            preserveOriginalSndBlob = TRUE;
-            BAE_STDERR("[RMF Save] Sample[%u] using original compressed blob (%ld bytes)\n",
+            BAE_STDERR("[RMF Save] Sample[%u] using cached plain SND blob (%ld bytes)\n",
                        (unsigned)index, (long)sample->originalSndSize);
         }
         else
@@ -6806,6 +6885,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
              * FLAC and ADPCM use a single type constant with CS_DEFAULT sub-type. */
             SndCompressionType compType;
             SndCompressionSubType compSubType;
+            SndCompressionSubType encodeCompSubType;
             switch (sample->targetCompressionType)
             {
                 case BAE_EDITOR_COMPRESSION_DONT_CHANGE:
@@ -6954,6 +7034,11 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                     compType    = C_NONE;
                     compSubType = CS_DEFAULT;
                     break;
+            }
+            encodeCompSubType = compSubType;
+            if (compType == C_OPUS)
+            {
+                encodeCompSubType = PV_ComposeOpusEncodeSubType(compSubType, sample->targetOpusMode);
             }
 
 #if USE_OPUS_ENCODER == TRUE && (USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE)
@@ -7171,8 +7256,8 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                     /* Remap loop points to 48 kHz frame space */
                     if (writeWaveform.startLoop != 0 || writeWaveform.endLoop != 0)
                     {
-                        writeWaveform.startLoop = (uint32_t)((uint64_t)writeWaveform.startLoop * 48000ULL / (uint64_t)srcRate);
-                        writeWaveform.endLoop = (uint32_t)((uint64_t)writeWaveform.endLoop * 48000ULL / (uint64_t)srcRate);
+                        writeWaveform.startLoop = (uint32_t)(((uint64_t)writeWaveform.startLoop * 48000ULL + (uint64_t)srcRate / 2ULL) / (uint64_t)srcRate);
+                        writeWaveform.endLoop = (uint32_t)(((uint64_t)writeWaveform.endLoop * 48000ULL + (uint64_t)srcRate / 2ULL) / (uint64_t)srcRate);
                         if (writeWaveform.endLoop > dstFrames)
                         {
                             writeWaveform.endLoop = dstFrames;
@@ -7203,7 +7288,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             opErr = XCreateSoundObjectFromData(&sndResource,
                                                &writeWaveform,
                                                compType,
-                                               compSubType,
+                                               encodeCompSubType,
                                                NULL,
                                                NULL);
             BAE_STDERR("[RMF Save] Sample[%u] XCreateSoundObjectFromData compType=%d opErr=%d sndResource=%p\n",
@@ -7248,7 +7333,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                            (unsigned)writeWaveform.endLoop);
             }
         }
-        if (!preserveOriginalSndBlob)
+        if (sndResource)
         {
             int32_t sndSampleRate;
 
@@ -7277,7 +7362,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             XSetSoundLoopPoints(sndResource, (int32_t)writeWaveform.startLoop, (int32_t)writeWaveform.endLoop);
             PV_ForceSndLoopPoints(sndResource, (int32_t)writeWaveform.startLoop, (int32_t)writeWaveform.endLoop);
         }
-        if (!preserveOriginalSndBlob)
+        if (sndResource)
         {
             XSetSoundEmbeddedStatus(sndResource, TRUE);
         }
@@ -7289,13 +7374,9 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
         switch (writeSndType)
         {
             case ID_ESND:
-                if (!preserveOriginalSndBlob)
-                {
-                    XEncryptData(sndResource, (uint32_t)XGetPtrSize(sndResource));
-                }
+                XEncryptData(sndResource, (uint32_t)XGetPtrSize(sndResource));
                 break;
             case ID_CSND:
-                if (!preserveOriginalSndBlob)
                 {
                     XPTR compressedSnd;
                     int32_t compressedSize;
@@ -9440,6 +9521,7 @@ BAEResult BAERmfEditorDocument_AddEmptySample(BAERmfEditorDocument *document,
     sample->sourceCompressionType = C_NONE;
     sample->sourceCompressionSubType = CS_DEFAULT;
     sample->targetCompressionType = BAE_EDITOR_COMPRESSION_PCM;
+    sample->targetOpusMode = BAE_EDITOR_OPUS_MODE_MUSIC;
     sample->originalSndData = NULL;
     sample->originalSndSize = 0;
     sample->displayName = PV_DuplicateString(setup->displayName ? setup->displayName : "New Instrument");
@@ -9505,6 +9587,7 @@ BAEResult BAERmfEditorDocument_GetSampleInfo(BAERmfEditorDocument const *documen
     outSampleInfo->sampleInfo = sample->sampleInfo;
     outSampleInfo->compressionType = sample->targetCompressionType;
     outSampleInfo->hasOriginalData = (sample->originalSndData != NULL) ? TRUE : FALSE;
+    outSampleInfo->opusMode = sample->targetOpusMode;
     switch (sample->originalSndResourceType)
     {
         case ID_CSND: outSampleInfo->sndStorageType = BAE_EDITOR_SND_STORAGE_CSND; break;
@@ -9603,6 +9686,7 @@ BAEResult BAERmfEditorDocument_GetSampleAssetInfo(BAERmfEditorDocument const *do
             outAssetInfo->displayName = sample->displayName;
             outAssetInfo->sourcePath = sample->sourcePath;
             outAssetInfo->compressionType = sample->targetCompressionType;
+            outAssetInfo->opusMode = sample->targetOpusMode;
             outAssetInfo->hasOriginalData = PV_AssetSupportsDontChange(document, sample->sampleAssetID);
             outAssetInfo->usageCount = PV_CountSamplesForAsset(document, sample->sampleAssetID);
             return BAE_NO_ERROR;
@@ -9731,6 +9815,7 @@ BAEResult BAERmfEditorDocument_SetSampleAssetForSample(BAERmfEditorDocument *doc
         sourceCompression = BAE_EDITOR_COMPRESSION_PCM;
     }
     sample->targetCompressionType = sourceCompression;
+    sample->targetOpusMode = sourceAssetSample->targetOpusMode;
 
     BAERmfEditorDocument_SetSampleAssetCompression(document, assetID, sourceCompression);
 
@@ -9830,34 +9915,32 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
     sample->splitVolume = sampleInfo->splitVolume;
 
     newSampleRate = sampleInfo->sampleInfo.sampledRate;
-    if (newSampleRate < (8000U << 16))
+    if (newSampleRate == 0)
     {
-        /* Accept plain-Hz values from UI callers and normalize to 16.16 fixed. */
-        if (newSampleRate >= 4000U && newSampleRate <= 384000U)
+        switch (sampleInfo->compressionType)
         {
-            newSampleRate <<= 16;
-        }
-        else
-        {
-            switch (sampleInfo->compressionType)
-            {
-                case BAE_EDITOR_COMPRESSION_OPUS_12K:
-                case BAE_EDITOR_COMPRESSION_OPUS_16K:
-                case BAE_EDITOR_COMPRESSION_OPUS_24K:
-                case BAE_EDITOR_COMPRESSION_OPUS_32K:
-                case BAE_EDITOR_COMPRESSION_OPUS_48K:
-                case BAE_EDITOR_COMPRESSION_OPUS_64K:
-                case BAE_EDITOR_COMPRESSION_OPUS_96K:
-                case BAE_EDITOR_COMPRESSION_OPUS_128K:
-                case BAE_EDITOR_COMPRESSION_OPUS_256K:
-                    newSampleRate = (48000U << 16);
-                    break;
-                default:
-                    newSampleRate = (44100U << 16);
-                    break;
-            }
+            case BAE_EDITOR_COMPRESSION_OPUS_12K:
+            case BAE_EDITOR_COMPRESSION_OPUS_16K:
+            case BAE_EDITOR_COMPRESSION_OPUS_24K:
+            case BAE_EDITOR_COMPRESSION_OPUS_32K:
+            case BAE_EDITOR_COMPRESSION_OPUS_48K:
+            case BAE_EDITOR_COMPRESSION_OPUS_64K:
+            case BAE_EDITOR_COMPRESSION_OPUS_96K:
+            case BAE_EDITOR_COMPRESSION_OPUS_128K:
+            case BAE_EDITOR_COMPRESSION_OPUS_256K:
+                newSampleRate = (48000U << 16);
+                break;
+            default:
+                newSampleRate = (44100U << 16);
+                break;
         }
     }
+    else if (newSampleRate >= 4000U && newSampleRate <= 384000U)
+    {
+        /* Accept plain-Hz values from UI callers and normalize to 16.16 fixed. */
+        newSampleRate <<= 16;
+    }
+    /* Otherwise assume caller already provided 16.16 fixed-point rate and keep it as-is. */
 
     /* Keep per-sample metadata in sampleInfo. The waveform may be shared by
      * multiple splits, so writing loop/rate there can leak edits across samples. */
@@ -9891,6 +9974,24 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
         BAERmfEditorDocument_SetSampleAssetCompression(document,
                                                        sample->sampleAssetID,
                                                        sampleInfo->compressionType);
+    }
+
+    {
+        BAERmfEditorOpusMode resolvedOpusMode;
+        uint32_t i;
+
+        resolvedOpusMode = sampleInfo->opusMode;
+        if (!PV_IsValidEditorOpusMode(resolvedOpusMode))
+        {
+            resolvedOpusMode = BAE_EDITOR_OPUS_MODE_MUSIC;
+        }
+        for (i = 0; i < document->sampleCount; ++i)
+        {
+            if (document->samples[i].sampleAssetID == sample->sampleAssetID)
+            {
+                document->samples[i].targetOpusMode = resolvedOpusMode;
+            }
+        }
     }
 
     switch (sampleInfo->sndStorageType)
@@ -10076,6 +10177,7 @@ BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *docum
         sample->originalSndSize = 0;
     }
     sample->targetCompressionType = isCompressedImport ? BAE_EDITOR_COMPRESSION_DONT_CHANGE : BAE_EDITOR_COMPRESSION_PCM;
+    sample->targetOpusMode = BAE_EDITOR_OPUS_MODE_MUSIC;
     sample->originalSndData = passthroughSndData;
     sample->originalSndSize = passthroughSndSize;
 
@@ -10597,6 +10699,7 @@ static BAEResult PV_CopySampleEntry(BAERmfEditorDocument *dest,
     dstSample->sourceCompressionType = srcSample->sourceCompressionType;
     dstSample->sourceCompressionSubType = srcSample->sourceCompressionSubType;
     dstSample->targetCompressionType = srcSample->targetCompressionType;
+    dstSample->targetOpusMode = srcSample->targetOpusMode;
     dstSample->sampleInfo = srcSample->sampleInfo;
     dstSample->originalSndData = NULL;
     dstSample->originalSndSize = 0;

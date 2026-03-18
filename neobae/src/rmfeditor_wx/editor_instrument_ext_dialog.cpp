@@ -1079,6 +1079,7 @@ private:
     wxStaticText *m_loopInfoLabel;
     wxChoice *m_codecChoice;
     wxChoice *m_bitrateChoice;
+    wxChoice *m_opusModeChoice;
     wxStaticText *m_codecLabel;
     wxChoice *m_sndStorageChoice;
     WaveformPanelExt *m_waveformPanel;
@@ -1664,7 +1665,24 @@ private:
             sizer->Add(sourceRow, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
             m_codecChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) {
                 UpdateBitrateChoice(m_codecChoice->GetSelection());
+                if (m_opusModeChoice) {
+                    m_opusModeChoice->Enable(m_codecChoice->GetSelection() == 6);
+                }
             });
+        }
+
+        /* Opus mode */
+        {
+            wxBoxSizer *row = new wxBoxSizer(wxHORIZONTAL);
+            row->Add(new wxStaticText(page, wxID_ANY, "Opus Mode"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+            m_opusModeChoice = new wxChoice(page, wxID_ANY);
+            m_opusModeChoice->Append("Audio");
+            m_opusModeChoice->Append("Music");
+            m_opusModeChoice->Append("Voice");
+            m_opusModeChoice->SetSelection(1);
+            m_opusModeChoice->Enable(false);
+            row->Add(m_opusModeChoice, 0);
+            sizer->Add(row, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
         }
 
         /* Storage type (ESND/CSND/SND) */
@@ -1743,6 +1761,7 @@ private:
         memset(&s.sampleInfo, 0, sizeof(s.sampleInfo));
         s.sampleInfo.sampledRate = (BAE_UNSIGNED_FIXED)(22050u << 16);
         s.compressionType = BAE_EDITOR_COMPRESSION_PCM;
+        s.opusMode = BAE_EDITOR_OPUS_MODE_MUSIC;
         s.sndStorageType = BAE_EDITOR_SND_STORAGE_ESND;
         s.hasOriginalData = false;
 
@@ -1845,6 +1864,7 @@ private:
                 edited.compressionType = info.compressionType;
                 edited.hasOriginalData = (info.hasOriginalData == TRUE);
                 edited.sndStorageType = info.sndStorageType;
+                edited.opusMode = info.opusMode;
                 m_sampleIndices.push_back(i);
                 m_samples.push_back(edited);
             }
@@ -2013,6 +2033,12 @@ private:
         if (chosen == BAE_EDITOR_COMPRESSION_DONT_CHANGE && !s.hasOriginalData) chosen = BAE_EDITOR_COMPRESSION_PCM;
         s.compressionType = chosen;
         {
+            int sel = m_opusModeChoice->GetSelection();
+            if (sel == 0)      s.opusMode = BAE_EDITOR_OPUS_MODE_AUDIO;
+            else if (sel == 2) s.opusMode = BAE_EDITOR_OPUS_MODE_VOICE;
+            else               s.opusMode = BAE_EDITOR_OPUS_MODE_MUSIC;
+        }
+        {
             int sel = m_sndStorageChoice->GetSelection();
             if (sel == 1)      s.sndStorageType = BAE_EDITOR_SND_STORAGE_CSND;
             else if (sel == 2) s.sndStorageType = BAE_EDITOR_SND_STORAGE_SND;
@@ -2058,6 +2084,13 @@ private:
             UpdateBitrateChoice(codecIdx);
             if (bitrateIdx >= 0 && bitrateIdx < (int)m_bitrateChoice->GetCount()) {
                 m_bitrateChoice->SetSelection(bitrateIdx);
+            }
+            if (m_opusModeChoice) {
+                int opusModeSel = 1;
+                if (s.opusMode == BAE_EDITOR_OPUS_MODE_AUDIO) opusModeSel = 0;
+                else if (s.opusMode == BAE_EDITOR_OPUS_MODE_VOICE) opusModeSel = 2;
+                m_opusModeChoice->SetSelection(opusModeSel);
+                m_opusModeChoice->Enable(codecIdx == 6);
             }
         }
         {
@@ -2189,6 +2222,7 @@ private:
             s.compressionType = info.compressionType;
             s.hasOriginalData = (info.hasOriginalData == TRUE);
             s.sndStorageType = info.sndStorageType;
+            s.opusMode = info.opusMode;
         }
         LoadLocalSample(m_currentLocalIndex);
     }
@@ -2277,6 +2311,7 @@ private:
             info.compressionType = m_samples[i].compressionType;
             info.hasOriginalData = m_samples[i].hasOriginalData ? TRUE : FALSE;
             info.sndStorageType = m_samples[i].sndStorageType;
+            info.opusMode = m_samples[i].opusMode;
             if (BAERmfEditorDocument_SetSampleInfo(m_document, sampleIndex, &info) != BAE_NO_ERROR) {
                 if (m_cancelUndoCallback) {
                     m_cancelUndoCallback();

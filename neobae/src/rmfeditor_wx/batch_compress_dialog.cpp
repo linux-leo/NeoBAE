@@ -41,6 +41,18 @@ BatchCompressDialog::BatchCompressDialog(wxWindow *parent, const std::vector<uin
 
     UpdateBitrateChoice(DEFAULT_CODEC);
 
+    wxBoxSizer *opusModeSizer = new wxBoxSizer(wxHORIZONTAL);
+    wxStaticText *opusModeLabel = new wxStaticText(this, wxID_ANY, "Opus Mode:");
+    m_opusModeChoice = new wxChoice(this, wxID_ANY);
+    m_opusModeChoice->Append("Audio");
+    m_opusModeChoice->Append("Music");
+    m_opusModeChoice->Append("Voice");
+    m_opusModeChoice->SetSelection(1);
+    m_opusModeChoice->Enable(true);
+    opusModeSizer->Add(opusModeLabel, 0, wxALL | wxALIGN_CENTER_VERTICAL, 5);
+    opusModeSizer->Add(m_opusModeChoice, 1, wxALL | wxEXPAND, 5);
+    mainSizer->Add(opusModeSizer, 0, wxEXPAND | wxLEFT | wxRIGHT, 10);
+
     // Buttons
     wxBoxSizer *buttonSizer = new wxBoxSizer(wxHORIZONTAL);
     wxButton *okBtn = new wxButton(this, wxID_OK, "OK");
@@ -65,6 +77,10 @@ void BatchCompressDialog::OnCodecSelected(wxCommandEvent &event)
 {
     int codecIdx = m_codecChoice->GetSelection();
     UpdateBitrateChoice(codecIdx);
+    if (m_opusModeChoice)
+    {
+        m_opusModeChoice->Enable(codecIdx == 6);
+    }
 }
 
 void BatchCompressDialog::UpdateBitrateChoice(int codecIdx)
@@ -189,5 +205,21 @@ BAERmfEditorCompressionType BatchCompressDialog::GetSelectedCompressionType() co
         }
     }
     default: return BAE_EDITOR_COMPRESSION_DONT_CHANGE;
+    }
+}
+
+BAERmfEditorOpusMode BatchCompressDialog::GetSelectedOpusMode() const
+{
+    if (!m_opusModeChoice)
+    {
+        return BAE_EDITOR_OPUS_MODE_MUSIC;
+    }
+    switch (m_opusModeChoice->GetSelection())
+    {
+        case 0: return BAE_EDITOR_OPUS_MODE_AUDIO;
+        case 2: return BAE_EDITOR_OPUS_MODE_VOICE;
+        case 1:
+        default:
+            return BAE_EDITOR_OPUS_MODE_MUSIC;
     }
 }

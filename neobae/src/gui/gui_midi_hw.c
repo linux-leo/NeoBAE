@@ -1242,7 +1242,7 @@ void pcm_opus_finalize(void)
         src.waveFrames = g_pcm_opus_accumulated_frames;
         src.theWaveform = (XPTR)g_pcm_opus_accumulated_samples;
 
-        err = XEncodeOpusToMemory(&src, (uint32_t)g_pcm_opus_bitrate, &encoded, &encodedBytes);
+        err = XEncodeOpusToMemory(&src, (uint32_t)g_pcm_opus_bitrate, 0, &encoded, &encodedBytes);
         if (err == NO_ERR && encoded && encodedBytes > 0)
         {
             FILE *fp = fopen(g_pcm_opus_output_path, "wb");

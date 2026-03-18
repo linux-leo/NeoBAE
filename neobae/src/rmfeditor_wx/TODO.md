@@ -121,6 +121,19 @@
 - ~~Make resource file for the windows app~~
 
 # 0.04.4a
+- ~~Why did everything break?~~
+  - ~~`DoorSlam.rmf` doesn't preview now~~
+  - ~~`Crazy Dram fix.rmf` missing samples~~
+- ~~Loop points lost with all compression even ADPCM~~
+- Sus out sample codec issues
+  - MP3 and small frames/loops (MUST BE CAREFUL WHAT WE CHANGE)
+  - OPUS and pitch/loops
+  - ~~ADPCM~~
+  - ~~VORBIS~~
+  - ~~FLAC~~
+- Switch tempfile system to memory loader
+
+# 0.05a
 - `Crazy Dream fix.rmf` plays bass/gt sample instead of saw lead
 
 # Future

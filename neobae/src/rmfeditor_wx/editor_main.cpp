@@ -42,7 +42,7 @@ extern "C" {
 
 namespace {
 
-constexpr char const *kVersionString = "0.04.3 alpha";
+constexpr char const *kVersionString = "0.04.4 alpha";
 
 static bool IsOpusCompressionType(BAERmfEditorCompressionType compressionType) {
     switch (compressionType) {
@@ -1464,9 +1464,6 @@ private:
         loadRateOctaveShift = 0;
 
         baseSampleRate = sampleInfo.sampleInfo.sampledRate;
-        if (baseSampleRate < (4000U << 16)) {
-            baseSampleRate = (44100U << 16);
-        }
         if (!EnsurePlaybackEngine()) {
             return false;
         }
@@ -1532,6 +1529,18 @@ private:
             return BAESound_LoadCustomSample(m_previewSound, const_cast<void *>(data), frames, bits, chans, rate, loopS, loopE);
         };
 
+        auto normalizePreviewRate = [](BAE_UNSIGNED_FIXED rate) -> BAE_UNSIGNED_FIXED {
+            if (rate == 0) {
+                return (44100U << 16);
+            }
+            if (rate >= 4000U && rate <= 384000U) {
+                return (rate << 16);
+            }
+            return rate;
+        };
+
+        baseSampleRate = normalizePreviewRate(baseSampleRate);
+
         auto adaptLoadRateForPitch = [&](BAE_UNSIGNED_FIXED &ioRate,
                                          int &outOctaveShift) {
             double desiredRate;
@@ -1591,13 +1600,7 @@ private:
                 if (overrideInfo->sampledRate > 0) {
                     sampleRate = overrideInfo->sampledRate;
                 }
-                if (sampleRate < (8000U << 16)) {
-                    if (sampleRate >= 4000U && sampleRate <= 384000U) {
-                        sampleRate <<= 16;
-                    } else {
-                        sampleRate = (44100U << 16);
-                    }
-                }
+                sampleRate = normalizePreviewRate(sampleRate);
                 loopStart = overrideInfo->startLoop;
                 loopEnd   = overrideInfo->endLoop;
                 if (loopStart >= frameCount || loopEnd > frameCount || loopEnd <= loopStart) {
@@ -1698,13 +1701,7 @@ private:
             if (overrideInfo && overrideInfo->sampledRate > 0) {
                 sampleRate = overrideInfo->sampledRate;
             }
-            if (sampleRate < (8000U << 16)) {
-                if (sampleRate >= 4000U && sampleRate <= 384000U) {
-                    sampleRate <<= 16;
-                } else {
-                    sampleRate = (44100U << 16);
-                }
-            }
+            sampleRate = normalizePreviewRate(sampleRate);
             if (frameCount == 0 || (bitSize != 8 && bitSize != 16) || (channels != 1 && channels != 2)) {
                 return false;
             }
@@ -1738,10 +1735,22 @@ private:
         preview_loaded:
         {
             BAESampleInfo loadedInfo;
+            uint32_t loopStart;
+            uint32_t loopEnd;
+            uint32_t sourceFrames;
+            uint32_t targetFrames;
+
+            loopStart = overrideInfo ? overrideInfo->startLoop : sampleInfo.sampleInfo.startLoop;
+            loopEnd = overrideInfo ? overrideInfo->endLoop : sampleInfo.sampleInfo.endLoop;
+            sourceFrames = overrideInfo && overrideInfo->waveFrames > 0
+                ? overrideInfo->waveFrames
+                : sampleInfo.sampleInfo.waveFrames;
+            targetFrames = 0;
             if (BAESound_GetInfo(m_previewSound, &loadedInfo) == BAE_NO_ERROR) {
                 if (loadedInfo.sampledRate >= (4000U << 16)) {
                     baseSampleRate = loadedInfo.sampledRate;
                 }
+                targetFrames = loadedInfo.waveFrames;
                 fprintf(stderr,
                         "[nbstudio] Preview sample %u loaded info: frames=%u bits=%u channels=%u rate=%lu basePitch=%u\n",
                         static_cast<unsigned>(sampleIndex),
@@ -1751,9 +1760,62 @@ private:
                         static_cast<unsigned long>(loadedInfo.sampledRate),
                         static_cast<unsigned>(loadedInfo.baseMidiPitch));
             }
-        }
 
-        BAESound_SetLoopCount(m_previewSound, 0);
+            if (sourceFrames == 0) {
+                sourceFrames = sampleInfo.sampleInfo.waveFrames;
+            }
+            if (targetFrames == 0) {
+                targetFrames = sourceFrames;
+            }
+            if (loopEnd > loopStart && sourceFrames > 0 && targetFrames > 0) {
+                if (sourceFrames != targetFrames) {
+                    uint32_t mappedStart;
+                    uint32_t mappedEnd;
+                    bool isAdpcmOverride;
+
+                    isAdpcmOverride = compressionOverride == BAE_EDITOR_COMPRESSION_ADPCM;
+
+                    if (isAdpcmOverride)
+                    {
+                        /* Keep ADPCM preview loops in source-frame coordinates. */
+                        mappedStart = loopStart;
+                        mappedEnd = loopEnd;
+                    }
+                    else
+                    {
+                        mappedStart = static_cast<uint32_t>((((uint64_t)loopStart * (uint64_t)targetFrames) +
+                                                             ((uint64_t)sourceFrames / 2ULL)) /
+                                                            (uint64_t)sourceFrames);
+                        mappedEnd = static_cast<uint32_t>((((uint64_t)loopEnd * (uint64_t)targetFrames) +
+                                                           ((uint64_t)sourceFrames / 2ULL)) /
+                                                          (uint64_t)sourceFrames);
+                    }
+                    if (mappedStart > targetFrames) mappedStart = targetFrames;
+                    if (mappedEnd > targetFrames) mappedEnd = targetFrames;
+                    if (mappedEnd <= mappedStart) {
+                        if (mappedStart < targetFrames) {
+                            mappedEnd = mappedStart + 1;
+                        } else if (targetFrames > 0) {
+                            mappedStart = targetFrames - 1;
+                            mappedEnd = targetFrames;
+                        } else {
+                            mappedStart = 0;
+                            mappedEnd = 0;
+                        }
+                    }
+                    loopStart = mappedStart;
+                    loopEnd = mappedEnd;
+                }
+                if (loopStart < targetFrames && loopEnd <= targetFrames && loopEnd > loopStart) {
+                    BAESound_SetSampleLoopPoints(m_previewSound, loopStart, loopEnd);
+                    BAESound_SetLoopCount(m_previewSound, 0xFFFFFFFFu);
+                } else {
+                    BAESound_SetLoopCount(m_previewSound, 0);
+                }
+            } else {
+                BAESound_SetLoopCount(m_previewSound, 0);
+            }
+        }
 
         /* Check whether this instrument has playAtSampledFreq set.  When the
          * flag is active the engine plays every note at the sample's native
@@ -4487,11 +4549,13 @@ private:
         BatchCompressDialog dlg(this, sampleIndices, false);
         if (dlg.ShowModal() == wxID_OK) {
             BAERmfEditorCompressionType compressionType = dlg.GetSelectedCompressionType();
+            BAERmfEditorOpusMode opusMode = dlg.GetSelectedOpusMode();
             // Apply compression to all samples
             for (uint32_t sampleIndex : sampleIndices) {
                 BAERmfEditorSampleInfo info;
                 if (BAERmfEditorDocument_GetSampleInfo(m_document, sampleIndex, &info) == BAE_NO_ERROR) {
                     info.compressionType = compressionType;
+                    info.opusMode = opusMode;
                     BAERmfEditorDocument_SetSampleInfo(m_document, sampleIndex, &info);
                 }
             }
@@ -4521,11 +4585,13 @@ private:
         BatchCompressDialog dlg(this, allSampleIndices, true);
         if (dlg.ShowModal() == wxID_OK) {
             BAERmfEditorCompressionType compressionType = dlg.GetSelectedCompressionType();
+            BAERmfEditorOpusMode opusMode = dlg.GetSelectedOpusMode();
             // Apply compression to all samples
             for (uint32_t sampleIndex : allSampleIndices) {
                 BAERmfEditorSampleInfo info;
                 if (BAERmfEditorDocument_GetSampleInfo(m_document, sampleIndex, &info) == BAE_NO_ERROR) {
                     info.compressionType = compressionType;
+                    info.opusMode = opusMode;
                     BAERmfEditorDocument_SetSampleInfo(m_document, sampleIndex, &info);
                 }
             }
