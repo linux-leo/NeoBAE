@@ -40,13 +40,17 @@ extern "C" {
 #include <wx/msw/winundef.h>
 #endif
 
-#ifndef _VERSION
-#define _VERSION "unknown"
-#endif
+#ifndef GIT_VERSION
+#ifdef _VERSION
+#define GIT_VERSION _VERSION
+#else
+#define GIT_VERSION "unknown"
+#endif // _VERSION
+#endif // GIT_VERSION
 
 namespace {
 
-constexpr char const* kVersionString = "0.05 alpha" " (" _VERSION ")";
+constexpr char const* kVersionString = "0.05 alpha" " (" GIT_VERSION ")";
 
 
 static bool IsOpusCompressionType(BAERmfEditorCompressionType compressionType) {

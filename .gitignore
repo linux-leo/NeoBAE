@@ -20,6 +20,13 @@ neobae/.vs/
 neobae/src/NeoBAEDroid/.gradle/
 neobae/src/thirdparty/bassmidi/
 
+neobae/src/vs2022/vcpkg_installed/
+neobae/src/vs2022/.vs/
+neobae/src/vs2022/bin/
+neobae/src/vs2022/generated/
+neobae/src/vs2022/nbstudio/x64/
+neobae/src/vs2022/vcpkg_installed/
+
 neobae/src/NeoBAEDroid/NeoBAEDroid.iws
 neobae/src/NeoBAEDroid/NeoBAEDroid.ipr
 neobae/src/NeoBAEDroid/app/release/
