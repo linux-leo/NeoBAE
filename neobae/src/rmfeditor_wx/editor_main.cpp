@@ -108,6 +108,7 @@ enum {
     ID_NotePreviewTimer,
     ID_CompressInstrument,
     ID_CompressAllInstruments,
+    ID_CurrentBankDisplay,
     ID_CloneFromBank,
     ID_AliasFromBank,
     ID_SaveSession,
@@ -282,6 +283,8 @@ public:
                     m_autoFollowPlayhead(true),
                     m_bankToken(nullptr),
                     m_bankLoaded(false),
+                    m_currentBankMenuItem(nullptr),
+                    m_reloadInternalBankMenuItem(nullptr),
                     m_pendingLoopHotReload(false),
                     m_pendingLoopHotReloadPosUsec(0),
                     m_pendingLoopHotReloadPaused(false),
@@ -294,6 +297,7 @@ public:
 #endif
 
         wxMenu *fileMenu;
+        wxMenu *soundBankMenu;
         wxMenu *editMenu;
         wxMenuBar *menuBar;
         wxSplitterWindow *splitter;
@@ -307,14 +311,21 @@ public:
 
         fileMenu = new wxMenu();
         fileMenu->Append(wxID_OPEN, "&Open\tCtrl+O");
-        fileMenu->Append(wxID_SAVEAS, "Save &As...\tCtrl+Shift+S");
-        fileMenu->Append(ID_SaveSession, "Save S&ession\tCtrl+S");
-        fileMenu->Append(ID_SaveSessionAs, "Save Session &As (.nbs)...");
+        fileMenu->Append(wxID_SAVEAS, "&Export as...\tCtrl+Shift+S");
+        fileMenu->Append(ID_SaveSession, "Save &Session\tCtrl+S");
+        fileMenu->Append(ID_SaveSessionAs, "Save S&ession as...");
         fileMenu->AppendSeparator();
-        fileMenu->Append(ID_LoadBank, "Load &Bank (HSB)...\tCtrl+B");
-        fileMenu->Append(ID_CloneFromBank, "Clone &Instrument from Bank...");
-        fileMenu->Append(ID_AliasFromBank, "&Alias Instrument from Bank...");
-        fileMenu->Append(ID_ReloadInternalBank, "&Reload Internal Bank");
+        soundBankMenu = new wxMenu();
+        m_currentBankMenuItem = soundBankMenu->Append(ID_CurrentBankDisplay, "Current: Built-in");
+        if (m_currentBankMenuItem) {
+            m_currentBankMenuItem->Enable(false);
+        }
+        soundBankMenu->AppendSeparator();
+        soundBankMenu->Append(ID_LoadBank, "Load a &Bank for Preview(HSB)...\tCtrl+B");
+        soundBankMenu->Append(ID_CloneFromBank, "&Clone an Instrument from currently loaded Bank...");
+        soundBankMenu->Append(ID_AliasFromBank, "&Alias an Instrument from currently loaded Bank...");
+        m_reloadInternalBankMenuItem = soundBankMenu->Append(ID_ReloadInternalBank, "&Unload All Banks and Reload Internal Bank");
+        fileMenu->AppendSubMenu(soundBankMenu, "Sound &Bank");
         fileMenu->AppendSeparator();
         fileMenu->Append(wxID_EXIT, "E&xit");
         editMenu = new wxMenu();
@@ -499,6 +510,7 @@ public:
 
         CreateStatusBar(2);
         SetStatusText("Open an RMF or MIDI file to begin.");
+        UpdateLoadedBankStatus();
 
         Bind(wxEVT_MENU, &MainFrame::OnOpen, this, wxID_OPEN);
         Bind(wxEVT_MENU, &MainFrame::OnSaveAs, this, wxID_SAVEAS);
@@ -549,6 +561,8 @@ public:
         Bind(wxEVT_TIMER, &MainFrame::OnPlaybackTimer, this, ID_PlaybackTimer);
         Bind(wxEVT_TIMER, &MainFrame::OnNotePreviewTimer, this, ID_NotePreviewTimer);
         LoadIniSettings();
+        EnsurePlaybackEngine();
+        UpdateLoadedBankStatus();
         RefreshMidiLoopControlsFromDocument();
         UpdateUndoMenuState();
 
@@ -632,6 +646,9 @@ private:
     BAEBankToken m_bankToken;
     bool m_bankLoaded;
     std::vector<BAEBankToken> m_bankTokens; /* all loaded banks for enumeration */
+    wxString m_loadedBankPath;
+    wxMenuItem *m_currentBankMenuItem;
+    wxMenuItem *m_reloadInternalBankMenuItem;
     bool m_pendingLoopHotReload;
     uint32_t m_pendingLoopHotReloadPosUsec;
     bool m_pendingLoopHotReloadPaused;
@@ -668,6 +685,45 @@ private:
     void ApplyPreviewReverbToMixer() {
         if (m_playbackMixer) {
             BAEMixer_SetDefaultReverb(m_playbackMixer, GetSelectedPreviewReverbType());
+        }
+    }
+
+    void UpdateLoadedBankStatus() {
+        wxString label;
+        bool isInternalBankCurrent;
+
+        label = "Current: Built-in";
+        isInternalBankCurrent = m_loadedBankPath.empty();
+        if (m_bankLoaded && m_bankToken && m_playbackMixer) {
+            char friendlyBuf[128] = {0};
+            bool hasFriendlyName;
+
+            hasFriendlyName = (BAE_GetBankFriendlyName(m_playbackMixer,
+                                                       m_bankToken,
+                                                       friendlyBuf,
+                                                       sizeof(friendlyBuf)) == BAE_NO_ERROR &&
+                               friendlyBuf[0] != '\0');
+
+            if (isInternalBankCurrent) {
+                if (hasFriendlyName) {
+                    label = wxString::Format("Current: Built-in (%s)", friendlyBuf);
+                } else {
+                    label = "Current: Built-in";
+                }
+            } else if (hasFriendlyName) {
+                label = wxString::Format("Current: %s", friendlyBuf);
+            } else if (!m_loadedBankPath.empty()) {
+                label = wxString::Format("Current: %s", wxFileNameFromPath(m_loadedBankPath));
+            }
+        } else if (!m_loadedBankPath.empty()) {
+            label = wxString::Format("Current: %s", wxFileNameFromPath(m_loadedBankPath));
+        }
+
+        if (m_currentBankMenuItem) {
+            m_currentBankMenuItem->SetItemLabel(label);
+        }
+        if (m_reloadInternalBankMenuItem) {
+            m_reloadInternalBankMenuItem->Enable(!isInternalBankCurrent);
         }
     }
 
@@ -1211,11 +1267,13 @@ private:
             if (bankResult == BAE_NO_ERROR) {
                 m_bankLoaded = true;
                 m_bankTokens.push_back(m_bankToken);
+                m_loadedBankPath.clear();
             }
 #else
             fprintf(stderr, "[nbstudio] WARNING: _BUILT_IN_PATCHES not defined, no bank loaded!\n");
 #endif
         }
+        UpdateLoadedBankStatus();
         return true;
     }
 
@@ -1232,6 +1290,7 @@ private:
         m_bankToken = nullptr;
         m_bankLoaded = false;
         m_bankTokens.clear();
+        m_loadedBankPath.clear();
         /* Reload internal bank first so it remains available */
 #ifdef _BUILT_IN_PATCHES
         {
@@ -1248,11 +1307,13 @@ private:
                 m_bankToken = m_bankTokens[0];
                 m_bankLoaded = true;
             }
+            UpdateLoadedBankStatus();
             return false;
         }
         m_bankToken = newToken;
         m_bankLoaded = true;
         m_bankTokens.push_back(newToken);
+        m_loadedBankPath = path;
         char friendlyBuf[128];
         wxString bankName;
         if (BAE_GetBankFriendlyName(m_playbackMixer, newToken, friendlyBuf, sizeof(friendlyBuf)) == BAE_NO_ERROR) {
@@ -1261,6 +1322,7 @@ private:
             bankName = wxString::Format("Bank loaded: %s", wxFileNameFromPath(path));
         }
         SetStatusText(bankName, 0);
+        UpdateLoadedBankStatus();
         return true;
     }
 
@@ -4442,6 +4504,7 @@ private:
         m_bankToken = nullptr;
         m_bankLoaded = false;
         m_bankTokens.clear();
+        m_loadedBankPath.clear();
 #ifdef _BUILT_IN_PATCHES
         {
             BAEResult bankResult = BAEMixer_LoadBuiltinBank(m_playbackMixer, &m_bankToken);
@@ -4456,6 +4519,7 @@ private:
 #else
         SetStatusText("All banks unloaded", 0);
 #endif
+        UpdateLoadedBankStatus();
     }
 
     void OnCloneFromBank(wxCommandEvent &) {
