@@ -383,6 +383,7 @@ public:
         m_midiLoopEnableCheck = new wxCheckBox(editorPanel, wxID_ANY, "MIDI Loop Markers");
         m_midiLoopStartText = new wxTextCtrl(editorPanel, wxID_ANY, "0:00.000", wxDefaultPosition, wxSize(110, -1));
         m_midiLoopEndText = new wxTextCtrl(editorPanel, wxID_ANY, "0:00.000", wxDefaultPosition, wxSize(110, -1));
+        m_channelsConfigButton = new wxButton(editorPanel, wxID_ANY, "Channels");
         m_playScopeChoice->Append("All Tracks");
         m_playScopeChoice->Append("Current Track");
         m_playScopeChoice->Append("Channels");
@@ -465,7 +466,8 @@ public:
             midiLoopRow->Add(new wxStaticText(editorPanel, wxID_ANY, "Start Time"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
             midiLoopRow->Add(m_midiLoopStartText, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
             midiLoopRow->Add(new wxStaticText(editorPanel, wxID_ANY, "End Time"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-            midiLoopRow->Add(m_midiLoopEndText, 0, wxALIGN_CENTER_VERTICAL, 0);
+            midiLoopRow->Add(m_midiLoopEndText, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+            midiLoopRow->Add(m_channelsConfigButton, 0, wxALIGN_CENTER_VERTICAL, 0);
             extraControlsSizer->Add(m_metadataButton, 0, wxEXPAND, 0);
 
             leftControlsSizer->Add(controlsSizer, 0, wxEXPAND | wxBOTTOM, 8);
@@ -543,17 +545,11 @@ public:
         m_pauseButton->Bind(wxEVT_BUTTON, &MainFrame::OnPauseResume, this);
         m_stopButton->Bind(wxEVT_BUTTON, &MainFrame::OnStop, this);
         m_playScopeChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &event) {
-            if (m_playScopeChoice && m_playScopeChoice->GetSelection() == 2) {
-                OpenPlaybackChannelsDialog();
-            }
+            UpdateChannelsConfigButtonState();
             event.Skip();
         });
-        m_playScopeChoice->Bind(wxEVT_LEFT_UP, [this](wxMouseEvent &event) {
-            if (m_playScopeChoice && m_playScopeChoice->GetSelection() == 2) {
-                OpenPlaybackChannelsDialog();
-                return;
-            }
-            event.Skip();
+        m_channelsConfigButton->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+            OpenPlaybackChannelsDialog();
         });
         m_previewVolumeSlider->Bind(wxEVT_SLIDER, &MainFrame::OnPreviewVolumeChanged, this);
         m_previewReverbChoice->Bind(wxEVT_CHOICE, &MainFrame::OnPreviewReverbChanged, this);
@@ -586,6 +582,7 @@ public:
         UpdateLoadedBankStatus();
         RefreshMidiLoopControlsFromDocument();
         UpdateUndoMenuState();
+        UpdateChannelsConfigButtonState();
 
     }
 
@@ -645,6 +642,7 @@ private:
     wxCheckBox *m_midiLoopEnableCheck;
     wxTextCtrl *m_midiLoopStartText;
     wxTextCtrl *m_midiLoopEndText;
+    wxButton *m_channelsConfigButton;
     wxSlider *m_positionSlider;
     wxStaticText *m_positionLabel;
     wxTreeCtrl *m_sampleTree;
@@ -752,6 +750,16 @@ private:
 
     bool IsPreviewLoopEnabled() const {
         return m_previewLoopCheck ? m_previewLoopCheck->GetValue() : false;
+    }
+
+    bool IsChannelsPlaybackScopeSelected() const {
+        return m_playScopeChoice && m_playScopeChoice->GetSelection() == 2;
+    }
+
+    void UpdateChannelsConfigButtonState() {
+        if (m_channelsConfigButton) {
+            m_channelsConfigButton->Enable(IsChannelsPlaybackScopeSelected());
+        }
     }
 
     void ApplyPreviewLoopSettingToSong() {

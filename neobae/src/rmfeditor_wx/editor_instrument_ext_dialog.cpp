@@ -146,6 +146,21 @@ public:
         }
     }
 
+    void SetExternalPressedNote(int note) {
+        int clamped = std::clamp(note, 0, 127);
+        if (m_externalPressedKey != clamped) {
+            m_externalPressedKey = clamped;
+            Refresh();
+        }
+    }
+
+    void ClearExternalPressedNote() {
+        if (m_externalPressedKey >= 0) {
+            m_externalPressedKey = -1;
+            Refresh();
+        }
+    }
+
     void UpdateVisibleRangeForWidth(int width) {
         int desiredWhiteKeys;
         int desiredOctaves;
@@ -168,6 +183,7 @@ private:
     int m_baseNote;
     int m_octaves;
     int m_pressedKey;
+    int m_externalPressedKey = -1;
     bool m_noteIsOn;
     wxTimer m_releaseWatchdog;
 
@@ -312,6 +328,7 @@ private:
         float blackKeyWidth = whiteKeyWidth * 0.6f;
         int blackKeyHeight = size.y * 60 / 100;
         int endNote = VisibleEndNote();
+        int highlightedNote = (m_pressedKey >= 0) ? m_pressedKey : m_externalPressedKey;
 
         dc.SetBackground(wxBrush(wxColour(30, 30, 30)));
         dc.Clear();
@@ -321,7 +338,7 @@ private:
             int x1;
             int x2;
             if (WhiteKeyRectForNote(note, size, whiteKeyWidth, &x1, &x2)) {
-                if (note == m_pressedKey) {
+                if (note == highlightedNote) {
                     dc.SetBrush(wxBrush(wxColour(170, 205, 165)));
                     dc.SetPen(wxPen(wxColour(95, 150, 95), 1));
                 } else {
@@ -344,12 +361,12 @@ private:
         }
 
         /* Highlight pressed key */
-        if (m_pressedKey >= 0) {
+        if (highlightedNote >= 0) {
             /* Tint the actual pressed key so the feedback is visible while dragging. */
-            if (IsBlackKey(m_pressedKey % 12)) {
+            if (IsBlackKey(highlightedNote % 12)) {
                 int bx;
                 int bw;
-                if (BlackKeyRectForNote(m_pressedKey, size, whiteKeyWidth, blackKeyWidth, &bx, &bw)) {
+                if (BlackKeyRectForNote(highlightedNote, size, whiteKeyWidth, blackKeyWidth, &bx, &bw)) {
                     dc.SetBrush(wxBrush(wxColour(70, 110, 70)));
                     dc.SetPen(wxPen(wxColour(160, 220, 160), 1));
                     dc.DrawRectangle(bx, 0, bw, blackKeyHeight);
@@ -357,7 +374,7 @@ private:
             }
             dc.SetFont(wxFont(7, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
             dc.SetTextForeground(wxColour(40, 200, 40));
-            dc.DrawText(wxString::Format("Note: %d", m_pressedKey), 4, size.y - 14);
+            dc.DrawText(wxString::Format("Note: %d", highlightedNote), 4, size.y - 14);
         }
     }
 
@@ -368,6 +385,9 @@ private:
 
     void OnMouseDown(wxMouseEvent &evt) {
         int note = NoteAtPosition(evt.GetX(), evt.GetY());
+
+        /* Clicking the piano should restore keyboard focus for musical typing. */
+        SetFocus();
         if (note < 0) {
             StopPressedNote();
             return;
@@ -1149,10 +1169,23 @@ public:
 
         Bind(wxEVT_BUTTON, &InstrumentExtEditorDialog::OnApply, this, wxID_APPLY);
         Bind(wxEVT_BUTTON, &InstrumentExtEditorDialog::OnOk, this, wxID_OK);
+        Bind(wxEVT_KILL_FOCUS, [this](wxFocusEvent &event) {
+            StopKeyboardPreviewIfActive();
+            event.Skip();
+        });
+        Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent &event) {
+            StopKeyboardPreviewIfActive();
+            event.Skip();
+        });
         Bind(wxEVT_CHAR_HOOK, [this](wxKeyEvent &event) {
             int keyCode = event.GetKeyCode();
             bool ctrlDown = event.ControlDown() || event.CmdDown();
             wxWindow *focus = wxWindow::FindFocus();
+
+            if (keyCode == WXK_ESCAPE && IsTextEditingFocus(focus)) {
+                FocusKeyboardPreviewTarget();
+                return;
+            }
 
             if (ctrlDown && !event.ShiftDown() && !event.AltDown() &&
                 (keyCode == 'Z' || keyCode == 'z')) {
@@ -1190,7 +1223,20 @@ public:
             }
             event.Skip();
         });
-        Bind(wxEVT_KEY_UP, &InstrumentExtEditorDialog::HandleKeyboardPreviewKeyUp, this);
+        BindKeyboardReleaseHandlers(this);
+        BindBackgroundFocusHandlers(this);
+        if (m_notebook) {
+            m_notebook->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED, [this](wxBookCtrlEvent &event) {
+                StopKeyboardPreviewIfActive();
+                event.Skip();
+            });
+        }
+        Bind(wxEVT_SHOW, [this](wxShowEvent &event) {
+            if (event.IsShown() && m_notebook) {
+                m_notebook->SetFocus();
+            }
+            event.Skip();
+        });
 
         /* Load initial sample data */
         if (!m_samples.empty()) {
@@ -1205,7 +1251,7 @@ public:
             }
             event.Skip();
         };
-        if (m_instNameText) m_instNameText->Bind(wxEVT_TEXT, instantApply);
+        /* Keep instrument name text undo-friendly by not applying on every keystroke. */
         if (m_instProgramSpin) {
             m_instProgramSpin->Bind(wxEVT_SPINCTRL, instantApply);
             m_instProgramSpin->Bind(wxEVT_TEXT, instantApply);
@@ -1335,43 +1381,21 @@ private:
 
     static int KeyCodeToSemitoneOffset(int keyCode) {
         switch (NormalizeAsciiKeyCode(keyCode)) {
-            case 'Z': return 0;
-            case 'S': return 1;
-            case 'X': return 2;
-            case 'D': return 3;
-            case 'C': return 4;
-            case 'V': return 5;
-            case 'G': return 6;
-            case 'B': return 7;
-            case 'H': return 8;
-            case 'N': return 9;
-            case 'J': return 10;
-            case 'M': return 11;
-            case ',': return 12;
-            case 'L': return 13;
-            case '.': return 14;
-            case ';': return 15;
-            case '/': return 16;
-            case 'Q': return 12;
-            case '2': return 13;
-            case 'W': return 14;
-            case '3': return 15;
-            case 'E': return 16;
-            case 'R': return 17;
-            case '5': return 18;
-            case 'T': return 19;
-            case '6': return 20;
-            case 'Y': return 21;
-            case '7': return 22;
-            case 'U': return 23;
-            case 'I': return 24;
-            case '9': return 25;
-            case 'O': return 26;
-            case '0': return 27;
-            case 'P': return 28;
-            case '[': return 29;
-            case '=': return 30;
-            case ']': return 31;
+            /* Match GUI keyboard sequence: a w s e d f t g y h u j k o */
+            case 'A': return 0;
+            case 'W': return 1;
+            case 'S': return 2;
+            case 'E': return 3;
+            case 'D': return 4;
+            case 'F': return 5;
+            case 'T': return 6;
+            case 'G': return 7;
+            case 'Y': return 8;
+            case 'H': return 9;
+            case 'U': return 10;
+            case 'J': return 11;
+            case 'K': return 12;
+            case 'O': return 13;
             default: return -1;
         }
     }
@@ -1382,9 +1406,82 @@ private:
                wxDynamicCast(focus, wxSpinCtrlDouble) != nullptr;
     }
 
+    void FocusKeyboardPreviewTarget() {
+        if (m_pianoPanel && m_pianoPanel->IsShown()) {
+            m_pianoPanel->SetFocus();
+            return;
+        }
+        if (m_notebook) {
+            m_notebook->SetFocus();
+            return;
+        }
+        SetFocus();
+    }
+
+    bool ShouldReturnFocusFromClickTarget(wxWindow *target) const {
+        if (!target) {
+            return false;
+        }
+        if (target == m_pianoPanel || target == m_waveformPanel) {
+            return false;
+        }
+        if (wxDynamicCast(target, wxTextCtrl) != nullptr ||
+            wxDynamicCast(target, wxSpinCtrl) != nullptr ||
+            wxDynamicCast(target, wxSpinCtrlDouble) != nullptr ||
+            wxDynamicCast(target, wxChoice) != nullptr ||
+            wxDynamicCast(target, wxCheckBox) != nullptr ||
+            wxDynamicCast(target, wxButton) != nullptr ||
+            wxDynamicCast(target, wxNotebook) != nullptr) {
+            return false;
+        }
+        return target == this ||
+               wxDynamicCast(target, wxPanel) != nullptr ||
+               wxDynamicCast(target, wxStaticText) != nullptr ||
+               wxDynamicCast(target, wxStaticBox) != nullptr;
+    }
+
+    void HandleBackgroundLeftDown(wxMouseEvent &event) {
+        wxWindow *target = wxDynamicCast((wxObject *)event.GetEventObject(), wxWindow);
+        if (ShouldReturnFocusFromClickTarget(target)) {
+            FocusKeyboardPreviewTarget();
+        }
+        event.Skip();
+    }
+
+    void BindBackgroundFocusHandlers(wxWindow *window) {
+        wxWindowList::compatibility_iterator node;
+
+        if (!window) {
+            return;
+        }
+        window->Bind(wxEVT_LEFT_DOWN, &InstrumentExtEditorDialog::HandleBackgroundLeftDown, this);
+        node = window->GetChildren().GetFirst();
+        while (node) {
+            BindBackgroundFocusHandlers(node->GetData());
+            node = node->GetNext();
+        }
+    }
+
+    void BindKeyboardReleaseHandlers(wxWindow *window) {
+        wxWindowList::compatibility_iterator node;
+
+        if (!window) {
+            return;
+        }
+        window->Bind(wxEVT_KEY_UP, &InstrumentExtEditorDialog::HandleKeyboardPreviewKeyUp, this);
+        node = window->GetChildren().GetFirst();
+        while (node) {
+            BindKeyboardReleaseHandlers(node->GetData());
+            node = node->GetNext();
+        }
+    }
+
     void StopKeyboardPreviewIfActive() {
         if (m_keyboardPreviewNote >= 0 && m_stopCallback) {
             m_stopCallback();
+        }
+        if (m_pianoPanel) {
+            m_pianoPanel->ClearExternalPressedNote();
         }
         m_keyboardPreviewKeyCode = -1;
         m_keyboardPreviewNote = -1;
@@ -1405,7 +1502,8 @@ private:
         }
 
         root = m_rootSpin ? m_rootSpin->GetValue() : 60;
-        base = std::max(0, root - 12);
+        /* Keep keyboard note sequence centered on the split root key, same as GUI typing mode. */
+        base = std::max(0, root);
         note = std::clamp(base + semitoneOffset, 0, 127);
         keyCode = NormalizeAsciiKeyCode(keyCode);
         if (keyCode == m_keyboardPreviewKeyCode && note == m_keyboardPreviewNote) {
@@ -1436,6 +1534,9 @@ private:
 
         m_keyboardPreviewKeyCode = keyCode;
         m_keyboardPreviewNote = note;
+        if (m_pianoPanel) {
+            m_pianoPanel->SetExternalPressedNote(note);
+        }
         return true;
     }
 

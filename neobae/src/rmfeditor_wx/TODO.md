@@ -13,9 +13,10 @@
 - ~~Export only certain channel(s)~~
 
 # 0.07a
+- ~~Fix channel dialog popup for Channel Mode~~
 - Changing the program/bank of an note does not reflect in preview/output
 - tick0 note seen as 2:0 instead of 2:4, missing CC? (`Rhodium.rmf`)
-- Musical keyboard doesn't stop when key released
+- ~~Musical keyboard doesn't stop when key released~~
 - Make it easier to get back to the channel dialog
   - remove code to 'select same menu option'
 - Allow export of RMF/ZMF to MIDI with warning about the output file not having custom instruments/samples.
@@ -23,6 +24,13 @@
 - Interpolation configuration (none, linear, cubic, etc, current is just on/off)
 
 # Future
+- Tab design, one tab for MIDI data (current), one for instrument and sample data (replace instrument dialog), one for Bank Editing
+  - Bank Edit tab has all instruments/samples listed in a large tree
+  - Context menu options for Clone/Alias functionality
+  - Context menu for compressing one instrument's samples or All instruments samples in the bank like we have for songs
+  - Maybe MIDI Data and Bank Editor should be mutually exclusive (show midi data for MID/RMF/ZMF, show Bank Editor for HSB/ZSB)
+
+- "Clone all used instruments" - Clone used instruments from MIDI stream to RMF instruments, reassigning their bank/program as needed
 - `Crazy Dream fix.rmf` plays bass/gt sample instead of saw lead
 - Allow for automation like Volume to be able have a slide on it so its easy to make a fadeout/fadein for example, the edit dialog could have "start (item)" "end (item)"
 - Resizable tracks (allow user to expand or shrink the track by click/dragging the far right end of the ruler)
@@ -32,17 +40,26 @@
 - Larger instrument dialog piano not working 100% correctly
 
 # Harder stuff
-- MP3 externally imported samples (not encoded by us) may have a gap
+- Externally imported MP3 samples (not encoded by us) may have a gap
   - How to address without breaking backwards compatiblity with the decoder?
 
 - Start from nothing (currently the editor requires you to load a file)
   - Requires resizable tracks, probably more
 
 - Allow configuration of SysEx and 'non-standard' CC commands
-  - Where do we even put this stuff?
+  - Where do we even put this stuff?  
 
 - MIDI In (record to track)
   - Use RtMidi
   - Hook alsa/jack/winmm as we do with Zefidi
   - Allow MIDI in for instrument dialog preview
   - Need to find my MIDI keyboard
+
+- Sound Bank Editor
+  - Allow editing of soundbanks (HSB, ZSB) directly
+  - Add ZSB format (like ZMF, it would mimic HSB but use a ZREZ header and be used mostly for the new codecs)
+  
+# Maybe (really hard stuff)
+- SF2/DLS support
+  - How? FluidSynth handles all of that.
+  - Do we try to convert instrument data? But the ADSR is different in RMF/ZMF/HSB.
