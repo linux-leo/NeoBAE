@@ -7254,8 +7254,10 @@ BAEResult BAESong_LoadMidiFromMemory(BAESong song, void const *pMidiData, uint32
     short soundVoices, midiVoices, mixLevel;
     char *title;
     unsigned char *extractedMidi = NULL;
-    uint32_t extractedMidiLen = 0;
     XBOOL wasRMI = FALSE;
+#if USE_SF2_SUPPORT == TRUE && _USING_FLUIDSYNTH == TRUE
+    uint32_t extractedMidiLen = 0;
+#endif
 
     theErr = NO_ERR;
     if ((song) && (song->mID == OBJECT_ID))

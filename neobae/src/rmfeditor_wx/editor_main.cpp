@@ -282,6 +282,7 @@ public:
                     m_notePreviewActive(false),
                     m_notePreviewChannel(0),
                     m_notePreviewNote(0),
+                    m_playbackChannelMask(0xFFFFu),
                     m_ignoreSeekEvent(false),
                     m_autoFollowPlayhead(true),
                     m_bankToken(nullptr),
@@ -384,6 +385,7 @@ public:
         m_midiLoopEndText = new wxTextCtrl(editorPanel, wxID_ANY, "0:00.000", wxDefaultPosition, wxSize(110, -1));
         m_playScopeChoice->Append("All Tracks");
         m_playScopeChoice->Append("Current Track");
+        m_playScopeChoice->Append("Channels");
         m_playScopeChoice->SetSelection(0);
         m_midiStorageChoice->Append("CMID (best effort)");
         m_midiStorageChoice->Append("ECMI (encrypt + compress)");
@@ -540,6 +542,19 @@ public:
         m_playButton->Bind(wxEVT_BUTTON, &MainFrame::OnPlay, this);
         m_pauseButton->Bind(wxEVT_BUTTON, &MainFrame::OnPauseResume, this);
         m_stopButton->Bind(wxEVT_BUTTON, &MainFrame::OnStop, this);
+        m_playScopeChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &event) {
+            if (m_playScopeChoice && m_playScopeChoice->GetSelection() == 2) {
+                OpenPlaybackChannelsDialog();
+            }
+            event.Skip();
+        });
+        m_playScopeChoice->Bind(wxEVT_LEFT_UP, [this](wxMouseEvent &event) {
+            if (m_playScopeChoice && m_playScopeChoice->GetSelection() == 2) {
+                OpenPlaybackChannelsDialog();
+                return;
+            }
+            event.Skip();
+        });
         m_previewVolumeSlider->Bind(wxEVT_SLIDER, &MainFrame::OnPreviewVolumeChanged, this);
         m_previewReverbChoice->Bind(wxEVT_CHOICE, &MainFrame::OnPreviewReverbChanged, this);
         m_previewLoopCheck->Bind(wxEVT_CHECKBOX, &MainFrame::OnPreviewLoopChanged, this);
@@ -647,6 +662,8 @@ private:
     bool m_notePreviewActive;
     unsigned char m_notePreviewChannel;
     unsigned char m_notePreviewNote;
+    uint16_t m_playbackChannelMask;
+    bool m_openingPlaybackChannelsDialog = false;
     bool m_ignoreSeekEvent;
     bool m_autoFollowPlayhead;
     BAEBankToken m_bankToken;
@@ -1494,7 +1511,6 @@ private:
         BAEResult loadResult;
         BAEResult startResult;
         BAEResult rateResult;
-        BAEResult stopResult;
         BAE_UNSIGNED_FIXED baseSampleRate;
         BAE_UNSIGNED_FIXED intendedSampleRate;
         int previewRoot;
@@ -2548,6 +2564,305 @@ private:
         return playDoc;
     }
 
+    static bool IsMidiChannelEnabled(uint16_t channelMask, unsigned char channel) {
+        if (channel > 15) {
+            return false;
+        }
+        return (channelMask & static_cast<uint16_t>(1u << channel)) != 0;
+    }
+
+    void OpenPlaybackChannelsDialog() {
+        uint16_t mask;
+
+        if (m_openingPlaybackChannelsDialog) {
+            return;
+        }
+        m_openingPlaybackChannelsDialog = true;
+        (void)PromptForPlaybackChannelMask(&mask);
+        m_openingPlaybackChannelsDialog = false;
+    }
+
+    static bool DocumentHasTrackEvents(BAERmfEditorDocument *document) {
+        uint16_t trackCount;
+
+        if (!document) {
+            return false;
+        }
+        trackCount = 0;
+        if (BAERmfEditorDocument_GetTrackCount(document, &trackCount) != BAE_NO_ERROR) {
+            return false;
+        }
+        for (uint16_t trackIndex = 0; trackIndex < trackCount; ++trackIndex) {
+            uint32_t noteCount;
+            uint32_t pitchBendCount;
+
+            noteCount = 0;
+            if (BAERmfEditorDocument_GetNoteCount(document, trackIndex, &noteCount) == BAE_NO_ERROR && noteCount > 0) {
+                return true;
+            }
+
+            for (int controller = 0; controller < 128; ++controller) {
+                uint32_t ccEventCount;
+
+                ccEventCount = 0;
+                if (BAERmfEditorDocument_GetTrackCCEventCount(document,
+                                                              trackIndex,
+                                                              static_cast<unsigned char>(controller),
+                                                              &ccEventCount) == BAE_NO_ERROR &&
+                    ccEventCount > 0) {
+                    return true;
+                }
+            }
+
+            pitchBendCount = 0;
+            if (BAERmfEditorDocument_GetTrackPitchBendEventCount(document, trackIndex, &pitchBendCount) == BAE_NO_ERROR &&
+                pitchBendCount > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool PromptForPlaybackChannelMask(uint16_t *outMask) {
+        wxDialog dialog(this,
+                        wxID_ANY,
+                        "Playback Channels",
+                        wxDefaultPosition,
+                        wxDefaultSize,
+                        wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+        wxBoxSizer *rootSizer;
+        wxFlexGridSizer *grid;
+        wxBoxSizer *quickActionSizer;
+        wxCheckBox *checkboxes[16] = {nullptr};
+        int index;
+
+        if (!outMask) {
+            return false;
+        }
+
+        rootSizer = new wxBoxSizer(wxVERTICAL);
+        rootSizer->Add(new wxStaticText(&dialog, wxID_ANY, "Select channels to include in playback:"),
+                       0,
+                       wxALL,
+                       10);
+
+        grid = new wxFlexGridSizer(4, 8, 4, 10);
+        for (index = 0; index < 8; ++index) {
+            checkboxes[index] = new wxCheckBox(&dialog, wxID_ANY, wxEmptyString);
+            checkboxes[index]->SetValue(IsMidiChannelEnabled(m_playbackChannelMask, static_cast<unsigned char>(index)));
+            grid->Add(checkboxes[index], 0, wxALIGN_CENTER_HORIZONTAL);
+        }
+        for (index = 0; index < 8; ++index) {
+            grid->Add(new wxStaticText(&dialog, wxID_ANY, wxString::Format("Ch %d", index + 1)),
+                      0,
+                      wxALIGN_CENTER_HORIZONTAL);
+        }
+        for (index = 8; index < 16; ++index) {
+            checkboxes[index] = new wxCheckBox(&dialog, wxID_ANY, wxEmptyString);
+            checkboxes[index]->SetValue(IsMidiChannelEnabled(m_playbackChannelMask, static_cast<unsigned char>(index)));
+            grid->Add(checkboxes[index], 0, wxALIGN_CENTER_HORIZONTAL);
+        }
+        for (index = 8; index < 16; ++index) {
+            grid->Add(new wxStaticText(&dialog, wxID_ANY, wxString::Format("Ch %d", index + 1)),
+                      0,
+                      wxALIGN_CENTER_HORIZONTAL);
+        }
+
+        rootSizer->Add(grid, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
+
+        quickActionSizer = new wxBoxSizer(wxHORIZONTAL);
+        {
+            wxButton *allButton = new wxButton(&dialog, wxID_ANY, "All");
+            wxButton *noneButton = new wxButton(&dialog, wxID_ANY, "None");
+            wxButton *invertButton = new wxButton(&dialog, wxID_ANY, "Invert");
+
+            quickActionSizer->Add(allButton, 0, wxRIGHT, 8);
+            quickActionSizer->Add(noneButton, 0, wxRIGHT, 8);
+            quickActionSizer->Add(invertButton, 0);
+
+            allButton->Bind(wxEVT_BUTTON, [&checkboxes](wxCommandEvent &) {
+                for (int i = 0; i < 16; ++i) {
+                    if (checkboxes[i]) {
+                        checkboxes[i]->SetValue(true);
+                    }
+                }
+            });
+            noneButton->Bind(wxEVT_BUTTON, [&checkboxes](wxCommandEvent &) {
+                for (int i = 0; i < 16; ++i) {
+                    if (checkboxes[i]) {
+                        checkboxes[i]->SetValue(false);
+                    }
+                }
+            });
+            invertButton->Bind(wxEVT_BUTTON, [&checkboxes](wxCommandEvent &) {
+                for (int i = 0; i < 16; ++i) {
+                    if (checkboxes[i]) {
+                        checkboxes[i]->SetValue(!checkboxes[i]->GetValue());
+                    }
+                }
+            });
+        }
+        rootSizer->Add(quickActionSizer, 0, wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        rootSizer->Add(dialog.CreateButtonSizer(wxOK | wxCANCEL), 0, wxEXPAND | wxALL, 10);
+
+        dialog.SetSizerAndFit(rootSizer);
+        dialog.SetMinSize(dialog.GetSize());
+
+        if (dialog.ShowModal() != wxID_OK) {
+            return false;
+        }
+
+        {
+            uint16_t newMask = 0;
+            for (index = 0; index < 16; ++index) {
+                if (checkboxes[index] && checkboxes[index]->GetValue()) {
+                    newMask |= static_cast<uint16_t>(1u << index);
+                }
+            }
+            if (newMask == 0) {
+                wxMessageBox("Select at least one channel for playback.",
+                             "Playback Channels",
+                             wxOK | wxICON_INFORMATION,
+                             this);
+                return false;
+            }
+            m_playbackChannelMask = newMask;
+            *outMask = newMask;
+        }
+        return true;
+    }
+
+    BAERmfEditorDocument *BuildChannelPlaybackDocument(uint16_t channelMask) {
+        BAERmfEditorDocument *playDoc;
+        uint16_t trackCount;
+        unsigned char requiredPrograms[128];
+        unsigned char *rmfData;
+        uint32_t rmfSize;
+        XBOOL useZmf;
+
+        if (!m_document || channelMask == 0) {
+            return nullptr;
+        }
+
+        rmfData = nullptr;
+        rmfSize = 0;
+        useZmf = BAERmfEditorDocument_RequiresZmf(m_document) ? TRUE : FALSE;
+        if (BAERmfEditorDocument_SaveAsRmfToMemory(m_document,
+                                                   useZmf,
+                                                   &rmfData,
+                                                   &rmfSize) != BAE_NO_ERROR ||
+            !rmfData ||
+            rmfSize == 0) {
+            return nullptr;
+        }
+
+        playDoc = BAERmfEditorDocument_LoadFromMemory(rmfData, rmfSize, BAE_RMF);
+        XDisposePtr((XPTR)rmfData);
+        if (!playDoc) {
+            return nullptr;
+        }
+
+        trackCount = 0;
+        if (BAERmfEditorDocument_GetTrackCount(playDoc, &trackCount) != BAE_NO_ERROR) {
+            BAERmfEditorDocument_Delete(playDoc);
+            return nullptr;
+        }
+
+        /* Keep conductor track 0, then only tracks whose default channel is selected. */
+        for (int idx = static_cast<int>(trackCount) - 1; idx >= 1; --idx) {
+            BAERmfEditorTrackInfo trackInfo;
+
+            if (BAERmfEditorDocument_GetTrackInfo(playDoc, static_cast<uint16_t>(idx), &trackInfo) != BAE_NO_ERROR) {
+                continue;
+            }
+            if (!IsMidiChannelEnabled(channelMask, trackInfo.channel)) {
+                if (BAERmfEditorDocument_DeleteTrack(playDoc, static_cast<uint16_t>(idx)) != BAE_NO_ERROR) {
+                    BAERmfEditorDocument_Delete(playDoc);
+                    return nullptr;
+                }
+            }
+        }
+
+        trackCount = 0;
+        if (BAERmfEditorDocument_GetTrackCount(playDoc, &trackCount) != BAE_NO_ERROR) {
+            BAERmfEditorDocument_Delete(playDoc);
+            return nullptr;
+        }
+
+        /* Remove note events on channels not selected (supports mixed-channel tracks). */
+        for (uint16_t ti = 0; ti < trackCount; ++ti) {
+            uint32_t noteCount;
+
+            noteCount = 0;
+            if (BAERmfEditorDocument_GetNoteCount(playDoc, ti, &noteCount) != BAE_NO_ERROR) {
+                continue;
+            }
+            for (int ni = static_cast<int>(noteCount) - 1; ni >= 0; --ni) {
+                BAERmfEditorNoteInfo noteInfo;
+
+                if (BAERmfEditorDocument_GetNoteInfo(playDoc, ti, static_cast<uint32_t>(ni), &noteInfo) != BAE_NO_ERROR) {
+                    continue;
+                }
+                if (!IsMidiChannelEnabled(channelMask, noteInfo.channel)) {
+                    if (BAERmfEditorDocument_DeleteNote(playDoc, ti, static_cast<uint32_t>(ni)) != BAE_NO_ERROR) {
+                        BAERmfEditorDocument_Delete(playDoc);
+                        return nullptr;
+                    }
+                }
+            }
+        }
+
+        /* Re-apply sample filtering against the kept tracks/notes. */
+        std::fill(requiredPrograms, requiredPrograms + 128, static_cast<unsigned char>(0));
+        for (uint16_t ti = 0; ti < trackCount; ++ti) {
+            BAERmfEditorTrackInfo info;
+            uint32_t noteCount;
+
+            if (BAERmfEditorDocument_GetTrackInfo(playDoc, ti, &info) == BAE_NO_ERROR) {
+                if (info.program < 128) {
+                    requiredPrograms[info.program] = 1;
+                }
+            }
+            noteCount = 0;
+            if (BAERmfEditorDocument_GetNoteCount(playDoc, ti, &noteCount) != BAE_NO_ERROR) {
+                continue;
+            }
+            for (uint32_t ni = 0; ni < noteCount; ++ni) {
+                BAERmfEditorNoteInfo noteInfo;
+
+                if (BAERmfEditorDocument_GetNoteInfo(playDoc, ti, ni, &noteInfo) == BAE_NO_ERROR &&
+                    noteInfo.program < 128) {
+                    requiredPrograms[noteInfo.program] = 1;
+                }
+            }
+        }
+
+        {
+            uint32_t sampleCount;
+
+            sampleCount = 0;
+            if (BAERmfEditorDocument_GetSampleCount(playDoc, &sampleCount) != BAE_NO_ERROR) {
+                BAERmfEditorDocument_Delete(playDoc);
+                return nullptr;
+            }
+            for (int si = static_cast<int>(sampleCount) - 1; si >= 0; --si) {
+                BAERmfEditorSampleInfo sampleInfo;
+
+                if (BAERmfEditorDocument_GetSampleInfo(playDoc, static_cast<uint32_t>(si), &sampleInfo) != BAE_NO_ERROR) {
+                    continue;
+                }
+                if (sampleInfo.program >= 128 || !requiredPrograms[sampleInfo.program]) {
+                    if (BAERmfEditorDocument_DeleteSample(playDoc, static_cast<uint32_t>(si)) != BAE_NO_ERROR) {
+                        BAERmfEditorDocument_Delete(playDoc);
+                        return nullptr;
+                    }
+                }
+            }
+        }
+
+        return playDoc;
+    }
+
     void InvalidatePianoRollPreviewSong() {
         StopPianoRollPreview(true);
     }
@@ -3488,6 +3803,7 @@ private:
     void OnSaveAs(wxCommandEvent &) {
         BAERmfEditorDocument *saveDoc;
         bool saveCurrentTrack;
+        bool saveChannels;
         int selectedTrack;
         bool requiresZmf;
         bool canSaveAsMidi;
@@ -3502,6 +3818,7 @@ private:
         }
         saveDoc = m_document;
         saveCurrentTrack = (m_playScopeChoice && m_playScopeChoice->GetSelection() == 1);
+        saveChannels = (m_playScopeChoice && m_playScopeChoice->GetSelection() == 2);
         selectedTrack = GetSelectedTrack();
         if (saveCurrentTrack) {
             uint16_t trackCount;
@@ -3524,6 +3841,27 @@ private:
             fprintf(stderr,
                     "[nbstudio] SaveAs using single-track document selectedTrack=%d\n",
                     selectedTrack);
+        } else if (saveChannels) {
+            if (m_playbackChannelMask == 0) {
+                wxMessageBox("No playback channels are enabled.", "Export", wxOK | wxICON_INFORMATION, this);
+                return;
+            }
+            saveDoc = BuildChannelPlaybackDocument(m_playbackChannelMask);
+            if (!saveDoc) {
+                wxMessageBox("Failed to build channel-filtered export document.", "Save Failed", wxOK | wxICON_ERROR, this);
+                return;
+            }
+            if (!DocumentHasTrackEvents(saveDoc)) {
+                BAERmfEditorDocument_Delete(saveDoc);
+                wxMessageBox("Selected channels contain no note/CC/pitch events to export.",
+                             "Export",
+                             wxOK | wxICON_INFORMATION,
+                             this);
+                return;
+            }
+            fprintf(stderr,
+                    "[nbstudio] SaveAs using channel-filtered document channelMask=0x%04x\n",
+                    static_cast<unsigned>(m_playbackChannelMask));
         }
 
         requiresZmf = BAERmfEditorDocument_RequiresZmf(saveDoc) != 0;
@@ -3725,8 +4063,8 @@ private:
         AppendLE16(header, kNbsVersion);
         AppendLE32(header, static_cast<uint32_t>(payload.size()));
 
-        if (file.Write(header.data(), header.size()) != static_cast<wxFileOffset>(header.size()) ||
-            file.Write(compressed.data(), compressed.size()) != static_cast<wxFileOffset>(compressed.size())) {
+        if (file.Write(header.data(), header.size()) != header.size() ||
+            file.Write(compressed.data(), compressed.size()) != compressed.size()) {
             file.Close();
             wxMessageBox("Failed to write session file.", "Save Session", wxOK | wxICON_ERROR, this);
             return false;
@@ -4149,6 +4487,7 @@ private:
         wxScopedCharBuffer utf8CurrentPath;
         BAERmfEditorDocument *playDoc;
         bool singleTrackMode;
+        bool channelsMode;
         int selectedTrack;
         BAEResult loadResult;
         std::vector<unsigned char> playbackBlob;
@@ -4165,10 +4504,12 @@ private:
         BAERmfEditorDocument_DebugReportMidiRoundTripDiff(m_document);
         selectedTrack = GetSelectedTrack();
         singleTrackMode = (m_playScopeChoice->GetSelection() == 1);
+        channelsMode = (m_playScopeChoice->GetSelection() == 2);
         fprintf(stderr,
-            "[nbstudio] OnPlay scope=%d selectedTrack=%d currentPath='%s'\n",
-            singleTrackMode ? 1 : 0,
+            "[nbstudio] OnPlay scope=%d selectedTrack=%d channelMask=0x%04x currentPath='%s'\n",
+            channelsMode ? 2 : (singleTrackMode ? 1 : 0),
             selectedTrack,
+            static_cast<unsigned>(m_playbackChannelMask),
             m_currentPath.empty() ? "" : static_cast<char const *>(m_currentPath.utf8_str()));
         if (singleTrackMode && selectedTrack < 0) {
             uint16_t trackCount;
@@ -4194,6 +4535,17 @@ private:
             ownPlayDoc = true;
             if (!playDoc) {
                 wxMessageBox("Failed to build selected-track playback document.", "Playback Error", wxOK | wxICON_ERROR, this);
+                return;
+            }
+        } else if (channelsMode) {
+            if (m_playbackChannelMask == 0) {
+                wxMessageBox("No playback channels are enabled.", "Playback", wxOK | wxICON_INFORMATION, this);
+                return;
+            }
+            playDoc = BuildChannelPlaybackDocument(m_playbackChannelMask);
+            ownPlayDoc = true;
+            if (!playDoc) {
+                wxMessageBox("Failed to build channel-filtered playback document.", "Playback Error", wxOK | wxICON_ERROR, this);
                 return;
             }
         } else {

@@ -477,47 +477,150 @@ public:
     explicit WaveformPanelExt(wxWindow *parent)
         : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(480, 150), wxBORDER_SIMPLE),
           m_waveData(nullptr), m_frameCount(0), m_bitSize(16), m_channels(1),
-          m_loopStart(0), m_loopEnd(0) {
+          m_loopStart(0), m_loopEnd(0), m_dragMode(DragMode::None) {
         SetBackgroundStyle(wxBG_STYLE_PAINT);
         Bind(wxEVT_PAINT, &WaveformPanelExt::OnPaint, this);
+        Bind(wxEVT_LEFT_DOWN, &WaveformPanelExt::OnLeftDown, this);
+        Bind(wxEVT_LEFT_UP, &WaveformPanelExt::OnLeftUp, this);
+        Bind(wxEVT_MOTION, &WaveformPanelExt::OnMouseMove, this);
+        Bind(wxEVT_RIGHT_DOWN, &WaveformPanelExt::OnRightDown, this);
+        Bind(wxEVT_MOUSE_CAPTURE_LOST, &WaveformPanelExt::OnMouseCaptureLost, this);
     }
 
     void SetWaveform(void const *waveData, uint32_t frameCount, uint16_t bitSize, uint16_t channels) {
-        m_waveData = waveData; m_frameCount = frameCount; m_bitSize = bitSize; m_channels = channels;
+        m_waveData = waveData;
+        m_frameCount = frameCount;
+        m_bitSize = bitSize;
+        m_channels = std::max<uint16_t>(1, channels);
+        ClampLoopToFrameCount();
         Refresh();
     }
 
     void SetLoopPoints(uint32_t loopStart, uint32_t loopEnd) {
-        m_loopStart = loopStart; m_loopEnd = loopEnd; Refresh();
+        m_loopStart = loopStart;
+        m_loopEnd = loopEnd;
+        ClampLoopToFrameCount();
+        Refresh();
+    }
+
+    void SetLoopChangedCallback(std::function<void(uint32_t, uint32_t)> callback) {
+        m_loopChanged = std::move(callback);
     }
 
 private:
+    enum class DragMode {
+        None,
+        Start,
+        End,
+    };
+
     void const *m_waveData;
     uint32_t m_frameCount;
     uint16_t m_bitSize, m_channels;
     uint32_t m_loopStart, m_loopEnd;
+    DragMode m_dragMode;
+    std::function<void(uint32_t, uint32_t)> m_loopChanged;
 
-    float SampleAt(uint32_t frame) const {
+    float SampleAt(uint32_t frame, int channel) const {
         if (!m_waveData || m_frameCount == 0 || frame >= m_frameCount || m_channels == 0) return 0.0f;
+        int clampedChannel = std::clamp(channel, 0, (int)m_channels - 1);
+        uint32_t sampleIndex = frame * (uint32_t)m_channels + (uint32_t)clampedChannel;
         if (m_bitSize == 8) {
             unsigned char const *pcm = static_cast<unsigned char const *>(m_waveData);
-            return (static_cast<float>(pcm[frame * m_channels]) - 128.0f) / 128.0f;
+            return (static_cast<float>(pcm[sampleIndex]) - 128.0f) / 128.0f;
         }
         if (m_bitSize == 16) {
             int16_t const *pcm = static_cast<int16_t const *>(m_waveData);
-            return static_cast<float>(pcm[frame * m_channels]) / 32768.0f;
+            return static_cast<float>(pcm[sampleIndex]) / 32768.0f;
         }
         return 0.0f;
+    }
+
+    bool HasLoop() const {
+        return m_frameCount > 0 && m_loopEnd > m_loopStart;
+    }
+
+    void ClampLoopToFrameCount() {
+        if (m_frameCount == 0) {
+            m_loopStart = 0;
+            m_loopEnd = 0;
+            return;
+        }
+        m_loopStart = std::min(m_loopStart, m_frameCount - 1);
+        m_loopEnd = std::min(m_loopEnd, m_frameCount);
+        if (m_loopEnd <= m_loopStart) {
+            m_loopStart = 0;
+            m_loopEnd = 0;
+        }
+    }
+
+    uint32_t FrameFromX(int x) const {
+        int width = std::max(1, GetClientSize().x - 1);
+        int clampedX = std::clamp(x, 0, width);
+        if (m_frameCount == 0) {
+            return 0;
+        }
+        return (uint32_t)(((uint64_t)clampedX * (uint64_t)m_frameCount) / (uint64_t)width);
+    }
+
+    int XFromFrame(uint32_t frame) const {
+        int width = std::max(1, GetClientSize().x - 1);
+        if (m_frameCount == 0) {
+            return 0;
+        }
+        uint32_t clampedFrame = std::min(frame, m_frameCount);
+        return (int)(((uint64_t)clampedFrame * (uint64_t)width) / (uint64_t)m_frameCount);
+    }
+
+    void NotifyLoopChanged() {
+        if (m_loopChanged) {
+            m_loopChanged(m_loopStart, m_loopEnd);
+        }
+    }
+
+    void DrawChannel(wxDC &dc,
+                     wxSize const &size,
+                     int channel,
+                     int top,
+                     int bottom,
+                     wxColour const &waveColour,
+                     wxColour const &centerColour) const {
+        int laneHeight = std::max(1, bottom - top);
+        int centerY = top + laneHeight / 2;
+        dc.SetPen(wxPen(centerColour, 1));
+        dc.DrawLine(0, centerY, size.x, centerY);
+
+        dc.SetPen(wxPen(waveColour, 1));
+        uint32_t framesPerPixel = std::max<uint32_t>(1, m_frameCount / (uint32_t)std::max(1, size.x));
+        for (int x = 0; x < size.x; ++x) {
+            uint32_t start = (uint32_t)x * framesPerPixel;
+            uint32_t end = std::min<uint32_t>(m_frameCount, start + framesPerPixel);
+            float minV = 1.0f;
+            float maxV = -1.0f;
+
+            if (start >= m_frameCount) {
+                break;
+            }
+            if (end <= start) {
+                end = std::min<uint32_t>(m_frameCount, start + 1);
+            }
+            for (uint32_t f = start; f < end; f++) {
+                float v = SampleAt(f, channel);
+                if (v < minV) minV = v;
+                if (v > maxV) maxV = v;
+            }
+            int amp = std::max(1, (laneHeight / 2) - 3);
+            int y1 = centerY - (int)(maxV * amp);
+            int y2 = centerY - (int)(minV * amp);
+            dc.DrawLine(x, y1, x, y2);
+        }
     }
 
     void OnPaint(wxPaintEvent &) {
         wxAutoBufferedPaintDC dc(this);
         wxSize size = GetClientSize();
-        int centerY = size.y / 2;
         dc.SetBackground(wxBrush(wxColour(22, 22, 22)));
         dc.Clear();
-        dc.SetPen(wxPen(wxColour(70, 70, 70), 1));
-        dc.DrawLine(0, centerY, size.x, centerY);
 
         bool hasLoop = (m_loopEnd > m_loopStart && m_frameCount > 0 && size.x > 2);
         if (hasLoop) {
@@ -534,22 +637,14 @@ private:
             dc.DrawText("No waveform data", 10, 10);
             return;
         }
-        dc.SetPen(wxPen(wxColour(98, 215, 255), 1));
-        uint32_t framesPerPixel = std::max<uint32_t>(1, m_frameCount / (uint32_t)std::max(1, size.x));
-        for (int x = 0; x < size.x; ++x) {
-            uint32_t start = (uint32_t)x * framesPerPixel;
-            uint32_t end = std::min<uint32_t>(m_frameCount, start + framesPerPixel);
-            float minV = 1.0f, maxV = -1.0f;
-            if (start >= m_frameCount) break;
-            if (end <= start) end = std::min<uint32_t>(m_frameCount, start + 1);
-            for (uint32_t f = start; f < end; f++) {
-                float v = SampleAt(f);
-                if (v < minV) minV = v;
-                if (v > maxV) maxV = v;
-            }
-            int y1 = centerY - (int)(maxV * (centerY - 4));
-            int y2 = centerY - (int)(minV * (centerY - 4));
-            dc.DrawLine(x, y1, x, y2);
+        if (m_channels >= 2) {
+            int splitY = size.y / 2;
+            dc.SetPen(wxPen(wxColour(45, 45, 45), 1));
+            dc.DrawLine(0, splitY, size.x, splitY);
+            DrawChannel(dc, size, 0, 0, splitY, wxColour(98, 215, 255), wxColour(70, 70, 70));
+            DrawChannel(dc, size, 1, splitY, size.y, wxColour(255, 188, 98), wxColour(70, 70, 70));
+        } else {
+            DrawChannel(dc, size, 0, 0, size.y, wxColour(98, 215, 255), wxColour(70, 70, 70));
         }
         if (hasLoop) {
             int xS = (int)((int64_t)m_loopStart * size.x / m_frameCount);
@@ -558,7 +653,117 @@ private:
             dc.DrawLine(xS, 0, xS, size.y);
             dc.SetPen(wxPen(wxColour(255, 160, 0), 2));
             dc.DrawLine(xE, 0, xE, size.y);
+
+            dc.SetBrush(wxBrush(wxColour(0, 220, 80)));
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.DrawCircle(xS, 8, 4);
+            dc.SetBrush(wxBrush(wxColour(255, 160, 0)));
+            dc.DrawCircle(xE, 8, 4);
         }
+    }
+
+    void OnLeftDown(wxMouseEvent &event) {
+        int x;
+        int startX;
+        int endX;
+
+        if (!HasLoop()) {
+            event.Skip();
+            return;
+        }
+        x = event.GetX();
+        startX = XFromFrame(m_loopStart);
+        endX = XFromFrame(m_loopEnd);
+
+        if (std::abs(x - startX) <= 6) {
+            m_dragMode = DragMode::Start;
+        } else if (std::abs(x - endX) <= 6) {
+            m_dragMode = DragMode::End;
+        } else {
+            event.Skip();
+            return;
+        }
+        if (!HasCapture()) {
+            CaptureMouse();
+        }
+    }
+
+    void OnLeftUp(wxMouseEvent &) {
+        m_dragMode = DragMode::None;
+        if (HasCapture()) {
+            ReleaseMouse();
+        }
+    }
+
+    void OnMouseMove(wxMouseEvent &event) {
+        uint32_t frame;
+
+        if (m_dragMode == DragMode::None || !event.LeftIsDown() || m_frameCount == 0) {
+            event.Skip();
+            return;
+        }
+        frame = FrameFromX(event.GetX());
+        if (m_dragMode == DragMode::Start) {
+            uint32_t newStart = std::min(frame, (m_loopEnd > 0) ? (m_loopEnd - 1) : 0);
+            if (newStart != m_loopStart) {
+                m_loopStart = newStart;
+                NotifyLoopChanged();
+                Refresh();
+            }
+        } else if (m_dragMode == DragMode::End) {
+            uint32_t newEnd = std::max(frame, m_loopStart + 1);
+            newEnd = std::min(newEnd, m_frameCount);
+            if (newEnd != m_loopEnd) {
+                m_loopEnd = newEnd;
+                NotifyLoopChanged();
+                Refresh();
+            }
+        }
+    }
+
+    void OnRightDown(wxMouseEvent &event) {
+        wxMenu menu;
+        int idSetStart = wxWindow::NewControlId();
+        int idSetEnd = wxWindow::NewControlId();
+        int idClearLoop = wxWindow::NewControlId();
+        int selectedId;
+        uint32_t frame;
+
+        if (m_frameCount == 0) {
+            return;
+        }
+        frame = FrameFromX(event.GetX());
+        menu.Append(idSetStart, "Set Loop Start Here");
+        menu.Append(idSetEnd, "Set Loop End Here");
+        menu.AppendSeparator();
+        menu.Append(idClearLoop, "Clear Loop");
+        menu.Enable(idClearLoop, HasLoop());
+
+        selectedId = GetPopupMenuSelectionFromUser(menu, event.GetPosition());
+        if (selectedId == idSetStart) {
+            uint32_t end = HasLoop() ? m_loopEnd : std::min<uint32_t>(m_frameCount, frame + 1);
+            m_loopStart = std::min(frame, (end > 0) ? (end - 1) : 0);
+            m_loopEnd = std::max(end, m_loopStart + 1);
+            m_loopEnd = std::min(m_loopEnd, m_frameCount);
+            NotifyLoopChanged();
+            Refresh();
+        } else if (selectedId == idSetEnd) {
+            uint32_t start = HasLoop() ? m_loopStart : std::min<uint32_t>(frame, m_frameCount - 1);
+            uint32_t end = std::max(frame, start + 1);
+            m_loopStart = start;
+            m_loopEnd = std::min(end, m_frameCount);
+            NotifyLoopChanged();
+            Refresh();
+        } else if (selectedId == idClearLoop) {
+            m_loopStart = 0;
+            m_loopEnd = 0;
+            NotifyLoopChanged();
+            Refresh();
+        }
+    }
+
+    void OnMouseCaptureLost(wxMouseCaptureLostEvent &) {
+        m_dragMode = DragMode::None;
     }
 };
 
@@ -938,6 +1143,7 @@ public:
             if (m_pianoPanel) {
                 m_pianoPanel->ForceStop();
             }
+            StopKeyboardPreviewIfActive();
             evt.Skip();
         });
 
@@ -979,8 +1185,12 @@ public:
                     }
                 }
             }
+            if (!ctrlDown && !event.AltDown() && StartKeyboardPreviewForKey(keyCode)) {
+                return;
+            }
             event.Skip();
         });
+        Bind(wxEVT_KEY_UP, &InstrumentExtEditorDialog::HandleKeyboardPreviewKeyUp, this);
 
         /* Load initial sample data */
         if (!m_samples.empty()) {
@@ -1020,15 +1230,6 @@ public:
         if (m_splitVolumeSpin) {
             m_splitVolumeSpin->Bind(wxEVT_SPINCTRL, instantApply);
             m_splitVolumeSpin->Bind(wxEVT_TEXT, instantApply);
-        }
-        if (m_loopEnableCheck) m_loopEnableCheck->Bind(wxEVT_CHECKBOX, instantApply);
-        if (m_loopStartSpin) {
-            m_loopStartSpin->Bind(wxEVT_SPINCTRL, instantApply);
-            m_loopStartSpin->Bind(wxEVT_TEXT, instantApply);
-        }
-        if (m_loopEndSpin) {
-            m_loopEndSpin->Bind(wxEVT_SPINCTRL, instantApply);
-            m_loopEndSpin->Bind(wxEVT_TEXT, instantApply);
         }
         if (m_codecChoice) m_codecChoice->Bind(wxEVT_CHOICE, instantApply);
         if (m_bitrateChoice) m_bitrateChoice->Bind(wxEVT_CHOICE, instantApply);
@@ -1122,6 +1323,130 @@ private:
     wxChoice *m_sndStorageChoice;
     WaveformPanelExt *m_waveformPanel;
     wxButton *m_deleteSampleButton;
+    int m_keyboardPreviewKeyCode = -1;
+    int m_keyboardPreviewNote = -1;
+
+    static int NormalizeAsciiKeyCode(int keyCode) {
+        if (keyCode >= 'a' && keyCode <= 'z') {
+            return keyCode - ('a' - 'A');
+        }
+        return keyCode;
+    }
+
+    static int KeyCodeToSemitoneOffset(int keyCode) {
+        switch (NormalizeAsciiKeyCode(keyCode)) {
+            case 'Z': return 0;
+            case 'S': return 1;
+            case 'X': return 2;
+            case 'D': return 3;
+            case 'C': return 4;
+            case 'V': return 5;
+            case 'G': return 6;
+            case 'B': return 7;
+            case 'H': return 8;
+            case 'N': return 9;
+            case 'J': return 10;
+            case 'M': return 11;
+            case ',': return 12;
+            case 'L': return 13;
+            case '.': return 14;
+            case ';': return 15;
+            case '/': return 16;
+            case 'Q': return 12;
+            case '2': return 13;
+            case 'W': return 14;
+            case '3': return 15;
+            case 'E': return 16;
+            case 'R': return 17;
+            case '5': return 18;
+            case 'T': return 19;
+            case '6': return 20;
+            case 'Y': return 21;
+            case '7': return 22;
+            case 'U': return 23;
+            case 'I': return 24;
+            case '9': return 25;
+            case 'O': return 26;
+            case '0': return 27;
+            case 'P': return 28;
+            case '[': return 29;
+            case '=': return 30;
+            case ']': return 31;
+            default: return -1;
+        }
+    }
+
+    static bool IsTextEditingFocus(wxWindow *focus) {
+        return wxDynamicCast(focus, wxTextCtrl) != nullptr ||
+               wxDynamicCast(focus, wxSpinCtrl) != nullptr ||
+               wxDynamicCast(focus, wxSpinCtrlDouble) != nullptr;
+    }
+
+    void StopKeyboardPreviewIfActive() {
+        if (m_keyboardPreviewNote >= 0 && m_stopCallback) {
+            m_stopCallback();
+        }
+        m_keyboardPreviewKeyCode = -1;
+        m_keyboardPreviewNote = -1;
+    }
+
+    bool StartKeyboardPreviewForKey(int keyCode) {
+        int semitoneOffset;
+        int root;
+        int base;
+        int note;
+
+        if (!m_playCallback || m_sampleIndices.empty() || IsTextEditingFocus(wxWindow::FindFocus())) {
+            return false;
+        }
+        semitoneOffset = KeyCodeToSemitoneOffset(keyCode);
+        if (semitoneOffset < 0) {
+            return false;
+        }
+
+        root = m_rootSpin ? m_rootSpin->GetValue() : 60;
+        base = std::max(0, root - 12);
+        note = std::clamp(base + semitoneOffset, 0, 127);
+        keyCode = NormalizeAsciiKeyCode(keyCode);
+        if (keyCode == m_keyboardPreviewKeyCode && note == m_keyboardPreviewNote) {
+            return true;
+        }
+
+        StopKeyboardPreviewIfActive();
+        SaveCurrentSampleFromUI();
+
+        {
+            int best = -1;
+            for (size_t i = 0; i < m_samples.size(); i++) {
+                if (note >= (int)m_samples[i].lowKey && note <= (int)m_samples[i].highKey) {
+                    best = (int)i;
+                    break;
+                }
+            }
+            if (best < 0) {
+                return true;
+            }
+            m_playCallback(m_sampleIndices[(size_t)best], note,
+                           &m_samples[(size_t)best].sampleInfo,
+                           m_samples[(size_t)best].splitVolume,
+                           m_samples[(size_t)best].rootKey,
+                           m_samples[(size_t)best].compressionType,
+                           m_samples[(size_t)best].opusRoundTripResample);
+        }
+
+        m_keyboardPreviewKeyCode = keyCode;
+        m_keyboardPreviewNote = note;
+        return true;
+    }
+
+    void HandleKeyboardPreviewKeyUp(wxKeyEvent &event) {
+        int keyCode = NormalizeAsciiKeyCode(event.GetKeyCode());
+        if (keyCode == m_keyboardPreviewKeyCode) {
+            StopKeyboardPreviewIfActive();
+            return;
+        }
+        event.Skip();
+    }
 
     /* ---- Instrument Tab ---- */
     void BuildInstrumentTab() {
@@ -1711,25 +2036,6 @@ private:
 
             sizer->Add(row, 0, wxLEFT | wxRIGHT | wxBOTTOM, 6);
             m_codecChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) {
-                int oldCodecIdx = -1;
-                int newCodecIdx = m_codecChoice->GetSelection();
-                int currentRateHz = 0;
-                int storedRateHz = 0;
-                uint32_t sampleIndex = static_cast<uint32_t>(-1);
-
-                if (m_currentLocalIndex >= 0 && m_currentLocalIndex < (int)m_samples.size()) {
-                    auto [codecIdx, bitrateIdx] = CompressionTypeToCodecBitrate(m_samples[(size_t)m_currentLocalIndex].compressionType);
-                    (void)bitrateIdx;
-                    oldCodecIdx = codecIdx;
-                    storedRateHz = (int)(m_samples[(size_t)m_currentLocalIndex].sampleInfo.sampledRate >> 16);
-                }
-                if (m_sampleRateSpin) {
-                    currentRateHz = m_sampleRateSpin->GetValue();
-                }
-                if (m_currentLocalIndex >= 0 && m_currentLocalIndex < (int)m_sampleIndices.size()) {
-                    sampleIndex = m_sampleIndices[(size_t)m_currentLocalIndex];
-                }
-
                 UpdateBitrateChoice(m_codecChoice->GetSelection());
                 if (m_opusModeChoice) {
                     int opusSel = m_codecChoice->GetSelection();
@@ -1772,6 +2078,29 @@ private:
         /* Waveform */
         sizer->Add(new wxStaticText(page, wxID_ANY, "Waveform"), 0, wxLEFT | wxRIGHT, 8);
         m_waveformPanel = new WaveformPanelExt(page);
+        m_waveformPanel->SetLoopChangedCallback([this](uint32_t start, uint32_t end) {
+            if (m_currentLocalIndex < 0 || m_currentLocalIndex >= (int)m_samples.size()) {
+                return;
+            }
+
+            m_loadingUiValues = true;
+            m_loopEnableCheck->SetValue(end > start);
+            m_loopStartSpin->Enable(end > start);
+            m_loopEndSpin->Enable(end > start);
+            m_loopStartSpin->SetValue((int)start);
+            m_loopEndSpin->SetValue((int)end);
+            m_loadingUiValues = false;
+
+            if (end > start) {
+                ApplyLoopFromUI();
+            } else {
+                EditedSample &s = m_samples[(size_t)m_currentLocalIndex];
+                s.sampleInfo.startLoop = 0;
+                s.sampleInfo.endLoop = 0;
+                UpdateLoopInfoLabel(s);
+            }
+            CommitLoopChangeToUndo();
+        });
         sizer->Add(m_waveformPanel, 1, wxEXPAND | wxALL, 8);
 
         page->SetSizerAndFit(sizer);
@@ -2196,6 +2525,14 @@ private:
         m_pianoPanel->SetBaseNote(std::max(0, m_rootSpin->GetValue() - 12));
     }
 
+    void CommitLoopChangeToUndo() {
+        if (m_loadingUiValues || m_inInstantApply) {
+            return;
+        }
+        wxCommandEvent evt;
+        OnApply(evt);
+    }
+
     void OnLoopEnableChanged() {
         if (m_currentLocalIndex < 0 || m_currentLocalIndex >= (int)m_samples.size()) return;
         EditedSample &s = m_samples[(size_t)m_currentLocalIndex];
@@ -2216,10 +2553,14 @@ private:
             m_loopEndSpin->SetValue((int)re);
             ApplyLoopFromUI();
         }
+        CommitLoopChangeToUndo();
     }
 
     void OnLoopPointChanged() {
-        if (m_loopEnableCheck->GetValue()) ApplyLoopFromUI();
+        if (m_loopEnableCheck->GetValue()) {
+            ApplyLoopFromUI();
+            CommitLoopChangeToUndo();
+        }
     }
 
     void ApplyLoopFromUI() {

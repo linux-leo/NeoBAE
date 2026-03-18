@@ -2167,13 +2167,11 @@ private:
         int rulerBot;
         int relLeft;
         int relRight;
-        int startOff;
         uint32_t tick;
         uint32_t quarterTicks;
         uint32_t stepTicks;
         uint32_t tickStart;
         uint32_t tickEnd;
-        int pixelsPerQuarter;
 
         GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
         if (scrollPixelsX <= 0) scrollPixelsX = 1;
@@ -2204,7 +2202,6 @@ private:
 
         relLeft  = std::max(0, scrollX - kPianoRollLeftGutter);
         relRight = scrollX + screenW - kPianoRollLeftGutter;
-        pixelsPerQuarter = GetPixelsPerQuarter();
         quarterTicks = GetTicksPerQuarter();
         stepTicks = std::max<uint32_t>(1, quarterTicks / 4);
         tickStart = (XToTick(kPianoRollLeftGutter + relLeft) / stepTicks) * stepTicks;
@@ -2368,7 +2365,6 @@ private:
         int viewTop;
         int viewRight;
         int viewBottom;
-        int beat;
         int note;
         int noteY;
         int gridTop;
