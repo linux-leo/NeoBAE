@@ -1,8 +1,10 @@
 # 0.05a
 - ~~Fix SND export issue~~
 - Sus out sample codec issues
-  - MP3 gap + loop points (MUST BE CAREFUL WHAT WE CHANGE)
-  - Opus to anything = wrong pitch (stop adjusting)
+  - ~~MP3 gap + loop points (MUST BE CAREFUL WHAT WE CHANGE)~~
+  - ~~Opus to mp3 = wrong pitch~~
+  - Opus to mp3 = wrong pitch in instrument preview, fine in output
+  - MP3 bitrate is not respected in instrument preview, fine in output
   - ~~Opus loop points~~
   - ~~Opus Dynamic frequency scaling~~
   - ~~neho's crazy compression tactic (Round‑Trip Resampling)~~
@@ -11,7 +13,7 @@
   - ~~ADPCM~~
   - ~~VORBIS~~
   - ~~FLAC~~
-- Switch tempfile system to memory loader
+- ~~Switch tempfile system to memory loader~~
 
 # Future
 - `Crazy Dream fix.rmf` plays bass/gt sample instead of saw lead

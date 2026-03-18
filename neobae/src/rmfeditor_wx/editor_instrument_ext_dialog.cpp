@@ -1728,37 +1728,6 @@ private:
                     m_opusModeChoice->Enable(opusSel == 6 || opusSel == 7);
                 }
 
-                /* Auto-update sample rate when codec changes only if the user has not
-                 * manually edited the rate field (current == stored).
-                 * Round-Trip preserves source rate — skip auto-update. */
-                bool keepRateForOpus = (newCodecIdx == 6 || newCodecIdx == 7);
-                if (m_sampleRateSpin &&
-                    sampleIndex != static_cast<uint32_t>(-1) &&
-                    oldCodecIdx >= 0 &&
-                    newCodecIdx >= 0 &&
-                    oldCodecIdx != newCodecIdx &&
-                    currentRateHz == storedRateHz &&
-                    !keepRateForOpus) {
-                    int bitrateIdx = m_bitrateChoice && m_bitrateChoice->IsEnabled()
-                        ? m_bitrateChoice->GetSelection()
-                        : 0;
-                    BAERmfEditorCompressionType targetType = CodecBitrateToCompressionType(newCodecIdx, bitrateIdx);
-                    BAE_UNSIGNED_FIXED recommendedRate = 0;
-                    if (BAERmfEditorDocument_GetRecommendedSampleRate(m_document,
-                                                                      sampleIndex,
-                                                                      targetType,
-                                                                      &recommendedRate) == BAE_NO_ERROR) {
-                        int recommendedHz = (int)(recommendedRate >> 16);
-                        if (recommendedHz >= 1 && recommendedHz <= 65535 && recommendedHz != currentRateHz) {
-                            m_sampleRateSpin->SetValue(recommendedHz);
-                            if (!m_loadingUiValues &&
-                                m_currentLocalIndex >= 0 &&
-                                m_currentLocalIndex < (int)m_samples.size()) {
-                                m_samples[(size_t)m_currentLocalIndex].sampleInfo.sampledRate = (BAE_UNSIGNED_FIXED)(recommendedHz << 16);
-                            }
-                        }
-                    }
-                }
             });
         }
 

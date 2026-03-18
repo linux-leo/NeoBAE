@@ -84,6 +84,10 @@ extern "C" void * MPG_EncodeNewStream(uint32_t encodeRate /* bits/sec total */, 
     lame_t gf = lame_init();
     if(!gf){ BAE_PRINTF("audio: MPG_EncodeNewStream lame_init() returned NULL\n"); delete s; return NULL; }
     lame_set_in_samplerate(gf, s->sampleRate);
+    /* Keep encoded stream sample rate aligned with caller intent.
+     * Without this, LAME may auto-downsample low-bitrate encodes (e.g. 48k -> 22.05k),
+     * which later conflicts with RMF SND sample-rate metadata and causes pitch drift. */
+    lame_set_out_samplerate(gf, s->sampleRate);
     lame_set_num_channels(gf, (int)s->channels);
     /* LAME expects overall kbps; use the provided total kbps and snap to nearest supported total kbps */
     int total_kbps = (int)s->encodeRateKbpsTotal;
@@ -110,7 +114,11 @@ extern "C" void * MPG_EncodeNewStream(uint32_t encodeRate /* bits/sec total */, 
         if(!s->leftoverBuf){ BAE_PRINTF("audio: MPG_EncodeNewStream leftoverBuf allocation failed (frames=%u channels=%u)\n", (unsigned)maxLeft, (unsigned)s->channels); lame_close(gf); delete s; return NULL; }
     }
 
-    BAE_PRINTF("audio: MPG_EncodeNewStream using LAME sr=%d ch=%d totalKbps=%d\n", (int)s->sampleRate, (int)s->channels, total_kbps);
+    BAE_PRINTF("audio: MPG_EncodeNewStream using LAME in_sr=%d out_sr=%d ch=%d totalKbps=%d\n",
+               (int)s->sampleRate,
+               (int)lame_get_out_samplerate(gf),
+               (int)s->channels,
+               total_kbps);
     return s;
 }
 

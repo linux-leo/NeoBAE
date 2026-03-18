@@ -824,47 +824,26 @@ private:
     }
 
     bool CaptureSerializedDocument(std::vector<unsigned char> *outBytes) const {
-        wxString tempPath;
-        wxScopedCharBuffer utf8Path;
-        wxFile file;
-        wxFileOffset length;
+        unsigned char *data;
+        uint32_t size;
+        XBOOL useZmf;
 
         if (!outBytes || !m_document) {
             return false;
         }
 
-        tempPath = wxFileName::CreateTempFileName("nbstudio_undo");
-        if (tempPath.empty()) {
+        data = nullptr;
+        size = 0;
+        useZmf = BAERmfEditorDocument_RequiresZmf(m_document) ? TRUE : FALSE;
+        if (BAERmfEditorDocument_SaveAsRmfToMemory(m_document,
+                                                    useZmf,
+                                                    &data,
+                                                    &size) != BAE_NO_ERROR || !data || size == 0) {
             return false;
         }
 
-        utf8Path = tempPath.utf8_str();
-        if (BAERmfEditorDocument_SaveAsRmf(m_document, const_cast<char *>(utf8Path.data())) != BAE_NO_ERROR) {
-            wxRemoveFile(tempPath);
-            return false;
-        }
-
-        if (!file.Open(tempPath, wxFile::read)) {
-            wxRemoveFile(tempPath);
-            return false;
-        }
-        length = file.Length();
-        if (length <= 0) {
-            file.Close();
-            wxRemoveFile(tempPath);
-            return false;
-        }
-
-        outBytes->assign(static_cast<size_t>(length), 0);
-        if (file.Read(outBytes->data(), static_cast<size_t>(length)) != length) {
-            outBytes->clear();
-            file.Close();
-            wxRemoveFile(tempPath);
-            return false;
-        }
-
-        file.Close();
-        wxRemoveFile(tempPath);
+        outBytes->assign(data, data + size);
+        XDisposePtr((XPTR)data);
         return true;
     }
 
@@ -2377,11 +2356,9 @@ private:
         BAERmfEditorDocument *playDoc;
         uint16_t trackCount;
         unsigned char requiredPrograms[128];
-        wxString tempBase;
-        wxString tempPath;
-        bool requiresZmf;
-        BAEResult saveResult;
-        wxScopedCharBuffer utf8TempPath;
+        unsigned char *rmfData;
+        uint32_t rmfSize;
+        XBOOL useZmf;
 
         if (!m_document || trackIndex < 0) {
             return nullptr;
@@ -2394,31 +2371,18 @@ private:
 
         /* Clone from a serialized full document so track-internal data (including
          * conductor/meta setup on track 0) survives in single-track exports. */
-        tempBase = wxFileName::CreateTempFileName("nbstudio_single_track");
-        if (tempBase.empty()) {
-            return nullptr;
-        }
-        requiresZmf = BAERmfEditorDocument_RequiresZmf(m_document) != 0;
-        tempPath = tempBase + (requiresZmf ? ".zmf" : ".rmf");
-        utf8TempPath = tempPath.utf8_str();
-        saveResult = BAERmfEditorDocument_SaveAsRmf(m_document, const_cast<char *>(utf8TempPath.data()));
-        if (saveResult != BAE_NO_ERROR) {
-            if (wxFileExists(tempPath)) {
-                wxRemoveFile(tempPath);
-            }
-            if (wxFileExists(tempBase)) {
-                wxRemoveFile(tempBase);
-            }
+        rmfData = nullptr;
+        rmfSize = 0;
+        useZmf = BAERmfEditorDocument_RequiresZmf(m_document) ? TRUE : FALSE;
+        if (BAERmfEditorDocument_SaveAsRmfToMemory(m_document,
+                                                    useZmf,
+                                                    &rmfData,
+                                                    &rmfSize) != BAE_NO_ERROR || !rmfData || rmfSize == 0) {
             return nullptr;
         }
 
-        playDoc = BAERmfEditorDocument_LoadFromFile(const_cast<char *>(utf8TempPath.data()));
-        if (wxFileExists(tempPath)) {
-            wxRemoveFile(tempPath);
-        }
-        if (wxFileExists(tempBase)) {
-            wxRemoveFile(tempBase);
-        }
+        playDoc = BAERmfEditorDocument_LoadFromMemory(rmfData, rmfSize, BAE_RMF);
+        XDisposePtr((XPTR)rmfData);
         if (!playDoc) {
             return nullptr;
         }
@@ -2681,12 +2645,11 @@ private:
     bool BuildCompressedPreviewSampleFile(uint32_t sampleIndex,
                                           BAERmfEditorCompressionType compressionType,
                                           wxString *outPath) {
-        wxString docBasePath;
-        wxString docPath;
         wxString sampleBasePath;
         wxString samplePath;
-        wxScopedCharBuffer utf8DocPath;
         wxScopedCharBuffer utf8SamplePath;
+        unsigned char *rmfData;
+        uint32_t rmfSize;
         BAERmfEditorDocument *tempDoc;
         BAERmfEditorSampleInfo info;
         std::string displayName;
@@ -2700,22 +2663,17 @@ private:
             return false;
         }
 
-        docBasePath = wxFileName::CreateTempFileName("nbstudio_cmp_doc");
-        if (docBasePath.empty()) {
-            return false;
-        }
-        docPath = docBasePath + ".rmf";
-        utf8DocPath = docPath.utf8_str();
-
-        if (BAERmfEditorDocument_SaveAsRmf(m_document, const_cast<char *>(utf8DocPath.data())) != BAE_NO_ERROR) {
-            if (wxFileExists(docPath)) wxRemoveFile(docPath);
-            if (wxFileExists(docBasePath)) wxRemoveFile(docBasePath);
+        rmfData = nullptr;
+        rmfSize = 0;
+        if (BAERmfEditorDocument_SaveAsRmfToMemory(m_document,
+                                                    FALSE,
+                                                    &rmfData,
+                                                    &rmfSize) != BAE_NO_ERROR || !rmfData || rmfSize == 0) {
             return false;
         }
 
-        tempDoc = BAERmfEditorDocument_LoadFromFile(const_cast<char *>(utf8DocPath.data()));
-        if (wxFileExists(docPath)) wxRemoveFile(docPath);
-        if (wxFileExists(docBasePath)) wxRemoveFile(docBasePath);
+        tempDoc = BAERmfEditorDocument_LoadFromMemory(rmfData, rmfSize, BAE_RMF);
+        XDisposePtr((XPTR)rmfData);
         if (!tempDoc) {
             return false;
         }
@@ -2812,12 +2770,8 @@ private:
                                                 BAE_UNSIGNED_FIXED *outSampleRate,
                                                 uint32_t *outLoopStart,
                                                 uint32_t *outLoopEnd) {
-        wxString sourceBasePath;
-        wxString sourceDocPath;
-        wxString encodedBasePath;
-        wxString encodedDocPath;
-        wxScopedCharBuffer utf8SourceDocPath;
-        wxScopedCharBuffer utf8EncodedDocPath;
+        unsigned char *rmfData;
+        uint32_t rmfSize;
         BAERmfEditorDocument *tempDoc;
         BAERmfEditorDocument *previewDoc;
         BAERmfEditorSampleInfo info;
@@ -2838,21 +2792,19 @@ private:
             return false;
         }
 
-        sourceBasePath = wxFileName::CreateTempFileName("nbstudio_cmp_src");
-        if (sourceBasePath.empty()) {
-            return false;
-        }
-        sourceDocPath = sourceBasePath + ".rmf";
-        utf8SourceDocPath = sourceDocPath.utf8_str();
-        if (BAERmfEditorDocument_SaveAsRmf(m_document, const_cast<char *>(utf8SourceDocPath.data())) != BAE_NO_ERROR) {
-            if (wxFileExists(sourceDocPath)) wxRemoveFile(sourceDocPath);
-            if (wxFileExists(sourceBasePath)) wxRemoveFile(sourceBasePath);
+        /* Clone the document via memory so we can modify compression settings
+         * without affecting the original. */
+        rmfData = nullptr;
+        rmfSize = 0;
+        if (BAERmfEditorDocument_SaveAsRmfToMemory(m_document,
+                                                    FALSE,
+                                                    &rmfData,
+                                                    &rmfSize) != BAE_NO_ERROR || !rmfData || rmfSize == 0) {
             return false;
         }
 
-        tempDoc = BAERmfEditorDocument_LoadFromFile(const_cast<char *>(utf8SourceDocPath.data()));
-        if (wxFileExists(sourceDocPath)) wxRemoveFile(sourceDocPath);
-        if (wxFileExists(sourceBasePath)) wxRemoveFile(sourceBasePath);
+        tempDoc = BAERmfEditorDocument_LoadFromMemory(rmfData, rmfSize, BAE_RMF);
+        XDisposePtr((XPTR)rmfData);
         if (!tempDoc) {
             return false;
         }
@@ -2870,24 +2822,21 @@ private:
             return false;
         }
 
-        encodedBasePath = wxFileName::CreateTempFileName("nbstudio_cmp_rld");
-        if (encodedBasePath.empty()) {
+        /* Re-serialize with the new compression applied, then reload so the
+         * waveform data reflects the encode/decode round-trip. */
+        rmfData = nullptr;
+        rmfSize = 0;
+        if (BAERmfEditorDocument_SaveAsRmfToMemory(tempDoc,
+                                                    FALSE,
+                                                    &rmfData,
+                                                    &rmfSize) != BAE_NO_ERROR || !rmfData || rmfSize == 0) {
             BAERmfEditorDocument_Delete(tempDoc);
-            return false;
-        }
-        encodedDocPath = encodedBasePath + ".rmf";
-        utf8EncodedDocPath = encodedDocPath.utf8_str();
-        if (BAERmfEditorDocument_SaveAsRmf(tempDoc, const_cast<char *>(utf8EncodedDocPath.data())) != BAE_NO_ERROR) {
-            BAERmfEditorDocument_Delete(tempDoc);
-            if (wxFileExists(encodedDocPath)) wxRemoveFile(encodedDocPath);
-            if (wxFileExists(encodedBasePath)) wxRemoveFile(encodedBasePath);
             return false;
         }
         BAERmfEditorDocument_Delete(tempDoc);
 
-        previewDoc = BAERmfEditorDocument_LoadFromFile(const_cast<char *>(utf8EncodedDocPath.data()));
-        if (wxFileExists(encodedDocPath)) wxRemoveFile(encodedDocPath);
-        if (wxFileExists(encodedBasePath)) wxRemoveFile(encodedBasePath);
+        previewDoc = BAERmfEditorDocument_LoadFromMemory(rmfData, rmfSize, BAE_RMF);
+        XDisposePtr((XPTR)rmfData);
         if (!previewDoc) {
             return false;
         }

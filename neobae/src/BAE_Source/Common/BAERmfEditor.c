@@ -7048,13 +7048,17 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
         int32_t roundTripSourceRate;  /* non-zero when encoding Opus round-trip */
         XBOOL samplePlayAtSampledFreq;
         XBOOL sampleWasEncodedOpus;
+        XBOOL sampleWasEncodedMpeg;
         uint32_t decodedFramesForRate;
+        uint32_t decodedSampleRateForSnd;
 
         sample = &document->samples[index];
         roundTripSourceRate = 0;
         samplePlayAtSampledFreq = FALSE;
         sampleWasEncodedOpus = FALSE;
+        sampleWasEncodedMpeg = FALSE;
         decodedFramesForRate = 0;
+        decodedSampleRateForSnd = 0;
 
         if (sample->instID != 0)
         {
@@ -7495,6 +7499,14 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 encodeCompSubType = PV_ComposeOpusEncodeSubType(compSubType, sample->targetOpusMode);
                 sampleWasEncodedOpus = TRUE;
             }
+            else if (compType == C_MPEG_32 || compType == C_MPEG_40 || compType == C_MPEG_48 ||
+                     compType == C_MPEG_56 || compType == C_MPEG_64 || compType == C_MPEG_80 ||
+                     compType == C_MPEG_96 || compType == C_MPEG_112 || compType == C_MPEG_128 ||
+                     compType == C_MPEG_160 || compType == C_MPEG_192 || compType == C_MPEG_224 ||
+                     compType == C_MPEG_256 || compType == C_MPEG_320)
+            {
+                sampleWasEncodedMpeg = TRUE;
+            }
 
             if (sample->sourceCompressionType == (uint32_t)C_OPUS &&
                 compType != C_OPUS)
@@ -7701,6 +7713,10 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 {
                     encodedFrames = writeWaveform.waveFrames;
                 }
+                if (decodedInfo.rate != 0)
+                {
+                    decodedSampleRateForSnd = (uint32_t)decodedInfo.rate;
+                }
                 decodedFramesForRate = encodedFrames;
                 PV_ForceSndDecodedFrameCount(sndResource, encodedFrames);
                 loopStart = (int32_t)writeWaveform.startLoop;
@@ -7776,6 +7792,13 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             int32_t sndSampleRate;
 
             sndSampleRate = writeWaveform.sampledRate;
+            if (sampleWasEncodedMpeg && decodedSampleRateForSnd != 0)
+            {
+                sndSampleRate = (int32_t)decodedSampleRateForSnd;
+                BAE_STDERR("[RMF Save] Sample[%u] MPEG rate align using decoded stream rate %uHz\n",
+                           (unsigned)index,
+                           (unsigned)(decodedSampleRateForSnd >> 16));
+            }
             if (sampleWasEncodedOpus && samplePlayAtSampledFreq &&
                 writeWaveform.waveFrames > 0 && decodedFramesForRate > 0 &&
                 decodedFramesForRate != writeWaveform.waveFrames)
@@ -10458,12 +10481,9 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
     BAERmfEditorSample *sample;
     BAEResult result;
     XBOOL loopChanged;
-    XBOOL sampleRateTouched;
-    XBOOL keepRateForOpus;
     BAE_UNSIGNED_FIXED newSampleRate;
     BAE_UNSIGNED_FIXED incomingSampleRate;
     BAE_UNSIGNED_FIXED oldSampleRate;
-    BAERmfEditorCompressionType oldCompressionType;
     unsigned char oldProgram;
     uint32_t oldInstID;
 
@@ -10480,10 +10500,8 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
         return BAE_PARAM_ERR;
     }
     sample = &document->samples[sampleIndex];
-    keepRateForOpus = PV_IsOpusCompression(sampleInfo->compressionType) ? TRUE : FALSE;
     oldProgram = sample->program;
     oldInstID = sample->instID;
-    oldCompressionType = sample->targetCompressionType;
     loopChanged = (sample->sampleInfo.startLoop != sampleInfo->sampleInfo.startLoop) ||
                   (sample->sampleInfo.endLoop != sampleInfo->sampleInfo.endLoop);
     result = PV_SetDocumentString(&sample->displayName, sampleInfo->displayName);
@@ -10527,29 +10545,10 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
 
     incomingSampleRate = sampleInfo->sampleInfo.sampledRate;
     oldSampleRate = sample->sampleInfo.sampledRate;
-    sampleRateTouched = TRUE;
-    if (incomingSampleRate == oldSampleRate)
-    {
-        sampleRateTouched = FALSE;
-    }
-    else if (incomingSampleRate >= 4000U && incomingSampleRate <= 384000U &&
-             (incomingSampleRate << 16) == oldSampleRate)
-    {
-        sampleRateTouched = FALSE;
-    }
-
     newSampleRate = incomingSampleRate;
     if (newSampleRate == 0)
     {
-        if (keepRateForOpus)
-        {
-            newSampleRate = oldSampleRate;
-        }
-        else
-        {
-            newSampleRate = PV_RecommendSampleRateForCompression(sample,
-                                                                 sampleInfo->compressionType);
-        }
+        newSampleRate = oldSampleRate;
     }
     else if (newSampleRate >= 4000U && newSampleRate <= 384000U)
     {
@@ -10557,17 +10556,6 @@ BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
         newSampleRate <<= 16;
     }
     /* Otherwise assume caller already provided 16.16 fixed-point rate and keep it as-is. */
-
-    /* If codec changed and caller did not explicitly edit sample rate, select a
-     * codec-aware recommended rate from source material metadata. */
-    if (!sampleRateTouched &&
-        sampleInfo->compressionType != BAE_EDITOR_COMPRESSION_DONT_CHANGE &&
-        sampleInfo->compressionType != oldCompressionType &&
-        !keepRateForOpus)
-    {
-        newSampleRate = PV_RecommendSampleRateForCompression(sample,
-                                                             sampleInfo->compressionType);
-    }
 
     /* Keep per-sample metadata in sampleInfo. The waveform may be shared by
      * multiple splits, so writing loop/rate there can leak edits across samples. */
