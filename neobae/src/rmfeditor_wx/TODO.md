@@ -13,13 +13,11 @@
 - ~~Export only certain channel(s)~~
 
 # 0.07a
-- ~~Fix channel dialog popup for Channel Mode~~
 - Changing the program/bank of an note does not reflect in preview/output
 - tick0 note seen as 2:0 instead of 2:4, missing CC? (`Rhodium.rmf`)
 - ~~Musical keyboard doesn't stop when key released~~
-- Make it easier to get back to the channel dialog
-  - remove code to 'select same menu option'
-- Allow export of RMF/ZMF to MIDI with warning about the output file not having custom instruments/samples.
+- ~~Make it easier to get back to the channel dialog~~
+- ~~Allow export of RMF/ZMF to MIDI with warning about the output file not having custom instruments/samples.~~
 - Visible/editable MIDI Loop representation in piano roll
 - Interpolation configuration (none, linear, cubic, etc, current is just on/off)
 

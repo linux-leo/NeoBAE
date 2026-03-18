@@ -2590,6 +2590,51 @@ private:
         m_openingPlaybackChannelsDialog = false;
     }
 
+    BAERmfEditorDocument *BuildMidiExportDocument(BAERmfEditorDocument *sourceDoc) {
+        BAERmfEditorDocument *midiDoc;
+        unsigned char *rmfData;
+        uint32_t rmfSize;
+        XBOOL useZmf;
+        uint32_t sampleCount;
+
+        if (!sourceDoc) {
+            return nullptr;
+        }
+
+        rmfData = nullptr;
+        rmfSize = 0;
+        useZmf = BAERmfEditorDocument_RequiresZmf(sourceDoc) ? TRUE : FALSE;
+        if (BAERmfEditorDocument_SaveAsRmfToMemory(sourceDoc,
+                                                   useZmf,
+                                                   &rmfData,
+                                                   &rmfSize) != BAE_NO_ERROR ||
+            !rmfData ||
+            rmfSize == 0) {
+            return nullptr;
+        }
+
+        midiDoc = BAERmfEditorDocument_LoadFromMemory(rmfData, rmfSize, BAE_RMF);
+        XDisposePtr((XPTR)rmfData);
+        if (!midiDoc) {
+            return nullptr;
+        }
+
+        sampleCount = 0;
+        if (BAERmfEditorDocument_GetSampleCount(midiDoc, &sampleCount) != BAE_NO_ERROR) {
+            BAERmfEditorDocument_Delete(midiDoc);
+            return nullptr;
+        }
+        while (sampleCount > 0) {
+            if (BAERmfEditorDocument_DeleteSample(midiDoc, sampleCount - 1) != BAE_NO_ERROR) {
+                BAERmfEditorDocument_Delete(midiDoc);
+                return nullptr;
+            }
+            --sampleCount;
+        }
+
+        return midiDoc;
+    }
+
     static bool DocumentHasTrackEvents(BAERmfEditorDocument *document) {
         uint16_t trackCount;
 
@@ -3810,11 +3855,13 @@ private:
 
     void OnSaveAs(wxCommandEvent &) {
         BAERmfEditorDocument *saveDoc;
+        BAERmfEditorDocument *midiSaveDoc;
         bool saveCurrentTrack;
         bool saveChannels;
         int selectedTrack;
         bool requiresZmf;
         bool canSaveAsMidi;
+        bool midiRequiresCustomDataDrop;
         wxString sourcePath;
         wxString preferredExt;
         wxString defaultDir;
@@ -3874,6 +3921,7 @@ private:
 
         requiresZmf = BAERmfEditorDocument_RequiresZmf(saveDoc) != 0;
         canSaveAsMidi = (BAERmfEditorDocument_CanSaveAsMidi(saveDoc) != 0);
+        midiRequiresCustomDataDrop = !canSaveAsMidi;
         BAERmfEditorDocument_SetMidiStorageType(saveDoc, GetSelectedMidiStorageType());
 
         sourcePath = !m_sessionPath.empty() ? m_sessionPath : m_currentPath;
@@ -3892,16 +3940,12 @@ private:
         }
 
         wxFileDialog dialog(this,
-                            requiresZmf ? "Save As ZMF (required by FLAC/Vorbis/Opus samples)"
-                                                     : (canSaveAsMidi
-                                                         ? "Save As RMF/ZMF/MIDI"
-                                                         : "Save As RMF/ZMF (MIDI disabled: custom instruments/samples)"),
+                            requiresZmf ? "Save As ZMF/MIDI"
+                                                     : "Save As RMF/ZMF/MIDI",
                             defaultDir,
                             defaultFile,
-                            requiresZmf ? "ZMF files (*.zmf)|*.zmf"
-                                                     : (canSaveAsMidi
-                                                         ? "RMF, ZMF, and MIDI files (*.rmf;*.zmf;*.mid;*.midi)|*.rmf;*.zmf;*.mid;*.midi|RMF and ZMF files (*.rmf;*.zmf)|*.rmf;*.zmf|MIDI files (*.mid;*.midi)|*.mid;*.midi"
-                                                         : "RMF and ZMF files (*.rmf;*.zmf)|*.rmf;*.zmf"),
+                            requiresZmf ? "ZMF and MIDI files (*.zmf;*.mid;*.midi)|*.zmf;*.mid;*.midi|ZMF files (*.zmf)|*.zmf|MIDI files (*.mid;*.midi)|*.mid;*.midi"
+                                                     : "RMF, ZMF, and MIDI files (*.rmf;*.zmf;*.mid;*.midi)|*.rmf;*.zmf;*.mid;*.midi|RMF and ZMF files (*.rmf;*.zmf)|*.rmf;*.zmf|MIDI files (*.mid;*.midi)|*.mid;*.midi",
                             wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
         if (dialog.ShowModal() != wxID_OK) {
             if (saveDoc != m_document) {
@@ -3912,31 +3956,54 @@ private:
         {
             wxString targetPath = dialog.GetPath();
             BAEResult saveResult;
+            midiSaveDoc = nullptr;
 
             if (IsMidiSaveExtension(targetPath)) {
                 wxFileName fn(targetPath);
-                if (!canSaveAsMidi) {
-                    if (saveDoc != m_document) {
-                        BAERmfEditorDocument_Delete(saveDoc);
-                    }
-                    wxMessageBox("Cannot save as MIDI when the document contains custom instruments or samples.",
-                                 "MIDI Save Disabled",
-                                 wxOK | wxICON_INFORMATION,
-                                 this);
-                    return;
-                }
                 if (fn.GetExt().Lower() != "mid" && fn.GetExt().Lower() != "midi") {
                     fn.SetExt("mid");
                     targetPath = fn.GetFullPath();
                 }
+                if (midiRequiresCustomDataDrop) {
+                    int warningChoice = wxMessageBox(
+                        "This export will write standard MIDI only.\n\n"
+                        "Custom instruments and embedded samples from RMF/ZMF cannot be stored in MIDI and will be omitted.",
+                        "Export MIDI",
+                        wxYES_NO | wxICON_WARNING,
+                        this);
+                    if (warningChoice != wxYES) {
+                        if (saveDoc != m_document) {
+                            BAERmfEditorDocument_Delete(saveDoc);
+                        }
+                        return;
+                    }
+                    midiSaveDoc = BuildMidiExportDocument(saveDoc);
+                    if (!midiSaveDoc) {
+                        if (saveDoc != m_document) {
+                            BAERmfEditorDocument_Delete(saveDoc);
+                        }
+                        wxMessageBox("Failed to prepare MIDI export document.",
+                                     "Save Failed",
+                                     wxOK | wxICON_ERROR,
+                                     this);
+                        return;
+                    }
+                }
                 wxScopedCharBuffer utf8TargetPath = targetPath.utf8_str();
-                saveResult = BAERmfEditorDocument_SaveAsMidi(saveDoc, const_cast<char *>(utf8TargetPath.data()));
+                saveResult = BAERmfEditorDocument_SaveAsMidi(midiSaveDoc ? midiSaveDoc : saveDoc,
+                                                             const_cast<char *>(utf8TargetPath.data()));
                 if (saveResult != BAE_NO_ERROR) {
+                    if (midiSaveDoc) {
+                        BAERmfEditorDocument_Delete(midiSaveDoc);
+                    }
                     if (saveDoc != m_document) {
                         BAERmfEditorDocument_Delete(saveDoc);
                     }
                     wxMessageBox("Failed to save MIDI file.", "Save Failed", wxOK | wxICON_ERROR, this);
                     return;
+                }
+                if (midiSaveDoc) {
+                    BAERmfEditorDocument_Delete(midiSaveDoc);
                 }
                 if (saveDoc != m_document) {
                     BAERmfEditorDocument_Delete(saveDoc);
