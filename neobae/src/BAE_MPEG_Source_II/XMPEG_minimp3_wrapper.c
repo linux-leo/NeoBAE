@@ -195,11 +195,71 @@ uint32_t MPG_GetNumberOfSamples(void *reference){ uint32_t bytes=MPG_GetSizeInBy
 int MPG_SeekStream(void *reference, uint32_t newPos){ Minimp3Stream *s=(Minimp3Stream*)reference; if(!s) return -1; if(s->readMode!=MM_READ_MEMORY) return -1; if(newPos>=s->mem_size) newPos = (uint32_t)s->mem_size; s->raw_offset=newPos; mp3dec_init(&s->dec); return 0; }
 
 #if USE_MPEG_ENCODER != FALSE
-XMPEGEncodeRate XGetMPEGEncodeRate(SndCompressionType type){(void)type;return (XMPEGEncodeRate)0;}
-SndCompressionType XGetMPEGCompressionType(XMPEGEncodeRate rate){(void)rate;return (SndCompressionType)0;}
-XMPEGEncodeRate XGetClosestMPEGEncodeRate(unsigned int bitrate){(void)bitrate;return (XMPEGEncodeRate)0;}
+XMPEGEncodeRate XGetMPEGEncodeRate(SndCompressionType type){
+    switch(type){
+        case C_MPEG_32: return (XMPEGEncodeRate)32;
+        case C_MPEG_40: return (XMPEGEncodeRate)40;
+        case C_MPEG_48: return (XMPEGEncodeRate)48;
+        case C_MPEG_56: return (XMPEGEncodeRate)56;
+        case C_MPEG_64: return (XMPEGEncodeRate)64;
+        case C_MPEG_80: return (XMPEGEncodeRate)80;
+        case C_MPEG_96: return (XMPEGEncodeRate)96;
+        case C_MPEG_112: return (XMPEGEncodeRate)112;
+        case C_MPEG_128: return (XMPEGEncodeRate)128;
+        case C_MPEG_160: return (XMPEGEncodeRate)160;
+        case C_MPEG_192: return (XMPEGEncodeRate)192;
+        case C_MPEG_224: return (XMPEGEncodeRate)224;
+        case C_MPEG_256: return (XMPEGEncodeRate)256;
+        case C_MPEG_320: return (XMPEGEncodeRate)320;
+        default: return (XMPEGEncodeRate)128;
+    }
+}
+
+SndCompressionType XGetMPEGCompressionType(XMPEGEncodeRate rate){
+    switch((int)rate){
+        case 32: return C_MPEG_32;
+        case 40: return C_MPEG_40;
+        case 48: return C_MPEG_48;
+        case 56: return C_MPEG_56;
+        case 64: return C_MPEG_64;
+        case 80: return C_MPEG_80;
+        case 96: return C_MPEG_96;
+        case 112: return C_MPEG_112;
+        case 128: return C_MPEG_128;
+        case 160: return C_MPEG_160;
+        case 192: return C_MPEG_192;
+        case 224: return C_MPEG_224;
+        case 256: return C_MPEG_256;
+        case 320: return C_MPEG_320;
+        default: return C_MPEG_128;
+    }
+}
+
+XMPEGEncodeRate XGetClosestMPEGEncodeRate(unsigned int bitrate){
+    const unsigned int table[] = {32,40,48,56,64,80,96,112,128,160,192,224,256,320};
+    unsigned int best = table[0];
+    unsigned int i;
+    uint32_t bestDiff = 0xFFFFFFFFu;
+    for(i = 0; i < (sizeof(table)/sizeof(table[0])); ++i){
+        uint32_t d = (table[i] > bitrate) ? (table[i] - bitrate) : (bitrate - table[i]);
+        if(d < bestDiff){
+            bestDiff = d;
+            best = table[i];
+        }
+    }
+    return (XMPEGEncodeRate)best;
+}
+
 XFIXED XGetClosestMPEGSampleRate(XFIXED sourceRate, SndCompressionSubType subType){(void)subType;return sourceRate;}
-void XGetClosestMPEGSampleRateAndEncodeRate(XFIXED inSampleRate, XMPEGEncodeRate inEncodeRate, XFIXED *outSampleRate, XMPEGEncodeRate *outEncodeRate, SndCompressionSubType subType){if(outSampleRate)*outSampleRate=inSampleRate; if(outEncodeRate)*outEncodeRate=inEncodeRate; (void)subType;}
+
+void XGetClosestMPEGSampleRateAndEncodeRate(XFIXED inSampleRate,
+                                            XMPEGEncodeRate inEncodeRate,
+                                            XFIXED *outSampleRate,
+                                            XMPEGEncodeRate *outEncodeRate,
+                                            SndCompressionSubType subType){
+    if(outSampleRate) *outSampleRate = XGetClosestMPEGSampleRate(inSampleRate, subType);
+    if(outEncodeRate) *outEncodeRate = XGetClosestMPEGEncodeRate((unsigned int)inEncodeRate);
+}
 #endif
 
 /* Map bitrate (bps) to legacy SndCompressionType constants (C_MPEG_xx) */

@@ -1862,6 +1862,9 @@ private:
             compressionOverride != BAE_EDITOR_COMPRESSION_PCM) {
             wxString compressedPath;
 
+            /* For MPEG preview, prefer the in-memory reloaded waveform path so
+             * decoded loop geometry matches the post-encode sample state used by
+             * instrument audition. */
             if (IsMpegCompressionType(compressionOverride)) {
                 std::vector<unsigned char> reloadedWaveData;
                 uint32_t reloadedFrameCount;
@@ -2664,6 +2667,7 @@ private:
         unsigned char *rmfData;
         uint32_t rmfSize;
         BAERmfEditorDocument *tempDoc;
+        BAERmfEditorDocument *exportDoc;
         BAERmfEditorSampleInfo info;
         std::string displayName;
         BAEResult result;
@@ -2704,9 +2708,28 @@ private:
             return false;
         }
 
+        /* Materialize the updated target compression into a fresh document so
+         * ExportSampleToFile cannot passthrough stale original compressed data. */
+        rmfData = nullptr;
+        rmfSize = 0;
+        if (BAERmfEditorDocument_SaveAsRmfToMemory(tempDoc,
+                                                    FALSE,
+                                                    &rmfData,
+                                                    &rmfSize) != BAE_NO_ERROR || !rmfData || rmfSize == 0) {
+            BAERmfEditorDocument_Delete(tempDoc);
+            return false;
+        }
+        BAERmfEditorDocument_Delete(tempDoc);
+
+        exportDoc = BAERmfEditorDocument_LoadFromMemory(rmfData, rmfSize, BAE_RMF);
+        XDisposePtr((XPTR)rmfData);
+        if (!exportDoc) {
+            return false;
+        }
+
         sampleBasePath = wxFileName::CreateTempFileName("nbstudio_cmp_sample");
         if (sampleBasePath.empty()) {
-            BAERmfEditorDocument_Delete(tempDoc);
+            BAERmfEditorDocument_Delete(exportDoc);
             return false;
         }
 
@@ -2755,10 +2778,10 @@ private:
         }
 
         utf8SamplePath = samplePath.utf8_str();
-        result = BAERmfEditorDocument_ExportSampleToFile(tempDoc,
+        result = BAERmfEditorDocument_ExportSampleToFile(exportDoc,
                                                          sampleIndex,
                                                          const_cast<char *>(utf8SamplePath.data()));
-        BAERmfEditorDocument_Delete(tempDoc);
+        BAERmfEditorDocument_Delete(exportDoc);
 
         if (wxFileExists(sampleBasePath)) {
             wxRemoveFile(sampleBasePath);

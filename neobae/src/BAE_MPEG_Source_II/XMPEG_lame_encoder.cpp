@@ -67,8 +67,14 @@ extern "C" void * MPG_EncodeNewStream(uint32_t encodeRate /* bits/sec total */, 
     s->pcmBuffer = (int16_t*)pSampleData16Bits; s->pcmFramesPerCall = frames;
     s->refill = NULL; s->refillUser = NULL; s->bitstreamBytes = 0; s->lastFrame = FALSE; s->leftoverBuf = NULL; s->leftoverFrames = 0; s->framesConsumed = 0;
 
-    /* Interpret encodeRate as total bits/sec and map to total kbps for LAME */
-    uint32_t providedTotalBits = encodeRate; /* assume caller supplies total bits/sec */
+    /* Accept both legacy caller styles:
+     * - bits/sec total (e.g. 128000) from mixer output path
+     * - kbps enum-like values (e.g. 128) from XMPEGFilesSun/XGetMPEGEncodeRate
+     */
+    uint32_t providedTotalBits = encodeRate;
+    if(providedTotalBits > 0 && providedTotalBits <= 512) {
+        providedTotalBits *= 1000;
+    }
     if(providedTotalBits < 8000) providedTotalBits = 8000; /* clamp sensible lower bound */
     /* convert to nearest kbps (round) */
     uint32_t totalKbps = (providedTotalBits + 500) / 1000;
