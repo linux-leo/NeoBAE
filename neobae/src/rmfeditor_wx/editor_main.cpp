@@ -4537,6 +4537,7 @@ private:
         wxMenu menu;
         SampleTreeItemData *selectedData;
         bool hasDocument;
+        bool hasMenuItemNewInst = false;
 
         selectedData = GetSelectedSampleTreeData();
         hasDocument = (m_document != nullptr);
@@ -4558,8 +4559,11 @@ private:
             menu.AppendSeparator();
             menu.Append(ID_CompressAllInstruments, "Compress All Instruments");
             menu.Append(ID_DeleteAllInstruments, "Delete All Instruments");
+            hasMenuItemNewInst = true;
         }
-        menu.Enable(ID_SampleNewInstrument, hasDocument);
+        if (hasMenuItemNewInst) {
+            menu.Enable(ID_SampleNewInstrument, hasDocument);
+        }
         menu.Enable(ID_CompressAllInstruments, hasDocument);
         menu.Enable(ID_DeleteAllInstruments, hasDocument);
         PopupMenu(&menu);
@@ -5983,7 +5987,8 @@ private:
                             wxMessageDialog choiceDialog(
                                 this,
                                 wxString::Format("Sample asset A%u is used by %u instrument usages.\n\n"
-                                                 "Choose how to apply this compression change.",
+                                                 "Choose how to apply this compression change.\n"
+                                                 "(\"This Instrument Only\" will clone the sample asset, creating a new sample asset with the new compression, and only this instrument will use it. \"All Shared Uses\" will change the compression for all instruments that use this sample asset.)",
                                                  static_cast<unsigned>(assetID),
                                                  static_cast<unsigned>(usageCount)),
                                 "Shared Sample Asset",
