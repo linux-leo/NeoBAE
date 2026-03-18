@@ -849,11 +849,12 @@ static BAE_UNSIGNED_FIXED PV_RecommendSampleRateForCompression(BAERmfEditorSampl
     }
 
     sourceHz = 0;
+#if USE_OPUS_DECODER == TRUE || USE_OPUS_ENCODER == TRUE    
     if (sample->sourceCompressionType == (uint32_t)C_OPUS)
     {
         sourceHz = PV_ExtractOpusInputRateFromOriginalSnd(sample);
     }
-
+ #endif    
     /* For live editor sessions, waveform carries the true source domain for
      * uncompressed imports and recent edits. Prefer it when available. */
     if (sourceHz == 0 && sample->waveform)
@@ -6574,9 +6575,7 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track,
             noteOn->blobSize = 0;
             noteOn->bank = note->bank;
             noteOn->program = note->program;
-            noteOn->applyProgram = (unsigned char)((explicitBankMsb[note->channel] ||
-                                                    explicitBankLsb[note->channel] ||
-                                                    explicitProgram[note->channel]) ? 0 : 1);
+            noteOn->applyProgram = 1;
 
             noteOff->tick = note->startTick + note->durationTicks;
             noteOff->sequence = note->noteOffOrder;
@@ -6873,6 +6872,30 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track,
                 }
             }
             previousTick = event->tick;
+                    /* Track channel bank/program state so per-note applyProgram comparisons
+                       remain accurate after mid-track aux program change or bank select events.
+                       Skip meta (0xFF) and sysex (0xF0/0xF7) messages. */
+                    if (event->status != 0xFF && event->status != 0xF0 && event->status != 0xF7 &&
+                        !event->applyProgram)
+                    {
+                        unsigned char evType = (unsigned char)(event->status & 0xF0);
+                        unsigned char evCh  = (unsigned char)(event->status & 0x0F);
+                        if (evType == PROGRAM_CHANGE && event->dataBytes >= 1)
+                        {
+                            currentProgram[evCh] = event->data1;
+                        }
+                        else if (evType == CONTROL_CHANGE && event->dataBytes >= 2)
+                        {
+                            if (event->data1 == BANK_MSB)
+                            {
+                                currentBank[evCh] = (uint16_t)((((uint16_t)event->data2) << 7) | (currentBank[evCh] & 0x7F));
+                            }
+                            else if (event->data1 == BANK_LSB)
+                            {
+                                currentBank[evCh] = (uint16_t)((currentBank[evCh] & 0x3F80) | (uint16_t)(event->data2 & 0x7F));
+                            }
+                        }
+                    }
         }
         XDisposePtr(events);
     }
@@ -7494,12 +7517,16 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                     break;
             }
             encodeCompSubType = compSubType;
+
+#if USE_OPUS_ENCODER == TRUE || USE_OPUS_DECODER == TRUE
             if (compType == C_OPUS)
             {
                 encodeCompSubType = PV_ComposeOpusEncodeSubType(compSubType, sample->targetOpusMode);
                 sampleWasEncodedOpus = TRUE;
             }
-            else if (compType == C_MPEG_32 || compType == C_MPEG_40 || compType == C_MPEG_48 ||
+            else
+#endif            
+            if (compType == C_MPEG_32 || compType == C_MPEG_40 || compType == C_MPEG_48 ||
                      compType == C_MPEG_56 || compType == C_MPEG_64 || compType == C_MPEG_80 ||
                      compType == C_MPEG_96 || compType == C_MPEG_112 || compType == C_MPEG_128 ||
                      compType == C_MPEG_160 || compType == C_MPEG_192 || compType == C_MPEG_224 ||
@@ -7507,7 +7534,13 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             {
                 sampleWasEncodedMpeg = TRUE;
             }
-
+#if USE_VORBIS_ENCODER == TRUE && USE_VORBIS_DECODER == TRUE            
+            else if (compType == C_VORBIS)
+            {
+                sampleWasEncodedMpeg = TRUE;
+            }
+#endif            
+#if USE_OPUS_ENCODER == TRUE && USE_OPUS_DECODER == TRUE
             if (sample->sourceCompressionType == (uint32_t)C_OPUS &&
                 compType != C_OPUS)
             {
@@ -7534,7 +7567,6 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 }
             }
 
-#if USE_OPUS_ENCODER == TRUE || USE_OPUS_DECODER == TRUE
             /*
              * Some editor paths can leave a mono source represented as dual-mono
              * PCM (L == R) while preserving sampleInfo.channels = 1. Keep Opus
@@ -7722,6 +7754,9 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 loopStart = (int32_t)writeWaveform.startLoop;
                 loopEnd = (int32_t)writeWaveform.endLoop;
 
+
+#if USE_OPUS_ENCODER == TRUE && USE_OPUS_DECODER == TRUE
+
                 if (compType == C_OPUS && sample->opusUseRoundTripResampling)
                 {
                     if (loopStart < 0 || loopEnd <= loopStart ||
@@ -7749,6 +7784,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                     }
                 }
                 else
+#endif
                 {
                     PV_RemapLoopPointsToFrameCount(writeWaveform.waveFrames,
                                                    encodedFrames,
@@ -7758,6 +7794,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
 
                 writeWaveform.startLoop = (uint32_t)loopStart;
                 writeWaveform.endLoop = (uint32_t)loopEnd;
+#if USE_OPUS_ENCODER == TRUE && USE_OPUS_DECODER == TRUE                
                 if (compType == C_OPUS && sample->opusUseRoundTripResampling)
                 {
                     BAE_STDERR("[RMF Save] Sample[%u] Opus RT loop keep/clamp srcFrames=%u encFrames=%u -> %u-%u\n",
@@ -7768,6 +7805,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                                (unsigned)writeWaveform.endLoop);
                 }
                 else
+#endif                
                 {
                     BAE_STDERR("[RMF Save] Sample[%u] loop remap srcFrames=%u encFrames=%u -> %u-%u\n",
                                (unsigned)index,
