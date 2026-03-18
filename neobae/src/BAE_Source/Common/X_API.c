@@ -1411,6 +1411,8 @@ XFILE XFileOpenResourceFromMemory(XPTR pResource, uint32_t resourceLength, XBOOL
         pReference->pResourceData = pResource;
         pReference->resMemLength = resourceLength;
         pReference->resMemOffset = 0;
+        pReference->ownsResourceData = FALSE;
+        pReference->resizeResourceData = FALSE;
         pReference->resourceFile = TRUE;
 
         pReference->allowMemCopy = TRUE;
@@ -1472,6 +1474,8 @@ XFILE XFileOpenResource(XFILENAME *file, XBOOL readOnly)
         pReference->resourceFile = TRUE;
         pReference->fileValidID = XPI_BLOCK_3_ID;
         pReference->pResourceData = NULL;
+        pReference->ownsResourceData = FALSE;
+        pReference->resizeResourceData = FALSE;
         pReference->allowMemCopy = TRUE;
         pReference->readOnly = readOnly;
 
@@ -1564,6 +1568,69 @@ XFILE XFileOpenResource(XFILENAME *file, XBOOL readOnly)
     return pReference;
 }
 
+XFILE XFileOpenVirtualResource(int32_t resourceID)
+{
+    XFILENAME *pReference;
+    XFILERESOURCEMAP map;
+    int16_t err;
+
+    err = 0;
+    pReference = (XFILENAME *)XNewPtr((int32_t)sizeof(XFILENAME));
+    if (!pReference)
+    {
+        return NULL;
+    }
+
+    pReference->fileValidID = XPI_BLOCK_3_ID;
+    pReference->fileReference = 0;
+    pReference->resourceFile = TRUE;
+    pReference->readOnly = FALSE;
+    pReference->allowMemCopy = TRUE;
+    pReference->pCache = NULL;
+    XSetMemory(&pReference->memoryCacheEntry, sizeof(XFILE_CACHED_ITEM), 0);
+    pReference->pResourceData = XNewPtr((int32_t)sizeof(XFILERESOURCEMAP));
+    pReference->resMemLength = (pReference->pResourceData != NULL) ? (int32_t)sizeof(XFILERESOURCEMAP) : 0;
+    pReference->resMemOffset = 0;
+    pReference->ownsResourceData = TRUE;
+    pReference->resizeResourceData = TRUE;
+
+    if (!pReference->pResourceData)
+    {
+        XDisposePtr(pReference);
+        return NULL;
+    }
+
+    if (PV_AddResourceFileToOpenFiles(pReference))
+    {
+        XDisposePtr(pReference->pResourceData);
+        XDisposePtr(pReference);
+        return NULL;
+    }
+
+    XPutLong(&map.mapID, resourceID);
+    XPutLong(&map.version, 1);
+    XPutLong(&map.totalResources, 0);
+
+    if (XFileSetPosition(pReference, 0L) != 0 ||
+        XFileWrite(pReference, &map, (int32_t)sizeof(XFILERESOURCEMAP)) != 0)
+    {
+        err = 1;
+    }
+
+    if (err)
+    {
+        PV_RemoveResourceFileFromOpenFiles(pReference);
+        if (pReference->pResourceData)
+        {
+            XDisposePtr(pReference->pResourceData);
+        }
+        XDisposePtr(pReference);
+        return NULL;
+    }
+
+    return pReference;
+}
+
 XFILE XFileOpenForReadFromMemory(XPTR pMemoryBlock, uint32_t memoryBlockSize)
 {
     XFILENAME   *pReference;
@@ -1574,6 +1641,8 @@ XFILE XFileOpenForReadFromMemory(XPTR pMemoryBlock, uint32_t memoryBlockSize)
         pReference->pResourceData = pMemoryBlock;
         pReference->resMemLength = memoryBlockSize;
         pReference->resMemOffset = 0;
+        pReference->ownsResourceData = FALSE;
+        pReference->resizeResourceData = FALSE;
         pReference->resourceFile = FALSE;
         pReference->allowMemCopy = TRUE;
         pReference->fileValidID = XPI_BLOCK_3_ID;
@@ -1594,6 +1663,8 @@ XFILE XFileOpenForRead(XFILENAME *file)
         pReference->resourceFile = FALSE;
         pReference->fileValidID = XPI_BLOCK_3_ID;
         pReference->pResourceData = NULL;
+        pReference->ownsResourceData = FALSE;
+        pReference->resizeResourceData = FALSE;
         pReference->allowMemCopy = TRUE;
         pReference->pCache = NULL;
 
@@ -1619,6 +1690,8 @@ XFILE XFileOpenForWrite(XFILENAME *file, XBOOL create)
         pReference->resourceFile = FALSE;
         pReference->fileValidID = XPI_BLOCK_3_ID;
         pReference->pResourceData = NULL;
+        pReference->ownsResourceData = FALSE;
+        pReference->resizeResourceData = FALSE;
         pReference->allowMemCopy = TRUE;
         pReference->pCache = NULL;
 
@@ -1657,6 +1730,10 @@ void XFileClose(XFILE fileRef)
         pReference->fileValidID = (int32_t)XPI_DEAD_ID;
         if (pReference->pResourceData)
         {
+            if (pReference->ownsResourceData)
+            {
+                XDisposePtr(pReference->pResourceData);
+            }
             pReference->pResourceData = NULL;   // clear memory file access
         }
         else
@@ -1708,7 +1785,41 @@ XERR XFileWrite(XFILE fileRef, XPTRC buffer, int32_t bufferLength)
     {
         if (pReference->pResourceData)
         {
-            return -1;  // can't write a memory resource
+            int32_t requiredLength;
+
+            if (pReference->readOnly || !pReference->resizeResourceData)
+            {
+                return -1;
+            }
+            if (bufferLength < 0)
+            {
+                return -1;
+            }
+            requiredLength = pReference->resMemOffset + bufferLength;
+            if (requiredLength < pReference->resMemOffset)
+            {
+                return -1;
+            }
+            if (requiredLength > pReference->resMemLength)
+            {
+                XPTR grown;
+
+                grown = XResizePtr(pReference->pResourceData, requiredLength);
+                if (!grown)
+                {
+                    return -1;
+                }
+                pReference->pResourceData = grown;
+                pReference->resMemLength = requiredLength;
+            }
+            if (bufferLength > 0)
+            {
+                XBlockMove((XPTR)buffer,
+                           (char *)pReference->pResourceData + pReference->resMemOffset,
+                           bufferLength);
+            }
+            pReference->resMemOffset += bufferLength;
+            return 0;
         }
         else
         {
@@ -1806,14 +1917,77 @@ XERR XFileSetLength(XFILE fileRef, uint32_t newSize)
     pReference = fileRef;
     if (PV_XFileValid(fileRef))
     {
-        if (pReference->pResourceData == NULL)
-        {   // not a memory file
+        if (pReference->pResourceData)
+        {
+            if (pReference->readOnly || !pReference->resizeResourceData)
+            {
+                error = -1;
+            }
+            else
+            {
+                XPTR grown;
+
+                grown = XResizePtr(pReference->pResourceData, (int32_t)newSize);
+                if (!grown && newSize > 0)
+                {
+                    error = -1;
+                }
+                else
+                {
+                    pReference->pResourceData = grown;
+                    pReference->resMemLength = (int32_t)newSize;
+                    if (pReference->resMemOffset > pReference->resMemLength)
+                    {
+                        pReference->resMemOffset = pReference->resMemLength;
+                    }
+                }
+            }
+        }
+        else
+        {
             error = BAE_SetFileLength(pReference->fileReference, newSize);
         }
     }
     return (error) ? -1 : 0;
 }
 #endif
+
+XERR XFileGetMemoryFileAsData(XFILE fileRef, XPTR *ppData, int32_t *pSize)
+{
+    XFILENAME *pReference;
+    XPTR copy;
+
+    if (!ppData || !pSize)
+    {
+        return -1;
+    }
+    *ppData = NULL;
+    *pSize = 0;
+
+    pReference = fileRef;
+    if (!PV_XFileValid(fileRef) || !pReference->pResourceData)
+    {
+        return -1;
+    }
+    if (pReference->resMemLength < 0)
+    {
+        return -1;
+    }
+    if (pReference->resMemLength == 0)
+    {
+        return 0;
+    }
+
+    copy = XNewPtr(pReference->resMemLength);
+    if (!copy)
+    {
+        return -1;
+    }
+    XBlockMove(pReference->pResourceData, copy, pReference->resMemLength);
+    *ppData = copy;
+    *pSize = pReference->resMemLength;
+    return 0;
+}
 
 int32_t XFileGetLength(XFILE fileRef)
 {

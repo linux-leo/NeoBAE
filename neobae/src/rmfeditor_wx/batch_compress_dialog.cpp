@@ -1,6 +1,53 @@
 #include "batch_compress_dialog.h"
 
-BatchCompressDialog::BatchCompressDialog(wxWindow *parent, const std::vector<uint32_t> &sampleIndices, bool compressAll)
+namespace {
+
+static std::pair<int, int> CompressionTypeToCodecBitrate(BAERmfEditorCompressionType t, bool opusRoundTrip)
+{
+    switch (t)
+    {
+        case BAE_EDITOR_COMPRESSION_DONT_CHANGE: return std::make_pair(0, 0);
+        case BAE_EDITOR_COMPRESSION_PCM:         return std::make_pair(1, 0);
+        case BAE_EDITOR_COMPRESSION_ADPCM:       return std::make_pair(2, 0);
+        case BAE_EDITOR_COMPRESSION_MP3_32K:     return std::make_pair(3, 0);
+        case BAE_EDITOR_COMPRESSION_MP3_48K:     return std::make_pair(3, 1);
+        case BAE_EDITOR_COMPRESSION_MP3_64K:     return std::make_pair(3, 2);
+        case BAE_EDITOR_COMPRESSION_MP3_96K:     return std::make_pair(3, 3);
+        case BAE_EDITOR_COMPRESSION_MP3_128K:    return std::make_pair(3, 4);
+        case BAE_EDITOR_COMPRESSION_MP3_192K:    return std::make_pair(3, 5);
+        case BAE_EDITOR_COMPRESSION_MP3_256K:    return std::make_pair(3, 6);
+        case BAE_EDITOR_COMPRESSION_MP3_320K:    return std::make_pair(3, 7);
+        case BAE_EDITOR_COMPRESSION_VORBIS_32K:  return std::make_pair(4, 0);
+        case BAE_EDITOR_COMPRESSION_VORBIS_48K:  return std::make_pair(4, 1);
+        case BAE_EDITOR_COMPRESSION_VORBIS_64K:  return std::make_pair(4, 2);
+        case BAE_EDITOR_COMPRESSION_VORBIS_80K:  return std::make_pair(4, 3);
+        case BAE_EDITOR_COMPRESSION_VORBIS_96K:  return std::make_pair(4, 4);
+        case BAE_EDITOR_COMPRESSION_VORBIS_128K: return std::make_pair(4, 5);
+        case BAE_EDITOR_COMPRESSION_VORBIS_160K: return std::make_pair(4, 6);
+        case BAE_EDITOR_COMPRESSION_VORBIS_192K: return std::make_pair(4, 7);
+        case BAE_EDITOR_COMPRESSION_VORBIS_256K: return std::make_pair(4, 8);
+        case BAE_EDITOR_COMPRESSION_FLAC:        return std::make_pair(5, 0);
+        case BAE_EDITOR_COMPRESSION_OPUS_12K:    return std::make_pair(opusRoundTrip ? 7 : 6, 0);
+        case BAE_EDITOR_COMPRESSION_OPUS_16K:    return std::make_pair(opusRoundTrip ? 7 : 6, 1);
+        case BAE_EDITOR_COMPRESSION_OPUS_24K:    return std::make_pair(opusRoundTrip ? 7 : 6, 2);
+        case BAE_EDITOR_COMPRESSION_OPUS_32K:    return std::make_pair(opusRoundTrip ? 7 : 6, 3);
+        case BAE_EDITOR_COMPRESSION_OPUS_48K:    return std::make_pair(opusRoundTrip ? 7 : 6, 4);
+        case BAE_EDITOR_COMPRESSION_OPUS_64K:    return std::make_pair(opusRoundTrip ? 7 : 6, 5);
+        case BAE_EDITOR_COMPRESSION_OPUS_96K:    return std::make_pair(opusRoundTrip ? 7 : 6, 6);
+        case BAE_EDITOR_COMPRESSION_OPUS_128K:   return std::make_pair(opusRoundTrip ? 7 : 6, 7);
+        case BAE_EDITOR_COMPRESSION_OPUS_256K:   return std::make_pair(opusRoundTrip ? 7 : 6, 8);
+        default:                                  return std::make_pair(6, 7);
+    }
+}
+
+}
+
+BatchCompressDialog::BatchCompressDialog(wxWindow *parent,
+                                         const std::vector<uint32_t> &sampleIndices,
+                                         bool compressAll,
+                                         BAERmfEditorCompressionType initialCompressionType,
+                                         BAERmfEditorOpusMode initialOpusMode,
+                                         bool initialOpusRoundTrip)
     : wxDialog(parent, wxID_ANY, compressAll ? "Compress All Instruments" : "Compress Instrument",
                wxDefaultPosition, wxSize(450, 320), wxDEFAULT_DIALOG_STYLE),
       m_sampleIndices(sampleIndices),
@@ -26,7 +73,16 @@ BatchCompressDialog::BatchCompressDialog(wxWindow *parent, const std::vector<uin
     m_codecChoice->Append("VORBIS");
     m_codecChoice->Append("FLAC");
     m_codecChoice->Append("OPUS");
-    m_codecChoice->SetSelection(DEFAULT_CODEC); // Default to OPUS
+    m_codecChoice->Append("OPUS (Round-Trip)");
+    {
+        std::pair<int, int> sel = CompressionTypeToCodecBitrate(initialCompressionType, initialOpusRoundTrip);
+        int codecSel = sel.first;
+        if (codecSel < 0 || codecSel >= CODEC_CHOICES_COUNT)
+        {
+            codecSel = DEFAULT_CODEC;
+        }
+        m_codecChoice->SetSelection(codecSel);
+    }
     codecSizer->Add(codecLabel, 0, wxALL | wxALIGN_CENTER_VERTICAL, 5);
     codecSizer->Add(m_codecChoice, 1, wxALL | wxEXPAND, 5);
     mainSizer->Add(codecSizer, 0, wxEXPAND | wxLEFT | wxRIGHT, 10);
@@ -39,7 +95,18 @@ BatchCompressDialog::BatchCompressDialog(wxWindow *parent, const std::vector<uin
     bitrateSizer->Add(m_bitrateChoice, 1, wxALL | wxEXPAND, 5);
     mainSizer->Add(bitrateSizer, 0, wxEXPAND | wxLEFT | wxRIGHT, 10);
 
-    UpdateBitrateChoice(DEFAULT_CODEC);
+    {
+        std::pair<int, int> sel = CompressionTypeToCodecBitrate(initialCompressionType, initialOpusRoundTrip);
+        int codecSel = m_codecChoice->GetSelection();
+        int bitrateSel = sel.second;
+
+        UpdateBitrateChoice(codecSel);
+        if (m_bitrateChoice && m_bitrateChoice->IsEnabled() &&
+            bitrateSel >= 0 && bitrateSel < (int)m_bitrateChoice->GetCount())
+        {
+            m_bitrateChoice->SetSelection(bitrateSel);
+        }
+    }
 
     wxBoxSizer *opusModeSizer = new wxBoxSizer(wxHORIZONTAL);
     wxStaticText *opusModeLabel = new wxStaticText(this, wxID_ANY, "Opus Mode:");
@@ -47,8 +114,15 @@ BatchCompressDialog::BatchCompressDialog(wxWindow *parent, const std::vector<uin
     m_opusModeChoice->Append("Audio");
     m_opusModeChoice->Append("Music");
     m_opusModeChoice->Append("Voice");
-    m_opusModeChoice->SetSelection(1);
-    m_opusModeChoice->Enable(true);
+    {
+        int modeSel = 0;
+        if (initialOpusMode == BAE_EDITOR_OPUS_MODE_VOICE)
+        {
+            modeSel = 1;
+        }
+        m_opusModeChoice->SetSelection(modeSel);
+    }
+    m_opusModeChoice->Enable(m_codecChoice->GetSelection() == 6 || m_codecChoice->GetSelection() == 7);
     opusModeSizer->Add(opusModeLabel, 0, wxALL | wxALIGN_CENTER_VERTICAL, 5);
     opusModeSizer->Add(m_opusModeChoice, 1, wxALL | wxEXPAND, 5);
     mainSizer->Add(opusModeSizer, 0, wxEXPAND | wxLEFT | wxRIGHT, 10);
@@ -79,7 +153,7 @@ void BatchCompressDialog::OnCodecSelected(wxCommandEvent &event)
     UpdateBitrateChoice(codecIdx);
     if (m_opusModeChoice)
     {
-        m_opusModeChoice->Enable(codecIdx == 6);
+        m_opusModeChoice->Enable(codecIdx == 6 || codecIdx == 7);
     }
 }
 
@@ -125,6 +199,7 @@ void BatchCompressDialog::UpdateBitrateChoice(int codecIdx)
         m_bitrateChoice->Enable(true);
         break;
 
+    case 7: // OPUS (Round-Trip)
     case 6: // OPUS
         m_bitrateChoice->Append("12k");
         m_bitrateChoice->Append("16k");
@@ -188,6 +263,7 @@ BAERmfEditorCompressionType BatchCompressDialog::GetSelectedCompressionType() co
         }
     }
     case 5: return BAE_EDITOR_COMPRESSION_FLAC;
+    case 7: // OPUS (Round-Trip) uses same Opus bitrate mapping
     case 6: // OPUS
     {
         switch (bitrateIdx)
@@ -212,14 +288,21 @@ BAERmfEditorOpusMode BatchCompressDialog::GetSelectedOpusMode() const
 {
     if (!m_opusModeChoice)
     {
-        return BAE_EDITOR_OPUS_MODE_MUSIC;
+        return BAE_EDITOR_OPUS_MODE_AUDIO;
     }
     switch (m_opusModeChoice->GetSelection())
     {
-        case 0: return BAE_EDITOR_OPUS_MODE_AUDIO;
-        case 2: return BAE_EDITOR_OPUS_MODE_VOICE;
-        case 1:
+        case 1: return BAE_EDITOR_OPUS_MODE_VOICE;
         default:
-            return BAE_EDITOR_OPUS_MODE_MUSIC;
+            return BAE_EDITOR_OPUS_MODE_AUDIO;
     }
+}
+
+bool BatchCompressDialog::GetSelectedOpusRoundTrip() const
+{
+    if (!m_codecChoice)
+    {
+        return false;
+    }
+    return m_codecChoice->GetSelection() == 7;
 }

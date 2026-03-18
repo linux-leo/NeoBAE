@@ -55,6 +55,7 @@ struct InstrumentEditorEditedSample {
     bool hasOriginalData;
     BAERmfEditorSndStorageType sndStorageType;
     BAERmfEditorOpusMode opusMode;
+    bool opusRoundTripResample;
 };
 
 bool ShowInstrumentEditorDialog(wxWindow *parent,

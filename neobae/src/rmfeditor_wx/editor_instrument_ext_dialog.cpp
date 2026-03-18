@@ -1650,6 +1650,7 @@ private:
             m_codecChoice->Append("VORBIS");
             m_codecChoice->Append("FLAC");
             m_codecChoice->Append("OPUS");
+            m_codecChoice->Append("OPUS (Round-Trip)");
             row->Add(m_codecChoice, 0);
             row->Add(new wxStaticText(page, wxID_ANY, "Bitrate"), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 8);
             m_bitrateChoice = new wxChoice(page, wxID_ANY, wxDefaultPosition, wxSize(130, -1));
@@ -1664,9 +1665,60 @@ private:
             sourceRow->Add(m_codecLabel, 0, wxALIGN_CENTER_VERTICAL);
             sizer->Add(sourceRow, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
             m_codecChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) {
+                int oldCodecIdx = -1;
+                int newCodecIdx = m_codecChoice->GetSelection();
+                int currentRateHz = 0;
+                int storedRateHz = 0;
+                uint32_t sampleIndex = static_cast<uint32_t>(-1);
+
+                if (m_currentLocalIndex >= 0 && m_currentLocalIndex < (int)m_samples.size()) {
+                    auto [codecIdx, bitrateIdx] = CompressionTypeToCodecBitrate(m_samples[(size_t)m_currentLocalIndex].compressionType);
+                    (void)bitrateIdx;
+                    oldCodecIdx = codecIdx;
+                    storedRateHz = (int)(m_samples[(size_t)m_currentLocalIndex].sampleInfo.sampledRate >> 16);
+                }
+                if (m_sampleRateSpin) {
+                    currentRateHz = m_sampleRateSpin->GetValue();
+                }
+                if (m_currentLocalIndex >= 0 && m_currentLocalIndex < (int)m_sampleIndices.size()) {
+                    sampleIndex = m_sampleIndices[(size_t)m_currentLocalIndex];
+                }
+
                 UpdateBitrateChoice(m_codecChoice->GetSelection());
                 if (m_opusModeChoice) {
-                    m_opusModeChoice->Enable(m_codecChoice->GetSelection() == 6);
+                    int opusSel = m_codecChoice->GetSelection();
+                    m_opusModeChoice->Enable(opusSel == 6 || opusSel == 7);
+                }
+
+                /* Auto-update sample rate when codec changes only if the user has not
+                 * manually edited the rate field (current == stored).
+                 * Round-Trip preserves source rate — skip auto-update. */
+                if (m_sampleRateSpin &&
+                    sampleIndex != static_cast<uint32_t>(-1) &&
+                    oldCodecIdx >= 0 &&
+                    newCodecIdx >= 0 &&
+                    oldCodecIdx != newCodecIdx &&
+                    newCodecIdx != 7 &&
+                    currentRateHz == storedRateHz) {
+                    int bitrateIdx = m_bitrateChoice && m_bitrateChoice->IsEnabled()
+                        ? m_bitrateChoice->GetSelection()
+                        : 0;
+                    BAERmfEditorCompressionType targetType = CodecBitrateToCompressionType(newCodecIdx, bitrateIdx);
+                    BAE_UNSIGNED_FIXED recommendedRate = 0;
+                    if (BAERmfEditorDocument_GetRecommendedSampleRate(m_document,
+                                                                      sampleIndex,
+                                                                      targetType,
+                                                                      &recommendedRate) == BAE_NO_ERROR) {
+                        int recommendedHz = (int)(recommendedRate >> 16);
+                        if (recommendedHz >= 1 && recommendedHz <= 65535 && recommendedHz != currentRateHz) {
+                            m_sampleRateSpin->SetValue(recommendedHz);
+                            if (!m_loadingUiValues &&
+                                m_currentLocalIndex >= 0 &&
+                                m_currentLocalIndex < (int)m_samples.size()) {
+                                m_samples[(size_t)m_currentLocalIndex].sampleInfo.sampledRate = (BAE_UNSIGNED_FIXED)(recommendedHz << 16);
+                            }
+                        }
+                    }
                 }
             });
         }
@@ -1677,9 +1729,8 @@ private:
             row->Add(new wxStaticText(page, wxID_ANY, "Opus Mode"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
             m_opusModeChoice = new wxChoice(page, wxID_ANY);
             m_opusModeChoice->Append("Audio");
-            m_opusModeChoice->Append("Music");
             m_opusModeChoice->Append("Voice");
-            m_opusModeChoice->SetSelection(1);
+            m_opusModeChoice->SetSelection(0);
             m_opusModeChoice->Enable(false);
             row->Add(m_opusModeChoice, 0);
             sizer->Add(row, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
@@ -1761,7 +1812,8 @@ private:
         memset(&s.sampleInfo, 0, sizeof(s.sampleInfo));
         s.sampleInfo.sampledRate = (BAE_UNSIGNED_FIXED)(22050u << 16);
         s.compressionType = BAE_EDITOR_COMPRESSION_PCM;
-        s.opusMode = BAE_EDITOR_OPUS_MODE_MUSIC;
+        s.opusMode = BAE_EDITOR_OPUS_MODE_AUDIO;
+        s.opusRoundTripResample = false;
         s.sndStorageType = BAE_EDITOR_SND_STORAGE_ESND;
         s.hasOriginalData = false;
 
@@ -1865,6 +1917,7 @@ private:
                 edited.hasOriginalData = (info.hasOriginalData == TRUE);
                 edited.sndStorageType = info.sndStorageType;
                 edited.opusMode = info.opusMode;
+                edited.opusRoundTripResample = (info.opusRoundTripResample == TRUE);
                 m_sampleIndices.push_back(i);
                 m_samples.push_back(edited);
             }
@@ -1944,6 +1997,7 @@ private:
                     default: return BAE_EDITOR_COMPRESSION_VORBIS_128K;
                 }
             case 5: return BAE_EDITOR_COMPRESSION_FLAC;
+            case 7: // OPUS (Round-Trip) – same underlying compression types
             case 6: // OPUS
                 switch (bitrate) {
                     case 0: return BAE_EDITOR_COMPRESSION_OPUS_12K;
@@ -1989,6 +2043,7 @@ private:
                 m_bitrateChoice->SetSelection(0);
                 m_bitrateChoice->Enable(true);
                 break;
+            case 7: // OPUS (Round-Trip) – same bitrates as OPUS
             case 6: // OPUS
                 m_bitrateChoice->Append("12k");
                 m_bitrateChoice->Append("16k");
@@ -2032,11 +2087,11 @@ private:
         BAERmfEditorCompressionType chosen = CodecBitrateToCompressionType(codecIdx, bitrateIdx);
         if (chosen == BAE_EDITOR_COMPRESSION_DONT_CHANGE && !s.hasOriginalData) chosen = BAE_EDITOR_COMPRESSION_PCM;
         s.compressionType = chosen;
+        s.opusRoundTripResample = (codecIdx == 7);
         {
             int sel = m_opusModeChoice->GetSelection();
-            if (sel == 0)      s.opusMode = BAE_EDITOR_OPUS_MODE_AUDIO;
-            else if (sel == 2) s.opusMode = BAE_EDITOR_OPUS_MODE_VOICE;
-            else               s.opusMode = BAE_EDITOR_OPUS_MODE_MUSIC;
+            if (sel == 1)      s.opusMode = BAE_EDITOR_OPUS_MODE_VOICE;
+            else               s.opusMode = BAE_EDITOR_OPUS_MODE_AUDIO;
         }
         {
             int sel = m_sndStorageChoice->GetSelection();
@@ -2079,6 +2134,8 @@ private:
             BAERmfEditorCompressionType effectiveComp = s.compressionType;
             if (!canKeep && effectiveComp == BAE_EDITOR_COMPRESSION_DONT_CHANGE) effectiveComp = BAE_EDITOR_COMPRESSION_PCM;
             auto [codecIdx, bitrateIdx] = CompressionTypeToCodecBitrate(effectiveComp);
+            /* For Round-Trip Opus, promote codec idx from 6 to 7. */
+            if (codecIdx == 6 && s.opusRoundTripResample) codecIdx = 7;
             m_codecChoice->SetSelection(codecIdx);
             m_codecChoice->SetString(0, canKeep ? "Don't Change" : "Don't Change (N/A)");
             UpdateBitrateChoice(codecIdx);
@@ -2086,11 +2143,11 @@ private:
                 m_bitrateChoice->SetSelection(bitrateIdx);
             }
             if (m_opusModeChoice) {
-                int opusModeSel = 1;
+                int opusModeSel = 0;
                 if (s.opusMode == BAE_EDITOR_OPUS_MODE_AUDIO) opusModeSel = 0;
-                else if (s.opusMode == BAE_EDITOR_OPUS_MODE_VOICE) opusModeSel = 2;
+                else if (s.opusMode == BAE_EDITOR_OPUS_MODE_VOICE) opusModeSel = 1;
                 m_opusModeChoice->SetSelection(opusModeSel);
-                m_opusModeChoice->Enable(codecIdx == 6);
+                m_opusModeChoice->Enable(codecIdx == 6 || codecIdx == 7);
             }
         }
         {
@@ -2312,6 +2369,7 @@ private:
             info.hasOriginalData = m_samples[i].hasOriginalData ? TRUE : FALSE;
             info.sndStorageType = m_samples[i].sndStorageType;
             info.opusMode = m_samples[i].opusMode;
+            info.opusRoundTripResample = m_samples[i].opusRoundTripResample ? TRUE : FALSE;
             if (BAERmfEditorDocument_SetSampleInfo(m_document, sampleIndex, &info) != BAE_NO_ERROR) {
                 if (m_cancelUndoCallback) {
                     m_cancelUndoCallback();

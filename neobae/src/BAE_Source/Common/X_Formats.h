@@ -659,6 +659,9 @@ enum
     XType3Header            = 0x80          // New standard type 3 snd resource
 };
 
+// XSoundHeader3 reserved2[0] flag bits
+#define XSOUND_OPUS_ROUNDTRIP_RESAMPLE  0x01  // Opus round-trip resampling: store source rate, decode at 48kHz and time-stretch
+
 // This is the third sample format support by Beatnik.
 //
 typedef struct X_PACKBY1
@@ -1022,6 +1025,11 @@ void XSetSoundLoopPoints(XPTR pRes, int32_t loopStart, int32_t loopEnd);
 void XSetSoundSampleRate(XPTR pRes, XFIXED sampleRate);
 void XSetSoundBaseKey(XPTR pRes, int16_t baseKey);
 int16_t XGetSoundBaseKey(XPTR pRes);
+
+/* Set or clear the XSOUND_OPUS_ROUNDTRIP_RESAMPLE bit in reserved2[0] (XType3Header only). */
+void XSetSoundOpusRoundTripFlag(XPTR pRes, XBOOL enabled);
+/* Return TRUE if the XSOUND_OPUS_ROUNDTRIP_RESAMPLE bit is set. */
+XBOOL XGetSoundOpusRoundTripFlag(XPTR pRes);
 
 XBOOL XGetSoundEmbeddedStatus(XPTR pRes);
 void XSetSoundEmbeddedStatus(XPTR pRes, XBOOL soundEmbedded);

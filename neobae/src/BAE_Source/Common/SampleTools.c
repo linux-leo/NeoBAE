@@ -497,6 +497,42 @@ int16_t  XGetSoundBaseKey(XPTR pRes)
     }
     return baseKey;
 }
+
+/* Set or clear the XSOUND_OPUS_ROUNDTRIP_RESAMPLE bit in reserved2[0].
+ * Only has effect on XType3Header SND resources. */
+void XSetSoundOpusRoundTripFlag(XPTR pRes, XBOOL enabled)
+{
+    register XSoundHeader3      *pType3Buffer;
+    int16_t                    encode;
+
+    pType3Buffer = (XSoundHeader3 *)PV_GetSoundHeaderPtr(pRes, &encode);
+    if (pType3Buffer && encode == XType3Header)
+    {
+        if (enabled)
+        {
+            pType3Buffer->reserved2[0] |= XSOUND_OPUS_ROUNDTRIP_RESAMPLE;
+        }
+        else
+        {
+            pType3Buffer->reserved2[0] &= (unsigned char)~XSOUND_OPUS_ROUNDTRIP_RESAMPLE;
+        }
+    }
+}
+
+/* Return TRUE if the XSOUND_OPUS_ROUNDTRIP_RESAMPLE bit is set. */
+XBOOL XGetSoundOpusRoundTripFlag(XPTR pRes)
+{
+    register XSoundHeader3      *pType3Buffer;
+    int16_t                    encode;
+
+    pType3Buffer = (XSoundHeader3 *)PV_GetSoundHeaderPtr(pRes, &encode);
+    if (pType3Buffer && encode == XType3Header)
+    {
+        return (pType3Buffer->reserved2[0] & XSOUND_OPUS_ROUNDTRIP_RESAMPLE) ? TRUE : FALSE;
+    }
+    return FALSE;
+}
+
 #endif  // USE_CREATION_API == TRUE
 
 //MOE: should probably eliminate "encodedData" and "encodedBytes" and take
@@ -881,7 +917,9 @@ UINT32              startFrame;
 XBYTE*              inIntelOrder;
 XPTR                sampleData;
 XBYTE               order = X_WORD_ORDER;
+XDWORD              roundTripSavedRate;  /* non-zero if XSOUND_OPUS_ROUNDTRIP_RESAMPLE is set */
 
+    roundTripSavedRate = 0;
     inIntelOrder = &order;
     info->size = 0;         //MOE: used outside as a signal of failure?
     info->frames = 0;
@@ -1088,6 +1126,12 @@ XBYTE               order = X_WORD_ORDER;
             /* encodedBytes = Ogg Opus bitstream size; frameCount = decoded PCM frames */
             info->size   = XGetLong(&header3->encodedBytes);
             info->frames = XGetLong(&header3->frameCount);
+            /* If round-trip flag is set, the stored sampleRate is the true source rate
+             * (e.g. 22050); save it before the decode overwrites info->rate with 48000. */
+            if (header3->reserved2[0] & XSOUND_OPUS_ROUNDTRIP_RESAMPLE)
+            {
+                roundTripSavedRate = XGetLong(&header3->sampleRate);
+            }
             break;
 #endif
         default:
@@ -1154,7 +1198,13 @@ XBYTE               order = X_WORD_ORDER;
         XTranslateFromWaveformToSampleData(&decoded, info);
         // must preserve compression type for later use. This matches the data compression
         // type on disk, not in memory.
-        info->compressionType = encoded.compressionType;    
+        info->compressionType = encoded.compressionType;
+        /* Round-trip Opus: restore the stored source rate so the engine
+         * time-stretches the decoded 48 kHz PCM to the correct pitch. */
+        if (roundTripSavedRate != 0)
+        {
+            info->rate = roundTripSavedRate;
+        }
         sampleData = info->pMasterPtr;
     }
     

@@ -2930,8 +2930,7 @@ typedef enum BAERmfEditorSndStorageType
 typedef enum BAERmfEditorOpusMode
 {
     BAE_EDITOR_OPUS_MODE_AUDIO = 0,
-    BAE_EDITOR_OPUS_MODE_MUSIC = 1,
-    BAE_EDITOR_OPUS_MODE_VOICE = 2
+    BAE_EDITOR_OPUS_MODE_VOICE = 1
 } BAERmfEditorOpusMode;
 
 typedef struct BAERmfEditorSampleInfo
@@ -2948,6 +2947,7 @@ typedef struct BAERmfEditorSampleInfo
     BAE_BOOL hasOriginalData;                    /* TRUE if DONT_CHANGE is available */
     BAERmfEditorSndStorageType sndStorageType;   /* file-level container type (esnd/csnd/snd) */
     BAERmfEditorOpusMode opusMode;               /* Opus encoder application/hint mode */
+    BAE_BOOL opusRoundTripResample;              /* For Opus: encode at 48kHz, play back time-stretched at source rate */
 } BAERmfEditorSampleInfo;
 
 /* Global sample asset model.
@@ -3028,6 +3028,9 @@ typedef struct BAERmfEditorInstrumentExtInfo
 
 BAERmfEditorDocument *BAERmfEditorDocument_New(void);
 BAERmfEditorDocument *BAERmfEditorDocument_LoadFromFile(BAEPathName filePath);
+BAERmfEditorDocument *BAERmfEditorDocument_LoadFromMemory(void const *data,
+                                                          uint32_t dataSize,
+                                                          BAEFileType fileTypeHint);
 BAEResult BAERmfEditorDocument_Delete(BAERmfEditorDocument *document);
 BAEResult BAERmfEditorDocument_SetTempoBPM(BAERmfEditorDocument *document, uint32_t bpm);
 BAEResult BAERmfEditorDocument_GetTempoBPM(BAERmfEditorDocument const *document, uint32_t *outBpm);
@@ -3104,6 +3107,10 @@ BAEResult BAERmfEditorDocument_GetSampleCount(BAERmfEditorDocument const *docume
 BAEResult BAERmfEditorDocument_GetSampleInfo(BAERmfEditorDocument const *document,
                                              uint32_t sampleIndex,
                                              BAERmfEditorSampleInfo *outSampleInfo);
+BAEResult BAERmfEditorDocument_GetRecommendedSampleRate(BAERmfEditorDocument const *document,
+                                                        uint32_t sampleIndex,
+                                                        BAERmfEditorCompressionType compressionType,
+                                                        BAE_UNSIGNED_FIXED *outSampleRate);
 BAEResult BAERmfEditorDocument_SetSampleInfo(BAERmfEditorDocument *document,
                                              uint32_t sampleIndex,
                                              BAERmfEditorSampleInfo const *sampleInfo);
@@ -3224,6 +3231,10 @@ BAEResult BAERmfEditorDocument_SetMidiStorageType(BAERmfEditorDocument *document
                                                   BAERmfEditorMidiStorageType storageType);
 BAEResult BAERmfEditorDocument_GetMidiStorageType(BAERmfEditorDocument const *document,
                                                   BAERmfEditorMidiStorageType *outStorageType);
+BAEResult BAERmfEditorDocument_SaveAsRmfToMemory(BAERmfEditorDocument *document,
+                                                 XBOOL useZmfContainer,
+                                                 unsigned char **outData,
+                                                 uint32_t *outSize);
 BAEResult BAERmfEditorDocument_SaveAsRmf(BAERmfEditorDocument *document,
                                          BAEPathName filePath);
 BAEResult BAERmfEditorDocument_SaveAsMidi(BAERmfEditorDocument *document,

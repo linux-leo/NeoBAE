@@ -685,6 +685,8 @@ struct XFILENAME
     XPTR                pResourceData;  // if file is memory based
     int32_t                resMemLength;   // length of memory resource file
     int32_t                resMemOffset;   // current offset of memory resource file
+    XBOOL               ownsResourceData; // TRUE when this XFILE owns pResourceData and must free it
+    XBOOL               resizeResourceData; // TRUE when memory file is writable/resizable
     XBOOL               readOnly;       // TRUE then file is read only
     XBOOL               allowMemCopy;   // if TRUE, when a memory based resource is
                                         // read, a copy will be created otherwise
@@ -757,9 +759,17 @@ XFILE   XFileOpenResource(XFILENAME *file, XBOOL readOnly);
 // will be created, otherwise just a pointer into the mapped resource file
 XFILE   XFileOpenResourceFromMemory(XPTR pResource, uint32_t resourceLength, XBOOL allowCopy);
 
+// Open a writable in-memory resource file initialized with a valid map header.
+// Caller can use normal resource APIs (XAddFileResource/XCleanResourceFile) on it.
+XFILE   XFileOpenVirtualResource(int32_t resourceID);
+
 // Open file as a read only file from a memory pointer. Don't dispose of pMemoryBlock until you
 // have closed the file.
 XFILE XFileOpenForReadFromMemory(XPTR pMemoryBlock, uint32_t memoryBlockSize);
+
+// Copy all bytes from a memory-backed XFILE into a newly allocated buffer.
+// Caller owns *ppData and must free with XDisposePtr.
+XERR XFileGetMemoryFileAsData(XFILE fileRef, XPTR *ppData, int32_t *pSize);
 
 // open file for reading and writing. Direct access.
 XFILE   XFileOpenForRead(XFILENAME *file);
