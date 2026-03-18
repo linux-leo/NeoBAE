@@ -36,22 +36,26 @@ extern "C" {
 #include "editor_pianoroll_panel.h"
 #include "batch_compress_dialog.h"
 
+#define STR2(x) #x
+#define STR(x) STR2(x)
+
 #ifdef __WXMSW__
 #include <wx/msw/winundef.h>
-#endif
+#endif // __WXMSW__
 
-#ifndef GIT_VERSION
-#ifdef _VERSION
-#define GIT_VERSION _VERSION
-#else
-#define GIT_VERSION "unknown"
-#endif // _VERSION
-#endif // GIT_VERSION
+#define VERSION "0.05-alpha"
 
 namespace {
 
-constexpr char const* kVersionString = "0.05 alpha" " (" GIT_VERSION ")";
-
+#ifdef __WXMSW__
+#ifdef GIT_VERSION
+        constexpr char const* kVersionString = VERSION " (" STR(GIT_VERSION) ")";
+#else
+    constexpr char const* kVersionString = VERSION;
+#endif // GIT_VERSION    
+#else
+    constexpr char const* kVersionString = VERSION " (" _VERSION ")";
+#endif
 
 static bool IsOpusCompressionType(BAERmfEditorCompressionType compressionType) {
     switch (compressionType) {
