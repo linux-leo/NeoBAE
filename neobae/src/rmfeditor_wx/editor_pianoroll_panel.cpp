@@ -31,6 +31,12 @@ enum class DragMode {
     SelectBox,
 };
 
+enum class MidiLoopDragMode {
+    None,
+    StartHandle,
+    EndHandle,
+};
+
 enum {
     ID_PianoRollEdit = wxID_HIGHEST + 2000,
     ID_PianoRollDelete,
@@ -410,6 +416,29 @@ public:
         m_cancelUndoCallback = std::move(cancelCallback);
     }
 
+    void SetMidiLoopMarkers(bool enabled, uint32_t startTick, uint32_t endTick) {
+        if (!enabled) {
+            if (m_midiLoopEnabled) {
+                m_midiLoopEnabled = false;
+                Refresh();
+            }
+            return;
+        }
+        if (endTick <= startTick) {
+            endTick = startTick + 1;
+        }
+        if (!m_midiLoopEnabled || m_midiLoopStartTick != startTick || m_midiLoopEndTick != endTick) {
+            m_midiLoopEnabled = true;
+            m_midiLoopStartTick = startTick;
+            m_midiLoopEndTick = endTick;
+            Refresh();
+        }
+    }
+
+    void SetMidiLoopEditCallback(std::function<bool(bool, uint32_t, uint32_t)> callback) {
+        m_midiLoopEditCallback = std::move(callback);
+    }
+
     void RefreshFromDocument(bool clearSelection) {
         if (clearSelection) {
             m_selectedItemKind = PianoRollSelectionKind::None;
@@ -601,6 +630,13 @@ private:
     BAERmfEditorNoteInfo m_dragOriginalNote;
     uint32_t m_dragStartTick;
     int m_dragStartNote;
+    bool m_midiLoopEnabled = false;
+    uint32_t m_midiLoopStartTick = 0;
+    uint32_t m_midiLoopEndTick = 0;
+    bool m_draggingMidiLoop = false;
+    MidiLoopDragMode m_midiLoopDragMode = MidiLoopDragMode::None;
+    uint32_t m_originalMidiLoopStartTick = 0;
+    uint32_t m_originalMidiLoopEndTick = 0;
     uint16_t m_newNoteBank;
     unsigned char m_newNoteProgram;
     std::function<void()> m_selectionChangedCallback;
@@ -610,6 +646,7 @@ private:
     std::function<void(wxString const &)> m_beginUndoCallback;
     std::function<void(wxString const &)> m_commitUndoCallback;
     std::function<void()> m_cancelUndoCallback;
+    std::function<bool(bool, uint32_t, uint32_t)> m_midiLoopEditCallback;
     bool m_dragUndoActive = false;
     wxString m_dragUndoLabel;
     float m_zoomScale;
@@ -835,6 +872,13 @@ private:
         BAERmfEditorNoteInfo noteInfo;
         AutomationHitInfo automationHit;
         long hitNote;
+        MidiLoopDragMode loopDragMode;
+
+        loopDragMode = MidiLoopDragMode::None;
+        if (HitTestMidiLoopHandle(point, &loopDragMode)) {
+            SetCursor(wxCursor(wxCURSOR_SIZEWE));
+            return;
+        }
 
         if (!HasTrack()) {
             SetCursor(wxNullCursor);
@@ -2281,6 +2325,88 @@ private:
         return logicalPoint.y >= scrollY && logicalPoint.y < (scrollY + kPianoRollTopGutter);
     }
 
+    bool HitTestMidiLoopHandle(wxPoint point, MidiLoopDragMode *outMode = nullptr) const {
+        int startX;
+        int endX;
+
+        if (outMode) {
+            *outMode = MidiLoopDragMode::None;
+        }
+        if (!m_midiLoopEnabled || m_midiLoopEndTick <= m_midiLoopStartTick) {
+            return false;
+        }
+        if (!IsPointInStickyRuler(point) || point.x < kPianoRollLeftGutter) {
+            return false;
+        }
+        startX = TickToX(m_midiLoopStartTick);
+        endX = TickToX(m_midiLoopEndTick);
+        if (std::abs(point.x - startX) <= 6) {
+            if (outMode) {
+                *outMode = MidiLoopDragMode::StartHandle;
+            }
+            return true;
+        }
+        if (std::abs(point.x - endX) <= 6) {
+            if (outMode) {
+                *outMode = MidiLoopDragMode::EndHandle;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    void DrawMidiLoopOverlay(wxDC &dc, wxRect const &visibleRect, wxSize const &virtualSize) {
+        int startX;
+        int endX;
+        int shadeLeft;
+        int shadeRight;
+        int scrollPixelsX;
+        int scrollPixelsY;
+        int viewUnitsX;
+        int viewUnitsY;
+        int rulerTop;
+        int rulerBottom;
+
+        if (!m_midiLoopEnabled || m_midiLoopEndTick <= m_midiLoopStartTick) {
+            return;
+        }
+        startX = TickToX(m_midiLoopStartTick);
+        endX = TickToX(m_midiLoopEndTick);
+        if (endX < visibleRect.GetLeft() - 2 || startX > visibleRect.GetRight() + 2) {
+            return;
+        }
+
+        shadeLeft = std::max(startX, kPianoRollLeftGutter);
+        shadeRight = std::max(shadeLeft + 1, endX);
+
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(wxColour(88, 180, 120, 42)));
+        dc.DrawRectangle(shadeLeft,
+                         kPianoRollTopGutter,
+                         shadeRight - shadeLeft,
+                         std::max(1, virtualSize.GetHeight() - kPianoRollTopGutter));
+
+        dc.SetPen(wxPen(wxColour(72, 160, 105), 2));
+        dc.DrawLine(startX, kPianoRollTopGutter, startX, virtualSize.GetHeight());
+        dc.DrawLine(endX, kPianoRollTopGutter, endX, virtualSize.GetHeight());
+
+        GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
+        if (scrollPixelsY <= 0) {
+            scrollPixelsY = 1;
+        }
+        GetViewStart(&viewUnitsX, &viewUnitsY);
+        rulerTop = viewUnitsY * scrollPixelsY;
+        rulerBottom = rulerTop + kPianoRollTopGutter;
+
+        dc.SetBrush(wxBrush(wxColour(72, 160, 105)));
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.DrawRectangle(startX - 3, rulerBottom - 12, 6, 10);
+        dc.DrawRectangle(endX - 3, rulerBottom - 12, 6, 10);
+
+        dc.SetTextForeground(wxColour(46, 120, 79));
+        dc.DrawText("Loop", std::max(kPianoRollLeftGutter + 4, startX + 6), rulerTop + 2);
+    }
+
     long HitTestNote(wxPoint point, BAERmfEditorNoteInfo *noteInfoOut = nullptr) const {
         uint32_t noteCount;
         uint32_t noteIndex;
@@ -2496,6 +2622,7 @@ private:
             dc.DrawRectangle(selectionRect);
         }
         DrawStickyRuler(dc);
+        DrawMidiLoopOverlay(dc, visibleRect, clientSize);
     }
 
     void OnLeftDown(wxMouseEvent &event) {
@@ -2507,6 +2634,19 @@ private:
         SetFocus();
         logicalPoint = CalcUnscrolledPosition(event.GetPosition());
         if (IsPointInStickyRuler(logicalPoint) && logicalPoint.x >= kPianoRollLeftGutter) {
+            MidiLoopDragMode loopDragMode;
+
+            loopDragMode = MidiLoopDragMode::None;
+            if (HitTestMidiLoopHandle(logicalPoint, &loopDragMode)) {
+                m_draggingMidiLoop = true;
+                m_midiLoopDragMode = loopDragMode;
+                m_originalMidiLoopStartTick = m_midiLoopStartTick;
+                m_originalMidiLoopEndTick = m_midiLoopEndTick;
+                if (!HasCapture()) {
+                    CaptureMouse();
+                }
+                return;
+            }
             uint32_t tick;
 
             tick = XToTick(logicalPoint.x);
@@ -2612,6 +2752,33 @@ private:
     }
 
     void OnLeftUp(wxMouseEvent &) {
+        if (m_draggingMidiLoop) {
+            bool changed;
+            bool saved;
+
+            if (HasCapture()) {
+                ReleaseMouse();
+            }
+            changed = (m_midiLoopStartTick != m_originalMidiLoopStartTick) ||
+                      (m_midiLoopEndTick != m_originalMidiLoopEndTick);
+            saved = false;
+            if (changed && m_midiLoopEditCallback) {
+                BeginUndoAction("Edit MIDI Loop Markers");
+                saved = m_midiLoopEditCallback(true, m_midiLoopStartTick, m_midiLoopEndTick);
+                if (saved) {
+                    CommitUndoAction("Edit MIDI Loop Markers");
+                } else {
+                    CancelUndoAction();
+                    m_midiLoopStartTick = m_originalMidiLoopStartTick;
+                    m_midiLoopEndTick = m_originalMidiLoopEndTick;
+                }
+            }
+            m_draggingMidiLoop = false;
+            m_midiLoopDragMode = MidiLoopDragMode::None;
+            Refresh();
+            return;
+        }
+
         RequestStopNotePreview();
         if (m_dragging && HasCapture()) {
             ReleaseMouse();
@@ -2769,6 +2936,28 @@ private:
         BAERmfEditorNoteInfo updatedNote;
 
         if (!m_document) {
+            return;
+        }
+        if (m_draggingMidiLoop) {
+            uint32_t snappedTick;
+
+            if (!event.Dragging() || !event.LeftIsDown()) {
+                return;
+            }
+            logicalPoint = CalcUnscrolledPosition(event.GetPosition());
+            snappedTick = SnapTick(XToTick(logicalPoint.x));
+            if (m_midiLoopDragMode == MidiLoopDragMode::StartHandle) {
+                if (snappedTick >= m_midiLoopEndTick) {
+                    snappedTick = m_midiLoopEndTick - 1;
+                }
+                m_midiLoopStartTick = snappedTick;
+            } else if (m_midiLoopDragMode == MidiLoopDragMode::EndHandle) {
+                if (snappedTick <= m_midiLoopStartTick) {
+                    snappedTick = m_midiLoopStartTick + 1;
+                }
+                m_midiLoopEndTick = snappedTick;
+            }
+            Refresh();
             return;
         }
         if (!m_dragging) {
@@ -3057,6 +3246,22 @@ void PianoRollPanel_SetUndoCallbacks(PianoRollPanel *panel,
                                      std::function<void()> cancelCallback) {
     if (panel) {
         panel->SetUndoCallbacks(std::move(beginCallback), std::move(commitCallback), std::move(cancelCallback));
+    }
+}
+
+void PianoRollPanel_SetMidiLoopMarkers(PianoRollPanel *panel,
+                                       bool enabled,
+                                       uint32_t startTick,
+                                       uint32_t endTick) {
+    if (panel) {
+        panel->SetMidiLoopMarkers(enabled, startTick, endTick);
+    }
+}
+
+void PianoRollPanel_SetMidiLoopEditCallback(PianoRollPanel *panel,
+                                            std::function<bool(bool, uint32_t, uint32_t)> callback) {
+    if (panel) {
+        panel->SetMidiLoopEditCallback(std::move(callback));
     }
 }
 

@@ -32,6 +32,14 @@ void PianoRollPanel_SetUndoCallbacks(PianoRollPanel *panel,
                                      std::function<void(wxString const &)> beginCallback,
                                      std::function<void(wxString const &)> commitCallback,
                                      std::function<void()> cancelCallback);
+void PianoRollPanel_SetMidiLoopMarkers(PianoRollPanel *panel,
+                                       bool enabled,
+                                       uint32_t startTick,
+                                       uint32_t endTick);
+void PianoRollPanel_SetMidiLoopEditCallback(PianoRollPanel *panel,
+                                            std::function<bool(bool enabled,
+                                                               uint32_t startTick,
+                                                               uint32_t endTick)> callback);
 void PianoRollPanel_RefreshFromDocument(PianoRollPanel *panel, bool clearSelection);
 bool PianoRollPanel_GetSelectedNoteInfo(PianoRollPanel *panel, BAERmfEditorNoteInfo *outNoteInfo);
 void PianoRollPanel_SetSelectedNoteInstrument(PianoRollPanel *panel, uint16_t bank, unsigned char program);

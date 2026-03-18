@@ -18,17 +18,18 @@
 - ~~Musical keyboard doesn't stop when key released~~
 - ~~Make it easier to get back to the channel dialog~~
 - ~~Allow export of RMF/ZMF to MIDI with warning about the output file not having custom instruments/samples.~~
-- Visible/editable MIDI Loop representation in piano roll
+- ~~Visible/editable MIDI Loop representation in piano roll~~
 - Interpolation configuration (none, linear, cubic, etc, current is just on/off)
 
 # Future
+- "Clone all used instruments" - Clone used instruments from MIDI stream to RMF instruments, reassigning the notes and events banks/programs as needed
+  - Example: A MIDI uses 0:1 piano. We clone it, it becomes 2:0, we reassign all 0:1 notes to 2:0.  
+- Implement ZSB (Zefie Sound Bank), same deal as RMF/ZMF, used for newer codecs. Uses ZREZ.
 - Tab design, one tab for MIDI data (current), one for instrument and sample data (replace instrument dialog), one for Bank Editing
   - Bank Edit tab has all instruments/samples listed in a large tree
   - Context menu options for Clone/Alias functionality
   - Context menu for compressing one instrument's samples or All instruments samples in the bank like we have for songs
   - Maybe MIDI Data and Bank Editor should be mutually exclusive (show midi data for MID/RMF/ZMF, show Bank Editor for HSB/ZSB)
-
-- "Clone all used instruments" - Clone used instruments from MIDI stream to RMF instruments, reassigning their bank/program as needed
 - `Crazy Dream fix.rmf` plays bass/gt sample instead of saw lead
 - Allow for automation like Volume to be able have a slide on it so its easy to make a fadeout/fadein for example, the edit dialog could have "start (item)" "end (item)"
 - Resizable tracks (allow user to expand or shrink the track by click/dragging the far right end of the ruler)

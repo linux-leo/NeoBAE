@@ -512,6 +512,10 @@ public:
                         [this](wxString const &label) { BeginUndoAction(label); },
                         [this](wxString const &label) { CommitUndoAction(label); },
                         [this]() { CancelUndoAction(); });
+        PianoRollPanel_SetMidiLoopEditCallback(m_pianoRoll,
+                        [this](bool enabled, uint32_t startTick, uint32_t endTick) {
+                            return ApplyMidiLoopMarkersFromPianoRoll(enabled, startTick, endTick);
+                        });
 
         splitter->SplitVertically(sidebar, editorPanel, 240);
         splitter->SetMinimumPaneSize(180);
@@ -752,6 +756,75 @@ private:
         return m_previewLoopCheck ? m_previewLoopCheck->GetValue() : false;
     }
 
+    void SyncPianoRollMidiLoopMarkersFromDocument() {
+        XBOOL enabled;
+        uint32_t startTick;
+        uint32_t endTick;
+        int32_t loopCount;
+
+        if (!m_pianoRoll || !m_document) {
+            if (m_pianoRoll) {
+                PianoRollPanel_SetMidiLoopMarkers(m_pianoRoll, false, 0, 0);
+            }
+            return;
+        }
+
+        enabled = FALSE;
+        startTick = 0;
+        endTick = 0;
+        loopCount = 0;
+        if (BAERmfEditorDocument_GetMidiLoopMarkers(m_document,
+                                                    &enabled,
+                                                    &startTick,
+                                                    &endTick,
+                                                    &loopCount) == BAE_NO_ERROR &&
+            enabled &&
+            endTick > startTick) {
+            PianoRollPanel_SetMidiLoopMarkers(m_pianoRoll, true, startTick, endTick);
+        } else {
+            PianoRollPanel_SetMidiLoopMarkers(m_pianoRoll, false, 0, 0);
+        }
+    }
+
+    bool ApplyMidiLoopMarkersFromPianoRoll(bool enabled, uint32_t startTick, uint32_t endTick) {
+        if (!m_document) {
+            return false;
+        }
+        if (!enabled) {
+            startTick = 0;
+            endTick = 0;
+        } else if (endTick <= startTick) {
+            endTick = startTick + 1;
+        }
+
+        if (BAERmfEditorDocument_SetMidiLoopMarkers(m_document,
+                                                    enabled ? TRUE : FALSE,
+                                                    startTick,
+                                                    endTick,
+                                                    -1) != BAE_NO_ERROR) {
+            return false;
+        }
+
+        m_loadingLoopControls = true;
+        if (m_midiLoopEnableCheck) {
+            m_midiLoopEnableCheck->SetValue(enabled);
+        }
+        if (m_midiLoopStartText) {
+            m_midiLoopStartText->SetValue(FormatLoopTimeUsec(TicksToMicroseconds(startTick)));
+            m_midiLoopStartText->Enable(enabled);
+        }
+        if (m_midiLoopEndText) {
+            m_midiLoopEndText->SetValue(FormatLoopTimeUsec(TicksToMicroseconds(endTick)));
+            m_midiLoopEndText->Enable(enabled);
+        }
+        m_loadingLoopControls = false;
+
+        SyncPianoRollMidiLoopMarkersFromDocument();
+        InvalidatePianoRollPreviewSong();
+        RefreshPlaybackAtCurrentPosition();
+        return true;
+    }
+
     bool IsChannelsPlaybackScopeSelected() const {
         return m_playScopeChoice && m_playScopeChoice->GetSelection() == 2;
     }
@@ -798,6 +871,7 @@ private:
         if (m_midiLoopStartText) m_midiLoopStartText->Enable(m_midiLoopEnableCheck && m_midiLoopEnableCheck->GetValue());
         if (m_midiLoopEndText) m_midiLoopEndText->Enable(m_midiLoopEnableCheck && m_midiLoopEnableCheck->GetValue());
         m_loadingLoopControls = false;
+        SyncPianoRollMidiLoopMarkersFromDocument();
     }
 
     void LoadIniSettings() {
@@ -4844,6 +4918,7 @@ private:
                                                     startTick,
                                                     endTick,
                                                     -1) == BAE_NO_ERROR) {
+            SyncPianoRollMidiLoopMarkersFromDocument();
             InvalidatePianoRollPreviewSong();
             RefreshPlaybackAtCurrentPosition();
         }
