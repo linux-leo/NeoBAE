@@ -40,9 +40,14 @@ extern "C" {
 #include <wx/msw/winundef.h>
 #endif
 
+#ifndef _VERSION
+#define _VERSION "unknown"
+#endif
+
 namespace {
 
-constexpr char const *kVersionString = "0.05 alpha";
+constexpr char const* kVersionString = "0.05 alpha" " (" _VERSION ")";
+
 
 static bool IsOpusCompressionType(BAERmfEditorCompressionType compressionType) {
     switch (compressionType) {
