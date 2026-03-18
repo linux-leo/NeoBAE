@@ -20,6 +20,7 @@
 #include <lame.h>
 
 #define MAX_BITSTREAM_SIZE 8192
+#define LAME_DECODER_PRIMING_SAMPLES 529U
 
 typedef XBOOL (*MPEGFillBufferInternalFn)(void *buffer, void *userRef);
 
@@ -124,14 +125,15 @@ extern "C" uint32_t MPG_EncodeMaxFrames(void *stream){
 }
 extern "C" uint32_t MPG_EncodeMaxFrameSize(void *stream){ return MAX_BITSTREAM_SIZE; }
 
-/* Return the encoder-introduced delay in PCM samples (per channel).
- * Callers should store this as startFrame in the SND header so the decoder
- * knows how many leading samples to skip. */
+/* Return the number of leading PCM samples a decoder should skip.
+ * For LAME this is the encoder delay plus the documented decoder priming
+ * latency (528 + 1 samples) needed to remove the remaining startup gap. */
 extern "C" uint32_t MPG_EncodeGetDelay(void *stream){
     LAMEEncoderStream *s = (LAMEEncoderStream*)stream;
-    if(!s || !s->gf) return 576; /* MPEG1 L3 default */
+    if(!s || !s->gf) return 576U + LAME_DECODER_PRIMING_SAMPLES;
     int d = lame_get_encoder_delay(s->gf);
-    return (d > 0) ? (uint32_t)d : 576;
+    return (d > 0) ? ((uint32_t)d + LAME_DECODER_PRIMING_SAMPLES)
+                   : (576U + LAME_DECODER_PRIMING_SAMPLES);
 }
 
 /* Process: call refill, assemble PCM frames into a buffer sized for lame_encode_buffer_interleaved,

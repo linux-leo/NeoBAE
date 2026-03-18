@@ -851,7 +851,7 @@ XMPEGEncodeData*    mpegEncode;
     OPErr               closeErr;
     uint32_t            encoderDelay;
 
-        /* Capture encoder delay BEFORE XCloseMPEGEncodeStream frees the stream */
+        /* Capture the decoder lead trim BEFORE XCloseMPEGEncodeStream frees the stream. */
         encoderDelay = MPG_EncodeGetDelay(MPEG_ENCODE_PRIVATE(mpegEncode)->encoder);
 
         while (TRUE)
@@ -890,7 +890,7 @@ XMPEGEncodeData*    mpegEncode;
         }
         if ((err == NO_ERR) && startFrame)
         {
-            /* Keep start trim conservative and encoder-driven only. */
+            /* Keep start trim encoder-driven and scoped to freshly encoded streams. */
             *startFrame = encoderDelay;
         }
 

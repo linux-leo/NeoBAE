@@ -1,9 +1,8 @@
 # 0.05a
 - ~~Fix SND export issue~~
 - Sus out sample codec issues
-  - Multiple codec speed/pitch issues
   - MP3 gap + loop points (MUST BE CAREFUL WHAT WE CHANGE)
-  - Opus to mp3 = wrong pitch
+  - Opus to anything = wrong pitch (stop adjusting)
   - ~~Opus loop points~~
   - ~~Opus Dynamic frequency scaling~~
   - ~~neho's crazy compression tactic (Round‑Trip Resampling)~~

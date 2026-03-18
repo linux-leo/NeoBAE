@@ -42,7 +42,7 @@ extern "C" {
 
 namespace {
 
-constexpr char const *kVersionString = "0.04.4 alpha";
+constexpr char const *kVersionString = "0.05 alpha";
 
 static bool IsOpusCompressionType(BAERmfEditorCompressionType compressionType) {
     switch (compressionType) {
@@ -55,6 +55,22 @@ static bool IsOpusCompressionType(BAERmfEditorCompressionType compressionType) {
         case BAE_EDITOR_COMPRESSION_OPUS_96K:
         case BAE_EDITOR_COMPRESSION_OPUS_128K:
         case BAE_EDITOR_COMPRESSION_OPUS_256K:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool IsMpegCompressionType(BAERmfEditorCompressionType compressionType) {
+    switch (compressionType) {
+        case BAE_EDITOR_COMPRESSION_MP3_32K:
+        case BAE_EDITOR_COMPRESSION_MP3_48K:
+        case BAE_EDITOR_COMPRESSION_MP3_64K:
+        case BAE_EDITOR_COMPRESSION_MP3_96K:
+        case BAE_EDITOR_COMPRESSION_MP3_128K:
+        case BAE_EDITOR_COMPRESSION_MP3_192K:
+        case BAE_EDITOR_COMPRESSION_MP3_256K:
+        case BAE_EDITOR_COMPRESSION_MP3_320K:
             return true;
         default:
             return false;
@@ -1430,6 +1446,8 @@ private:
         bool effectiveIsOpusRoundTrip;
         bool retimeDecodedPreviewToIntendedRate;
         bool previewNeedsFrameRateComp;
+        BAEFileType previewCompressedFileType;
+        std::function<BAEResult()> trimDecodedPreviewToSourceWindow;
         uint32_t previewSourceFramesForRate;
         uint32_t previewDecodedFramesForRate;
         constexpr double kMinRateFixed = static_cast<double>(4000U << 16);
@@ -1480,6 +1498,7 @@ private:
                                               !IsOpusCompressionType(compressionOverride));
         previewNeedsFrameRateComp = (sourceIsOpus || IsOpusCompressionType(compressionOverride)) &&
                                     !effectiveIsOpusRoundTrip;
+        previewCompressedFileType = BAE_INVALID_TYPE;
         previewSourceFramesForRate = 0;
         previewDecodedFramesForRate = 0;
         if (!EnsurePlaybackEngine()) {
@@ -1496,28 +1515,6 @@ private:
         }
 
         loadResult = BAE_GENERAL_ERR;
-
-        if (overrideInfo &&
-            compressionOverride != BAE_EDITOR_COMPRESSION_DONT_CHANGE &&
-            compressionOverride != BAE_EDITOR_COMPRESSION_PCM) {
-            wxString compressedPath;
-
-            if (BuildCompressedPreviewSampleFile(sampleIndex, compressionOverride, &compressedPath)) {
-                wxScopedCharBuffer utf8CompressedPath = compressedPath.utf8_str();
-                BAEFileType compressedType = X_DetermineFileTypeByPath(utf8CompressedPath.data());
-                if (compressedType == BAE_INVALID_TYPE) {
-                    compressedType = X_DetermineFileType(utf8CompressedPath.data());
-                }
-                if (compressedType != BAE_INVALID_TYPE) {
-                    loadResult = BAESound_LoadFileSample(m_previewSound,
-                                                         const_cast<char *>(utf8CompressedPath.data()),
-                                                         compressedType);
-                }
-                if (wxFileExists(compressedPath)) {
-                    wxRemoveFile(compressedPath);
-                }
-            }
-        }
 
         /* BAESound_LoadCustomSample expects signed 8-bit PCM input; it internally
            applies XPhase (subtract 128) to convert to the engine's unsigned format.
@@ -1555,6 +1552,43 @@ private:
                 return (rate << 16);
             }
             return rate;
+        };
+
+        auto scanPreviewOnsetFrames = [](void const *data,
+                                         uint32_t frames,
+                                         uint16_t bits,
+                                         uint16_t channels) -> uint32_t {
+            if (!data || frames == 0 || (bits != 8 && bits != 16) || (channels != 1 && channels != 2)) {
+                return 0;
+            }
+
+            if (bits == 16) {
+                int16_t const *samples = static_cast<int16_t const *>(data);
+
+                for (uint32_t frameIndex = 0; frameIndex < frames; ++frameIndex) {
+                    for (uint16_t channelIndex = 0; channelIndex < channels; ++channelIndex) {
+                        int32_t sampleValue = samples[frameIndex * channels + channelIndex];
+
+                        if (sampleValue > 256 || sampleValue < -256) {
+                            return frameIndex;
+                        }
+                    }
+                }
+            } else {
+                uint8_t const *samples = static_cast<uint8_t const *>(data);
+
+                for (uint32_t frameIndex = 0; frameIndex < frames; ++frameIndex) {
+                    for (uint16_t channelIndex = 0; channelIndex < channels; ++channelIndex) {
+                        int32_t sampleValue = static_cast<int32_t>(samples[frameIndex * channels + channelIndex]) - 128;
+
+                        if (sampleValue > 2 || sampleValue < -2) {
+                            return frameIndex;
+                        }
+                    }
+                }
+            }
+
+            return frames;
         };
 
         baseSampleRate = normalizePreviewRate(baseSampleRate);
@@ -1723,6 +1757,186 @@ private:
                                                          0);
             return loadCustomResult;
         };
+
+        trimDecodedPreviewToSourceWindow = [&]() -> BAEResult {
+            BAESampleInfo decodedInfo;
+            void const *sourceWaveData;
+            uint32_t sourceFrames;
+            uint16_t sourceBits;
+            uint16_t sourceChannels;
+            BAE_UNSIGNED_FIXED sourceRate;
+            uint32_t decodedFrames;
+            uint32_t sourceOnset;
+            uint32_t decodedOnset;
+            uint32_t extraLeadFrames;
+            uint32_t trimStartFrames;
+            uint32_t trimmedFrames;
+            uint32_t bytesPerFrame;
+            std::vector<unsigned char> decodedData;
+            constexpr uint32_t kMpegPreviewLeadTrimFrames = 576U + 529U;
+
+            sourceWaveData = nullptr;
+            sourceFrames = (overrideInfo && overrideInfo->waveFrames > 0)
+                ? overrideInfo->waveFrames
+                : sampleInfo.sampleInfo.waveFrames;
+            sourceBits = 16;
+            sourceChannels = 1;
+            sourceRate = 0;
+
+            if (BAERmfEditorDocument_GetSampleWaveformData(m_document,
+                                                           sampleIndex,
+                                                           &sourceWaveData,
+                                                           &sourceFrames,
+                                                           &sourceBits,
+                                                           &sourceChannels,
+                                                           &sourceRate) != BAE_NO_ERROR) {
+                sourceWaveData = nullptr;
+            }
+
+            memset(&decodedInfo, 0, sizeof(decodedInfo));
+            if (BAESound_GetInfo(m_previewSound, &decodedInfo) != BAE_NO_ERROR) {
+                return BAE_GENERAL_ERR;
+            }
+            if ((decodedInfo.bitSize != 8 && decodedInfo.bitSize != 16) ||
+                (decodedInfo.channels != 1 && decodedInfo.channels != 2)) {
+                return BAE_UNSUPPORTED_FORMAT;
+            }
+
+            bytesPerFrame = (static_cast<uint32_t>(decodedInfo.bitSize) / 8U) * static_cast<uint32_t>(decodedInfo.channels);
+            if (bytesPerFrame == 0) {
+                return BAE_BAD_FILE;
+            }
+
+            decodedFrames = decodedInfo.waveFrames;
+            if (decodedFrames == 0) {
+                decodedFrames = decodedInfo.waveSize / bytesPerFrame;
+            }
+            if (decodedFrames == 0) {
+                return BAE_BAD_FILE;
+            }
+
+            decodedData.resize(static_cast<size_t>(decodedFrames) * bytesPerFrame);
+            if (BAESound_GetRawPCMData(m_previewSound,
+                                       reinterpret_cast<char *>(decodedData.data()),
+                                       static_cast<uint32_t>(decodedData.size())) != BAE_NO_ERROR) {
+                return BAE_GENERAL_ERR;
+            }
+
+            sourceOnset = 0;
+            if (sourceWaveData && sourceFrames > 0 &&
+                (sourceBits == 8 || sourceBits == 16) &&
+                (sourceChannels == 1 || sourceChannels == 2)) {
+                sourceOnset = scanPreviewOnsetFrames(sourceWaveData,
+                                                     sourceFrames,
+                                                     sourceBits,
+                                                     sourceChannels);
+            }
+            decodedOnset = scanPreviewOnsetFrames(decodedData.data(),
+                                                  decodedFrames,
+                                                  decodedInfo.bitSize,
+                                                  decodedInfo.channels);
+            extraLeadFrames = (decodedOnset > sourceOnset) ? (decodedOnset - sourceOnset) : 0;
+            trimStartFrames = extraLeadFrames;
+            if (previewCompressedFileType == BAE_MPEG_TYPE && trimStartFrames == 0) {
+                trimStartFrames = kMpegPreviewLeadTrimFrames;
+            }
+            if (trimStartFrames > decodedFrames) {
+                trimStartFrames = decodedFrames;
+            }
+
+            trimmedFrames = decodedFrames - trimStartFrames;
+            if (sourceFrames > 0 && trimmedFrames > sourceFrames) {
+                trimmedFrames = sourceFrames;
+            }
+            if (trimStartFrames == 0 && trimmedFrames == decodedFrames) {
+                return BAE_NO_ERROR;
+            }
+            if (trimmedFrames == 0) {
+                return BAE_BAD_FILE;
+            }
+
+            return BAESound_LoadCustomSample(m_previewSound,
+                                             decodedData.data() + (static_cast<size_t>(trimStartFrames) * bytesPerFrame),
+                                             trimmedFrames,
+                                             decodedInfo.bitSize,
+                                             decodedInfo.channels,
+                                             normalizePreviewRate(decodedInfo.sampledRate),
+                                             0,
+                                             0);
+        };
+
+        if (overrideInfo &&
+            compressionOverride != BAE_EDITOR_COMPRESSION_DONT_CHANGE &&
+            compressionOverride != BAE_EDITOR_COMPRESSION_PCM) {
+            wxString compressedPath;
+
+            if (IsMpegCompressionType(compressionOverride)) {
+                std::vector<unsigned char> reloadedWaveData;
+                uint32_t reloadedFrameCount;
+                uint16_t reloadedBitSize;
+                uint16_t reloadedChannels;
+                BAE_UNSIGNED_FIXED reloadedSampleRate;
+                uint32_t reloadedLoopStart;
+                uint32_t reloadedLoopEnd;
+
+                reloadedFrameCount = 0;
+                reloadedBitSize = 16;
+                reloadedChannels = 1;
+                reloadedSampleRate = 0;
+                reloadedLoopStart = 0;
+                reloadedLoopEnd = 0;
+                if (BuildCompressedPreviewReloadedWaveform(sampleIndex,
+                                                           compressionOverride,
+                                                           &reloadedWaveData,
+                                                           &reloadedFrameCount,
+                                                           &reloadedBitSize,
+                                                           &reloadedChannels,
+                                                           &reloadedSampleRate,
+                                                           &reloadedLoopStart,
+                                                           &reloadedLoopEnd)) {
+                    previewCompressedFileType = BAE_MPEG_TYPE;
+                    if (overrideInfo->sampledRate > 0 && !retimeDecodedPreviewToIntendedRate) {
+                        reloadedSampleRate = overrideInfo->sampledRate;
+                    }
+                    reloadedSampleRate = normalizePreviewRate(reloadedSampleRate);
+                    adaptLoadRateForPitch(reloadedSampleRate, loadRateOctaveShift);
+                    loadResult = loadCustomSampleFromEngineData(reloadedWaveData.data(),
+                                                                reloadedFrameCount,
+                                                                reloadedBitSize,
+                                                                reloadedChannels,
+                                                                reloadedSampleRate,
+                                                                reloadedLoopStart,
+                                                                reloadedLoopEnd);
+                }
+            }
+
+            if (loadResult != BAE_NO_ERROR && BuildCompressedPreviewSampleFile(sampleIndex, compressionOverride, &compressedPath)) {
+                wxScopedCharBuffer utf8CompressedPath = compressedPath.utf8_str();
+                BAEFileType compressedType = X_DetermineFileTypeByPath(utf8CompressedPath.data());
+                if (compressedType == BAE_INVALID_TYPE) {
+                    compressedType = X_DetermineFileType(utf8CompressedPath.data());
+                }
+                if (compressedType != BAE_INVALID_TYPE) {
+                    previewCompressedFileType = compressedType;
+                    loadResult = BAESound_LoadFileSample(m_previewSound,
+                                                         const_cast<char *>(utf8CompressedPath.data()),
+                                                         compressedType);
+                    if (loadResult == BAE_NO_ERROR && previewCompressedFileType == BAE_MPEG_TYPE) {
+                        BAEResult trimResult = trimDecodedPreviewToSourceWindow();
+
+                        if (trimResult != BAE_NO_ERROR) {
+                            fprintf(stderr,
+                                    "[nbstudio] Preview sample %u MP3 trim-to-source failed result=%d\n",
+                                    static_cast<unsigned>(sampleIndex),
+                                    static_cast<int>(trimResult));
+                        }
+                    }
+                }
+                if (wxFileExists(compressedPath)) {
+                    wxRemoveFile(compressedPath);
+                }
+            }
+        }
 
           /* When the caller provides live loop overrides and compressed preview is
               not requested, use raw PCM so loop settings from the UI are honoured. */
@@ -2586,6 +2800,135 @@ private:
         }
 
         *outPath = samplePath;
+        return true;
+    }
+
+    bool BuildCompressedPreviewReloadedWaveform(uint32_t sampleIndex,
+                                                BAERmfEditorCompressionType compressionType,
+                                                std::vector<unsigned char> *outWaveData,
+                                                uint32_t *outFrameCount,
+                                                uint16_t *outBitSize,
+                                                uint16_t *outChannels,
+                                                BAE_UNSIGNED_FIXED *outSampleRate,
+                                                uint32_t *outLoopStart,
+                                                uint32_t *outLoopEnd) {
+        wxString sourceBasePath;
+        wxString sourceDocPath;
+        wxString encodedBasePath;
+        wxString encodedDocPath;
+        wxScopedCharBuffer utf8SourceDocPath;
+        wxScopedCharBuffer utf8EncodedDocPath;
+        BAERmfEditorDocument *tempDoc;
+        BAERmfEditorDocument *previewDoc;
+        BAERmfEditorSampleInfo info;
+        void const *waveData;
+        uint32_t frameCount;
+        uint16_t bitSize;
+        uint16_t channels;
+        BAE_UNSIGNED_FIXED sampleRate;
+        uint32_t bytesPerFrame;
+        std::string displayName;
+
+        if (!m_document || !outWaveData || !outFrameCount || !outBitSize || !outChannels ||
+            !outSampleRate || !outLoopStart || !outLoopEnd) {
+            return false;
+        }
+        if (compressionType == BAE_EDITOR_COMPRESSION_DONT_CHANGE ||
+            compressionType == BAE_EDITOR_COMPRESSION_PCM) {
+            return false;
+        }
+
+        sourceBasePath = wxFileName::CreateTempFileName("nbstudio_cmp_src");
+        if (sourceBasePath.empty()) {
+            return false;
+        }
+        sourceDocPath = sourceBasePath + ".rmf";
+        utf8SourceDocPath = sourceDocPath.utf8_str();
+        if (BAERmfEditorDocument_SaveAsRmf(m_document, const_cast<char *>(utf8SourceDocPath.data())) != BAE_NO_ERROR) {
+            if (wxFileExists(sourceDocPath)) wxRemoveFile(sourceDocPath);
+            if (wxFileExists(sourceBasePath)) wxRemoveFile(sourceBasePath);
+            return false;
+        }
+
+        tempDoc = BAERmfEditorDocument_LoadFromFile(const_cast<char *>(utf8SourceDocPath.data()));
+        if (wxFileExists(sourceDocPath)) wxRemoveFile(sourceDocPath);
+        if (wxFileExists(sourceBasePath)) wxRemoveFile(sourceBasePath);
+        if (!tempDoc) {
+            return false;
+        }
+
+        if (BAERmfEditorDocument_GetSampleInfo(tempDoc, sampleIndex, &info) != BAE_NO_ERROR) {
+            BAERmfEditorDocument_Delete(tempDoc);
+            return false;
+        }
+
+        displayName = info.displayName ? info.displayName : "";
+        info.displayName = const_cast<char *>(displayName.c_str());
+        info.compressionType = compressionType;
+        if (BAERmfEditorDocument_SetSampleInfo(tempDoc, sampleIndex, &info) != BAE_NO_ERROR) {
+            BAERmfEditorDocument_Delete(tempDoc);
+            return false;
+        }
+
+        encodedBasePath = wxFileName::CreateTempFileName("nbstudio_cmp_rld");
+        if (encodedBasePath.empty()) {
+            BAERmfEditorDocument_Delete(tempDoc);
+            return false;
+        }
+        encodedDocPath = encodedBasePath + ".rmf";
+        utf8EncodedDocPath = encodedDocPath.utf8_str();
+        if (BAERmfEditorDocument_SaveAsRmf(tempDoc, const_cast<char *>(utf8EncodedDocPath.data())) != BAE_NO_ERROR) {
+            BAERmfEditorDocument_Delete(tempDoc);
+            if (wxFileExists(encodedDocPath)) wxRemoveFile(encodedDocPath);
+            if (wxFileExists(encodedBasePath)) wxRemoveFile(encodedBasePath);
+            return false;
+        }
+        BAERmfEditorDocument_Delete(tempDoc);
+
+        previewDoc = BAERmfEditorDocument_LoadFromFile(const_cast<char *>(utf8EncodedDocPath.data()));
+        if (wxFileExists(encodedDocPath)) wxRemoveFile(encodedDocPath);
+        if (wxFileExists(encodedBasePath)) wxRemoveFile(encodedBasePath);
+        if (!previewDoc) {
+            return false;
+        }
+
+        waveData = nullptr;
+        frameCount = 0;
+        bitSize = 16;
+        channels = 1;
+        sampleRate = 0;
+        if (BAERmfEditorDocument_GetSampleWaveformData(previewDoc,
+                                                       sampleIndex,
+                                                       &waveData,
+                                                       &frameCount,
+                                                       &bitSize,
+                                                       &channels,
+                                                       &sampleRate) != BAE_NO_ERROR ||
+            !waveData || frameCount == 0) {
+            BAERmfEditorDocument_Delete(previewDoc);
+            return false;
+        }
+        if (BAERmfEditorDocument_GetSampleInfo(previewDoc, sampleIndex, &info) != BAE_NO_ERROR) {
+            BAERmfEditorDocument_Delete(previewDoc);
+            return false;
+        }
+
+        bytesPerFrame = (static_cast<uint32_t>(bitSize) / 8U) * static_cast<uint32_t>(channels);
+        if (bytesPerFrame == 0) {
+            BAERmfEditorDocument_Delete(previewDoc);
+            return false;
+        }
+
+        outWaveData->assign(static_cast<unsigned char const *>(waveData),
+                            static_cast<unsigned char const *>(waveData) + (static_cast<size_t>(frameCount) * bytesPerFrame));
+        *outFrameCount = frameCount;
+        *outBitSize = bitSize;
+        *outChannels = channels;
+        *outSampleRate = sampleRate;
+        *outLoopStart = info.sampleInfo.startLoop;
+        *outLoopEnd = info.sampleInfo.endLoop;
+
+        BAERmfEditorDocument_Delete(previewDoc);
         return true;
     }
 

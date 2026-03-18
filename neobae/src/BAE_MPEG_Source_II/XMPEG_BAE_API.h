@@ -147,7 +147,7 @@ uint32_t MPG_EncodeMaxFrames(void *stream);
 // get max size of an mpeg frame in bytes
 uint32_t MPG_EncodeMaxFrameSize(void *stream);
 
-// get encoder-introduced delay in PCM samples (per channel); use as startFrame in SND header
+// get the PCM lead trim (per channel) needed for newly encoded MP3 data; use as startFrame in SND header
 uint32_t MPG_EncodeGetDelay(void *stream);
 
 // Use these to make your buffer ('data' in MPG_EncodeNewStream) refillable

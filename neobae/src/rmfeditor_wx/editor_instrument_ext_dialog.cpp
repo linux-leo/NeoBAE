@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <climits>
+#include <exception>
 #include <string>
 #include <utility>
 
@@ -179,6 +180,40 @@ private:
         return std::min(127, m_baseNote + m_octaves * 12);
     }
 
+    bool SafeInvokeNoteOn(int note) {
+        try {
+            if (m_noteOn) {
+                m_noteOn(note);
+            }
+            return true;
+        } catch (std::exception const &ex) {
+            fprintf(stderr, "[nbstudio] piano preview note-on exception: %s\n", ex.what());
+        } catch (...) {
+            fprintf(stderr, "[nbstudio] piano preview note-on unknown exception\n");
+        }
+
+        if (m_releaseWatchdog.IsRunning()) {
+            m_releaseWatchdog.Stop();
+        }
+        m_noteIsOn = false;
+        if (HasCapture()) {
+            ReleaseMouse();
+        }
+        return false;
+    }
+
+    void SafeInvokeNoteOff() {
+        try {
+            if (m_noteOff) {
+                m_noteOff();
+            }
+        } catch (std::exception const &ex) {
+            fprintf(stderr, "[nbstudio] piano preview note-off exception: %s\n", ex.what());
+        } catch (...) {
+            fprintf(stderr, "[nbstudio] piano preview note-off unknown exception\n");
+        }
+    }
+
     int WhiteIndexForNote(int note) const {
         int whiteIndex = 0;
         int end = std::min(note - 1, VisibleEndNote());
@@ -342,15 +377,16 @@ private:
         }
         if (note != m_pressedKey) {
             if (m_noteIsOn && m_noteOff) {
-                m_noteOff();
+                SafeInvokeNoteOff();
                 m_noteIsOn = false;
             }
             m_pressedKey = note;
             if (m_noteOn) {
-                m_noteOn(note);
-                m_noteIsOn = true;
-                if (!m_releaseWatchdog.IsRunning()) {
-                    m_releaseWatchdog.Start(25);
+                if (SafeInvokeNoteOn(note)) {
+                    m_noteIsOn = true;
+                    if (!m_releaseWatchdog.IsRunning()) {
+                        m_releaseWatchdog.Start(25);
+                    }
                 }
             }
             Refresh();
@@ -379,15 +415,16 @@ private:
             }
             if (note != m_pressedKey) {
                 if (m_noteIsOn && m_noteOff) {
-                    m_noteOff();
+                    SafeInvokeNoteOff();
                     m_noteIsOn = false;
                 }
                 m_pressedKey = note;
                 if (m_noteOn) {
-                    m_noteOn(note);
-                    m_noteIsOn = true;
-                    if (!m_releaseWatchdog.IsRunning()) {
-                        m_releaseWatchdog.Start(25);
+                    if (SafeInvokeNoteOn(note)) {
+                        m_noteIsOn = true;
+                        if (!m_releaseWatchdog.IsRunning()) {
+                            m_releaseWatchdog.Start(25);
+                        }
                     }
                 }
                 Refresh();
@@ -418,7 +455,7 @@ private:
 
     void StopPressedNote() {
         if (m_noteIsOn && m_noteOff) {
-            m_noteOff();
+            SafeInvokeNoteOff();
         }
         m_noteIsOn = false;
         if (m_releaseWatchdog.IsRunning()) {
