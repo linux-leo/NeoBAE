@@ -1696,12 +1696,20 @@ private:
             m_bitrateChoice->SetSelection(0);
             m_bitrateChoice->Enable(false);
             row->Add(m_bitrateChoice, 0);
-            sizer->Add(row, 0, wxLEFT | wxRIGHT, 8);
 
-            wxBoxSizer *sourceRow = new wxBoxSizer(wxHORIZONTAL);
+            row->Add(new wxStaticText(page, wxID_ANY, "Opus Mode"), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 8);
+            m_opusModeChoice = new wxChoice(page, wxID_ANY);
+            m_opusModeChoice->Append("Audio");
+            m_opusModeChoice->Append("Voice");
+            m_opusModeChoice->SetSelection(0);
+            m_opusModeChoice->Enable(false);
+            row->Add(m_opusModeChoice, 0);
+
+            row->AddStretchSpacer();
             m_codecLabel = new wxStaticText(page, wxID_ANY, "");
-            sourceRow->Add(m_codecLabel, 0, wxALIGN_CENTER_VERTICAL);
-            sizer->Add(sourceRow, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
+            row->Add(m_codecLabel, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 12);
+
+            sizer->Add(row, 0, wxLEFT | wxRIGHT | wxBOTTOM, 6);
             m_codecChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) {
                 int oldCodecIdx = -1;
                 int newCodecIdx = m_codecChoice->GetSelection();
@@ -1729,19 +1737,6 @@ private:
                 }
 
             });
-        }
-
-        /* Opus mode */
-        {
-            wxBoxSizer *row = new wxBoxSizer(wxHORIZONTAL);
-            row->Add(new wxStaticText(page, wxID_ANY, "Opus Mode"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-            m_opusModeChoice = new wxChoice(page, wxID_ANY);
-            m_opusModeChoice->Append("Audio");
-            m_opusModeChoice->Append("Voice");
-            m_opusModeChoice->SetSelection(0);
-            m_opusModeChoice->Enable(false);
-            row->Add(m_opusModeChoice, 0);
-            sizer->Add(row, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
         }
 
         /* Storage type (ESND/CSND/SND) */
@@ -2168,7 +2163,7 @@ private:
             char codecBuf[64] = {};
             uint32_t si = m_sampleIndices[(size_t)localIndex];
             if (BAERmfEditorDocument_GetSampleCodecDescription(m_document, si, codecBuf, sizeof(codecBuf)) == BAE_NO_ERROR) {
-                m_codecLabel->SetLabel(wxString::Format("(source: %s)", wxString::FromUTF8(codecBuf)));
+                m_codecLabel->SetLabel(wxString::Format("Source: %s", wxString::FromUTF8(codecBuf)));
             } else {
                 m_codecLabel->SetLabel(wxString());
             }

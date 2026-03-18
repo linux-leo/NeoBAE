@@ -17,17 +17,13 @@
 - ~~Switch tempfile system to memory loader~~
 
 # 0.06a
-- Move "Opus Mode" into row with Codec/Bitrate in instrument dialog
+- ~~Move "Opus Mode" into row with Codec/Bitrate in instrument dialog~~
 - Add "musical keyboard" to instrument dialog preview.
   - Reference GUI for keybinds
 - ~~Show currently loaded bank somewhere~~
-- Add track name edit field
-- Title filename: currently sticks to last loaded file (media or session). If its currently a media file, and the user saves a session, the title should update to the .nbs session name.
-- Save/Export: populate the filename with the currently loaded file and lowest extension
-  - Extension order: mid, rmf, zmf (functions already exist to determine which are allowed)
-  - Example: Open `foo.rmf`, it has no instruments, click `Export`, should default the export filename to `foo.mid`
-  - Example2: Open `foo2.rmf`, it has 1 instrument, click `Export`, should default the export filename to `foo.rmf`
-  - Example3: Open `foo2.rmf`, it has 1 instrument using FLAC, click `Export`, should default the export filename to `foo.zmf`
+- ~~Add MIDI track rename context menu option~~
+- ~~Title filename: currently sticks to last loaded file (media or session). If its currently a media file, and the user saves a session, the title should update to the .nbs session name.~~
+- ~~Save/Export: populate the filename with the currently loaded file and lowest extension~~
 
 # Future
 - `Crazy Dream fix.rmf` plays bass/gt sample instead of saw lead

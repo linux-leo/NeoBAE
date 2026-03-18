@@ -23,6 +23,7 @@
 #include <wx/slider.h>
 #include <wx/spinctrl.h>
 #include <wx/splitter.h>
+#include <wx/textdlg.h>
 #include <wx/timer.h>
 #include <wx/treectrl.h>
 #include <wx/wx.h>
@@ -43,7 +44,7 @@ extern "C" {
 #include <wx/msw/winundef.h>
 #endif // __WXMSW__
 
-#define VERSION "0.05-alpha"
+#define VERSION "0.06-alpha"
 
 namespace {
 
@@ -98,6 +99,7 @@ static bool IsMidiSaveExtension(wxString const &path) {
 enum {
     ID_TrackAdd = wxID_HIGHEST + 200,
     ID_TrackDelete,
+    ID_TrackRename,
     ID_SampleAdd,
     ID_SampleNewInstrument,
     ID_InstrumentEdit,
@@ -108,6 +110,7 @@ enum {
     ID_NotePreviewTimer,
     ID_CompressInstrument,
     ID_CompressAllInstruments,
+    ID_DeleteAllInstruments,
     ID_CurrentBankDisplay,
     ID_CloneFromBank,
     ID_AliasFromBank,
@@ -312,6 +315,7 @@ public:
         fileMenu = new wxMenu();
         fileMenu->Append(wxID_OPEN, "&Open\tCtrl+O");
         fileMenu->Append(wxID_SAVEAS, "&Export as...\tCtrl+Shift+S");
+        fileMenu->AppendSeparator();
         fileMenu->Append(ID_SaveSession, "Save &Session\tCtrl+S");
         fileMenu->Append(ID_SaveSessionAs, "Save S&ession as...");
         fileMenu->AppendSeparator();
@@ -546,6 +550,7 @@ public:
         m_metadataButton->Bind(wxEVT_BUTTON, &MainFrame::OnMetadata, this);
         Bind(wxEVT_MENU, &MainFrame::OnTrackAdd, this, ID_TrackAdd);
         Bind(wxEVT_MENU, &MainFrame::OnTrackDelete, this, ID_TrackDelete);
+        Bind(wxEVT_MENU, &MainFrame::OnTrackRename, this, ID_TrackRename);
         Bind(wxEVT_MENU, &MainFrame::OnSampleAdd, this, ID_SampleAdd);
         Bind(wxEVT_BUTTON, &MainFrame::OnSampleNewInstrument, this, ID_SampleNewInstrument);
         Bind(wxEVT_MENU, &MainFrame::OnSampleNewInstrument, this, ID_SampleNewInstrument);
@@ -556,6 +561,7 @@ public:
         Bind(wxEVT_MENU, &MainFrame::OnReloadInternalBank, this, ID_ReloadInternalBank);
         Bind(wxEVT_MENU, &MainFrame::OnCompressInstrument, this, ID_CompressInstrument);
         Bind(wxEVT_MENU, &MainFrame::OnCompressAllInstruments, this, ID_CompressAllInstruments);
+        Bind(wxEVT_MENU, &MainFrame::OnDeleteAllInstruments, this, ID_DeleteAllInstruments);
         Bind(wxEVT_MENU, &MainFrame::OnCloneFromBank, this, ID_CloneFromBank);
         Bind(wxEVT_MENU, &MainFrame::OnAliasFromBank, this, ID_AliasFromBank);
         Bind(wxEVT_TIMER, &MainFrame::OnPlaybackTimer, this, ID_PlaybackTimer);
@@ -3361,6 +3367,7 @@ private:
         InvalidatePianoRollPreviewSong();
         ClearUndoHistory();
         m_currentPath = path;
+        m_sessionPath.clear();
         PianoRollPanel_SetDocument(m_pianoRoll, m_document);
         PianoRollPanel_ClearPlayhead(m_pianoRoll);
         m_ignoreSeekEvent = true;
@@ -3449,12 +3456,14 @@ private:
 
     void UpdateFrameTitle() {
         wxString title;
+        wxString displayPath;
 
         title = "NeoBAE Studio v";
         title += kVersionString;
-        if (!m_currentPath.empty()) {
+        displayPath = !m_sessionPath.empty() ? m_sessionPath : m_currentPath;
+        if (!displayPath.empty()) {
             title += " - ";
-            title += wxFileNameFromPath(m_currentPath);
+            title += wxFileNameFromPath(displayPath);
         }
         SetTitle(title);
     }
@@ -3482,6 +3491,10 @@ private:
         int selectedTrack;
         bool requiresZmf;
         bool canSaveAsMidi;
+        wxString sourcePath;
+        wxString preferredExt;
+        wxString defaultDir;
+        wxString defaultFile;
 
         if (!m_document) {
             wxMessageBox("Nothing is loaded.", "Save As RMF", wxOK | wxICON_INFORMATION, this);
@@ -3514,16 +3527,31 @@ private:
         }
 
         requiresZmf = BAERmfEditorDocument_RequiresZmf(saveDoc) != 0;
-          canSaveAsMidi = (BAERmfEditorDocument_CanSaveAsMidi(saveDoc) != 0);
+        canSaveAsMidi = (BAERmfEditorDocument_CanSaveAsMidi(saveDoc) != 0);
         BAERmfEditorDocument_SetMidiStorageType(saveDoc, GetSelectedMidiStorageType());
+
+        sourcePath = !m_sessionPath.empty() ? m_sessionPath : m_currentPath;
+        preferredExt = requiresZmf ? "zmf" : (canSaveAsMidi ? "mid" : "rmf");
+        defaultFile = "untitled." + preferredExt;
+        if (!sourcePath.empty()) {
+            wxFileName sourceName(sourcePath);
+            wxString baseName = sourceName.GetName();
+
+            if (!sourceName.GetPath().empty()) {
+                defaultDir = sourceName.GetPath();
+            }
+            if (!baseName.empty()) {
+                defaultFile = baseName + "." + preferredExt;
+            }
+        }
 
         wxFileDialog dialog(this,
                             requiresZmf ? "Save As ZMF (required by FLAC/Vorbis/Opus samples)"
                                                      : (canSaveAsMidi
                                                          ? "Save As RMF/ZMF/MIDI"
                                                          : "Save As RMF/ZMF (MIDI disabled: custom instruments/samples)"),
-                            wxEmptyString,
-                            wxEmptyString,
+                            defaultDir,
+                            defaultFile,
                             requiresZmf ? "ZMF files (*.zmf)|*.zmf"
                                                      : (canSaveAsMidi
                                                          ? "RMF, ZMF, and MIDI files (*.rmf;*.zmf;*.mid;*.midi)|*.rmf;*.zmf;*.mid;*.midi|RMF and ZMF files (*.rmf;*.zmf)|*.rmf;*.zmf|MIDI files (*.mid;*.midi)|*.mid;*.midi"
@@ -3706,6 +3734,7 @@ private:
         file.Close();
 
         m_sessionPath = path;
+        UpdateFrameTitle();
         SetStatusText(path, 1);
         return true;
     }
@@ -3964,17 +3993,25 @@ private:
 
     void OnTrackContextMenu(wxContextMenuEvent &) {
         wxMenu menu;
+        bool hasTrackSelection;
+
+        hasTrackSelection = GetSelectedTrack() >= 0;
 
         menu.Append(ID_TrackAdd, "Add Track");
+        menu.Append(ID_TrackRename, "Rename Track...");
         menu.Append(ID_TrackDelete, "Delete Track");
+        menu.Enable(ID_TrackDelete, hasTrackSelection);
+        menu.Enable(ID_TrackRename, hasTrackSelection);
         PopupMenu(&menu);
     }
 
     void OnSampleContextMenu(wxContextMenuEvent &) {
         wxMenu menu;
         SampleTreeItemData *selectedData;
+        bool hasDocument;
 
         selectedData = GetSelectedSampleTreeData();
+        hasDocument = (m_document != nullptr);
         if (selectedData) {
             menu.Append(ID_InstrumentEdit, "Edit Instrument...");
             menu.AppendSeparator();
@@ -3987,7 +4024,16 @@ private:
             }
             menu.AppendSeparator();
             menu.Append(ID_CompressAllInstruments, "Compress All Instruments");
+            menu.Append(ID_DeleteAllInstruments, "Delete All Instruments");
+        } else {
+            menu.Append(ID_SampleNewInstrument, "Add Instrument");
+            menu.AppendSeparator();
+            menu.Append(ID_CompressAllInstruments, "Compress All Instruments");
+            menu.Append(ID_DeleteAllInstruments, "Delete All Instruments");
         }
+        menu.Enable(ID_SampleNewInstrument, hasDocument);
+        menu.Enable(ID_CompressAllInstruments, hasDocument);
+        menu.Enable(ID_DeleteAllInstruments, hasDocument);
         PopupMenu(&menu);
     }
 
@@ -4048,6 +4094,54 @@ private:
         if (BAERmfEditorDocument_DeleteTrack(m_document, static_cast<uint16_t>(selectedTrack)) == BAE_NO_ERROR) {
             ClearUndoHistory();
             PopulateTrackList();
+        }
+    }
+
+    void OnTrackRename(wxCommandEvent &) {
+        int selectedTrack;
+        BAERmfEditorTrackInfo trackInfo;
+        wxString currentName;
+        wxTextEntryDialog dialog(this,
+                                 "Enter a track name (leave blank to clear)",
+                                 "Rename Track");
+
+        if (!m_document) {
+            return;
+        }
+        selectedTrack = GetSelectedTrack();
+        if (selectedTrack < 0) {
+            return;
+        }
+        if (BAERmfEditorDocument_GetTrackInfo(m_document,
+                                              static_cast<uint16_t>(selectedTrack),
+                                              &trackInfo) != BAE_NO_ERROR) {
+            return;
+        }
+
+        currentName = wxString::FromUTF8(trackInfo.name && trackInfo.name[0] ? trackInfo.name : nullptr);
+        dialog.SetValue(currentName);
+        if (dialog.ShowModal() != wxID_OK) {
+            return;
+        }
+
+        {
+            wxString newName = dialog.GetValue();
+            wxScopedCharBuffer utf8Name = newName.utf8_str();
+
+            if (!newName.empty() && utf8Name.data() && utf8Name.data()[0] != '\0') {
+                trackInfo.name = const_cast<char *>(utf8Name.data());
+            } else {
+                trackInfo.name = nullptr;
+            }
+            if (BAERmfEditorDocument_SetTrackInfo(m_document,
+                                                  static_cast<uint16_t>(selectedTrack),
+                                                  &trackInfo) == BAE_NO_ERROR) {
+                if (selectedTrack >= 0 && selectedTrack < static_cast<int>(m_trackList->GetCount())) {
+                    m_trackList->SetString(static_cast<unsigned>(selectedTrack),
+                                           BuildTrackLabel(selectedTrack, trackInfo));
+                }
+                SetStatusText("Track renamed", 0);
+            }
         }
     }
 
@@ -5166,6 +5260,50 @@ private:
                 }
             }
             PopulateSampleList();
+        }
+    }
+
+    void OnDeleteAllInstruments(wxCommandEvent &) {
+        uint32_t sampleCount;
+        bool allDeleted;
+
+        if (!m_document) {
+            return;
+        }
+
+        sampleCount = 0;
+        if (BAERmfEditorDocument_GetSampleCount(m_document, &sampleCount) != BAE_NO_ERROR) {
+            wxMessageBox("Failed to enumerate instruments.", "Delete All Instruments", wxOK | wxICON_ERROR, this);
+            return;
+        }
+        if (sampleCount == 0) {
+            wxMessageBox("No instruments to delete.", "Delete All Instruments", wxOK | wxICON_INFORMATION, this);
+            return;
+        }
+
+        if (wxMessageBox(wxString::Format("Delete all %u instruments?", static_cast<unsigned>(sampleCount)),
+                         "Confirm Delete All",
+                         wxYES_NO | wxICON_WARNING,
+                         this) != wxYES) {
+            return;
+        }
+
+        allDeleted = true;
+        for (uint32_t sampleIndex = sampleCount; sampleIndex > 0; --sampleIndex) {
+            if (BAERmfEditorDocument_DeleteSample(m_document, sampleIndex - 1) != BAE_NO_ERROR) {
+                allDeleted = false;
+                break;
+            }
+        }
+
+        PopulateSampleList();
+        if (allDeleted) {
+            SetStatusText("Deleted all instruments", 0);
+        } else {
+            wxMessageBox("Failed while deleting instruments. Some items may remain.",
+                         "Delete All Instruments",
+                         wxOK | wxICON_ERROR,
+                         this);
         }
     }
 
