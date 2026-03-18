@@ -4,6 +4,7 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <zlib.h>
@@ -598,12 +599,7 @@ public:
         }
         StopPlayback(true);
         StopPianoRollPreview(true);
-        if (m_previewSound)
-        {
-            BAESound_Stop(m_previewSound, FALSE);
-            BAESound_Delete(m_previewSound);
-            m_previewSound = nullptr;
-        }
+        StopPreviewSample();
         ShutdownPlaybackEngine();
     }
 
@@ -657,6 +653,7 @@ private:
     BAESong m_notePreviewSong;
     std::vector<unsigned char> m_notePreviewSongBlob;
     BAESound m_previewSound;
+    std::unordered_map<int, BAESound> m_taggedPreviewSounds;
     wxString m_playbackTempPath;
     wxString m_previewSampleTempPath;
     wxTimer m_playbackTimer;
@@ -1588,7 +1585,8 @@ private:
                             int16_t splitVolumeOverride = 0,
                             unsigned char rootKeyOverride = 0xFF,
                             BAERmfEditorCompressionType compressionOverride = BAE_EDITOR_COMPRESSION_DONT_CHANGE,
-                            bool opusRoundTripOverride = false) {
+                            bool opusRoundTripOverride = false,
+                            int previewTag = -1) {
         BAERmfEditorSampleInfo sampleInfo;
         BAEResult loadResult;
         BAEResult startResult;
@@ -1662,6 +1660,28 @@ private:
         if (!EnsurePlaybackEngine()) {
             return false;
         }
+
+        BAESound previousPreviewSound = m_previewSound;
+        BAESound *previewSoundSlot = &m_previewSound;
+        if (previewTag != -1) {
+            previewSoundSlot = &m_taggedPreviewSounds[previewTag];
+            m_previewSound = *previewSoundSlot;
+        }
+        struct PreviewSoundScope final {
+            BAESound &activePreviewSound;
+            BAESound *slot;
+            BAESound originalPreviewSound;
+            bool shouldRestore;
+
+            ~PreviewSoundScope() {
+                if (!shouldRestore) {
+                    return;
+                }
+                *slot = activePreviewSound;
+                activePreviewSound = originalPreviewSound;
+            }
+        } previewSoundScope{m_previewSound, previewSoundSlot, previousPreviewSound, previewTag != -1};
+
         if (m_previewSound) {
             BAESound_Stop(m_previewSound, FALSE);
             BAESound_Delete(m_previewSound);
@@ -2462,12 +2482,33 @@ private:
         return true;
     }
 
+    void StopPreviewSampleForTag(int previewTag) {
+        auto found = m_taggedPreviewSounds.find(previewTag);
+
+        if (found == m_taggedPreviewSounds.end()) {
+            return;
+        }
+        if (found->second) {
+            BAESound_Stop(found->second, FALSE);
+            BAESound_Delete(found->second);
+        }
+        m_taggedPreviewSounds.erase(found);
+    }
+
     void StopPreviewSample() {
         if (m_previewSound) {
             BAESound_Stop(m_previewSound, FALSE);
             BAESound_Delete(m_previewSound);
             m_previewSound = nullptr;
         }
+        for (auto &entry : m_taggedPreviewSounds) {
+            if (!entry.second) {
+                continue;
+            }
+            BAESound_Stop(entry.second, FALSE);
+            BAESound_Delete(entry.second);
+        }
+        m_taggedPreviewSounds.clear();
     }
 
     bool ExportSampleToPath(uint32_t sampleIndex, wxString const &path) {
@@ -5852,20 +5893,24 @@ private:
             [this](wxString const &label) { BeginUndoAction(label); },
             [this](wxString const &label) { CommitUndoAction(label); },
             [this]() { CancelUndoAction(); },
-            [this](uint32_t sampleIndex, int key, BAESampleInfo const *overrideInfo, int16_t splitVolumeOverride, unsigned char rootKeyOverride, BAERmfEditorCompressionType compressionOverride, bool opusRoundTripOverride) {
+            [this](uint32_t sampleIndex, int key, BAESampleInfo const *overrideInfo, int16_t splitVolumeOverride, unsigned char rootKeyOverride, BAERmfEditorCompressionType compressionOverride, bool opusRoundTripOverride, int previewTag) {
                 if (!PreviewSampleAtKey(sampleIndex,
                                         key,
                                         overrideInfo,
                                         splitVolumeOverride,
                                         rootKeyOverride,
                                         compressionOverride,
-                                        opusRoundTripOverride)) {
+                                        opusRoundTripOverride,
+                                        previewTag)) {
                     wxMessageBox("Preview playback failed for this sample.",
                                  "Sample Preview", wxOK | wxICON_ERROR, this);
                 }
             },
             [this]() {
                 StopPreviewSample();
+            },
+            [this](int previewTag) {
+                StopPreviewSampleForTag(previewTag);
             },
             [this](uint32_t sampleIndex, wxString const &path) {
                 return ReplaceSampleFromPath(sampleIndex, path);

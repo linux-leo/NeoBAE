@@ -32,8 +32,9 @@ bool ShowInstrumentExtEditorDialog(
     std::function<void(wxString const &)> beginUndoCallback,
     std::function<void(wxString const &)> commitUndoCallback,
     std::function<void()> cancelUndoCallback,
-    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool)> playCallback,
+    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool, int)> playCallback,
     std::function<void()> stopCallback,
+    std::function<void(int)> stopTaggedCallback,
     std::function<bool(uint32_t, wxString const &)> replaceCallback,
     std::function<bool(uint32_t, wxString const &)> exportCallback,
     /* Output: sample edits (same as existing dialog) */

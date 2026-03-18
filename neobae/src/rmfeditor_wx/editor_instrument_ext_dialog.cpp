@@ -5,6 +5,8 @@
 #include <climits>
 #include <exception>
 #include <string>
+#include <set>
+#include <unordered_map>
 #include <utility>
 
 #include <wx/dcbuffer.h>
@@ -148,17 +150,20 @@ public:
 
     void SetExternalPressedNote(int note) {
         int clamped = std::clamp(note, 0, 127);
-        if (m_externalPressedKey != clamped) {
-            m_externalPressedKey = clamped;
+        m_externalPressedKeys = {clamped};
+        Refresh();
+    }
+
+    void ClearExternalPressedNote() {
+        if (!m_externalPressedKeys.empty()) {
+            m_externalPressedKeys.clear();
             Refresh();
         }
     }
 
-    void ClearExternalPressedNote() {
-        if (m_externalPressedKey >= 0) {
-            m_externalPressedKey = -1;
-            Refresh();
-        }
+    void SetExternalPressedNotes(std::set<int> const &notes) {
+        m_externalPressedKeys = notes;
+        Refresh();
     }
 
     void UpdateVisibleRangeForWidth(int width) {
@@ -183,7 +188,7 @@ private:
     int m_baseNote;
     int m_octaves;
     int m_pressedKey;
-    int m_externalPressedKey = -1;
+    std::set<int> m_externalPressedKeys;
     bool m_noteIsOn;
     wxTimer m_releaseWatchdog;
 
@@ -328,7 +333,9 @@ private:
         float blackKeyWidth = whiteKeyWidth * 0.6f;
         int blackKeyHeight = size.y * 60 / 100;
         int endNote = VisibleEndNote();
-        int highlightedNote = (m_pressedKey >= 0) ? m_pressedKey : m_externalPressedKey;
+        auto isHighlighted = [&](int n) -> bool {
+            return n == m_pressedKey || m_externalPressedKeys.count(n) > 0;
+        };
 
         dc.SetBackground(wxBrush(wxColour(30, 30, 30)));
         dc.Clear();
@@ -338,7 +345,7 @@ private:
             int x1;
             int x2;
             if (WhiteKeyRectForNote(note, size, whiteKeyWidth, &x1, &x2)) {
-                if (note == highlightedNote) {
+                if (isHighlighted(note)) {
                     dc.SetBrush(wxBrush(wxColour(170, 205, 165)));
                     dc.SetPen(wxPen(wxColour(95, 150, 95), 1));
                 } else {
@@ -360,21 +367,28 @@ private:
             }
         }
 
-        /* Highlight pressed key */
-        if (highlightedNote >= 0) {
-            /* Tint the actual pressed key so the feedback is visible while dragging. */
-            if (IsBlackKey(highlightedNote % 12)) {
+        /* Highlight all pressed keys (second pass for black keys) */
+        for (int note = m_baseNote; note <= endNote; ++note) {
+            if (isHighlighted(note) && IsBlackKey(note % 12)) {
                 int bx;
                 int bw;
-                if (BlackKeyRectForNote(highlightedNote, size, whiteKeyWidth, blackKeyWidth, &bx, &bw)) {
+                if (BlackKeyRectForNote(note, size, whiteKeyWidth, blackKeyWidth, &bx, &bw)) {
                     dc.SetBrush(wxBrush(wxColour(70, 110, 70)));
                     dc.SetPen(wxPen(wxColour(160, 220, 160), 1));
                     dc.DrawRectangle(bx, 0, bw, blackKeyHeight);
                 }
             }
+        }
+
+        /* Note label: prefer mouse key, else last keyboard note */
+        int labelNote = m_pressedKey;
+        if (labelNote < 0 && !m_externalPressedKeys.empty()) {
+            labelNote = *m_externalPressedKeys.rbegin();
+        }
+        if (labelNote >= 0) {
             dc.SetFont(wxFont(7, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
             dc.SetTextForeground(wxColour(40, 200, 40));
-            dc.DrawText(wxString::Format("Note: %d", highlightedNote), 4, size.y - 14);
+            dc.DrawText(wxString::Format("Note: %d", labelNote), 4, size.y - 14);
         }
     }
 
@@ -1081,8 +1095,9 @@ public:
                               std::function<void(wxString const &)> beginUndoCallback,
                               std::function<void(wxString const &)> commitUndoCallback,
                               std::function<void()> cancelUndoCallback,
-                              std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool)> playCallback,
+                              std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool, int)> playCallback,
                               std::function<void()> stopCallback,
+                              std::function<void(int)> stopTaggedCallback,
                               std::function<bool(uint32_t, wxString const &)> replaceCallback,
                               std::function<bool(uint32_t, wxString const &)> exportCallback)
         : wxDialog(parent, wxID_ANY, "Edit Instrument", wxDefaultPosition, wxSize(1180, 560),
@@ -1100,6 +1115,7 @@ public:
           m_cancelUndoCallback(std::move(cancelUndoCallback)),
           m_playCallback(std::move(playCallback)),
           m_stopCallback(std::move(stopCallback)),
+          m_stopTaggedCallback(std::move(stopTaggedCallback)),
           m_replaceCallback(std::move(replaceCallback)),
           m_exportCallback(std::move(exportCallback)) {
 
@@ -1138,7 +1154,8 @@ public:
                                m_samples[(size_t)best].splitVolume,
                                m_samples[(size_t)best].rootKey,
                                m_samples[(size_t)best].compressionType,
-                               m_samples[(size_t)best].opusRoundTripResample);
+                               m_samples[(size_t)best].opusRoundTripResample,
+                               -1);
             },
             [this]() {
                 if (m_stopCallback) m_stopCallback();
@@ -1309,8 +1326,9 @@ private:
     std::function<void(wxString const &)> m_beginUndoCallback;
     std::function<void(wxString const &)> m_commitUndoCallback;
     std::function<void()> m_cancelUndoCallback;
-    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool)> m_playCallback;
+    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool, int)> m_playCallback;
     std::function<void()> m_stopCallback;
+    std::function<void(int)> m_stopTaggedCallback;
     std::function<bool(uint32_t, wxString const &)> m_replaceCallback;
     std::function<bool(uint32_t, wxString const &)> m_exportCallback;
 
@@ -1369,8 +1387,7 @@ private:
     wxChoice *m_sndStorageChoice;
     WaveformPanelExt *m_waveformPanel;
     wxButton *m_deleteSampleButton;
-    int m_keyboardPreviewKeyCode = -1;
-    int m_keyboardPreviewNote = -1;
+    std::unordered_map<int, int> m_keyboardPreviewNotes;
 
     static int NormalizeAsciiKeyCode(int keyCode) {
         if (keyCode >= 'a' && keyCode <= 'z') {
@@ -1476,77 +1493,106 @@ private:
         }
     }
 
+    bool TriggerPreviewNote(int note, int previewTag) {
+        int best = -1;
+
+        for (size_t i = 0; i < m_samples.size(); i++) {
+            if (note >= (int)m_samples[i].lowKey && note <= (int)m_samples[i].highKey) {
+                best = (int)i;
+                break;
+            }
+        }
+        if (best < 0) {
+            return false;
+        }
+
+        m_playCallback(m_sampleIndices[(size_t)best], note,
+                       &m_samples[(size_t)best].sampleInfo,
+                       m_samples[(size_t)best].splitVolume,
+                       m_samples[(size_t)best].rootKey,
+                       m_samples[(size_t)best].compressionType,
+                       m_samples[(size_t)best].opusRoundTripResample,
+                       previewTag);
+        return true;
+    }
+
+    void UpdateKeyboardPreviewHighlight() {
+        if (!m_pianoPanel) {
+            return;
+        }
+        if (m_keyboardPreviewNotes.empty()) {
+            m_pianoPanel->ClearExternalPressedNote();
+            return;
+        }
+        std::set<int> activeNotes;
+        for (auto const &kv : m_keyboardPreviewNotes) {
+            activeNotes.insert(kv.second);
+        }
+        m_pianoPanel->SetExternalPressedNotes(activeNotes);
+    }
+
     void StopKeyboardPreviewIfActive() {
-        if (m_keyboardPreviewNote >= 0 && m_stopCallback) {
+        if (!m_keyboardPreviewNotes.empty() && m_stopCallback) {
             m_stopCallback();
         }
+        m_keyboardPreviewNotes.clear();
         if (m_pianoPanel) {
             m_pianoPanel->ClearExternalPressedNote();
         }
-        m_keyboardPreviewKeyCode = -1;
-        m_keyboardPreviewNote = -1;
     }
 
     bool StartKeyboardPreviewForKey(int keyCode) {
         int semitoneOffset;
         int root;
-        int base;
         int note;
+        constexpr int kKeyboardCenterSemitone = 7;
 
         if (!m_playCallback || m_sampleIndices.empty() || IsTextEditingFocus(wxWindow::FindFocus())) {
             return false;
         }
+        keyCode = NormalizeAsciiKeyCode(keyCode);
         semitoneOffset = KeyCodeToSemitoneOffset(keyCode);
         if (semitoneOffset < 0) {
             return false;
         }
-
-        root = m_rootSpin ? m_rootSpin->GetValue() : 60;
-        /* Keep keyboard note sequence centered on the split root key, same as GUI typing mode. */
-        base = std::max(0, root);
-        note = std::clamp(base + semitoneOffset, 0, 127);
-        keyCode = NormalizeAsciiKeyCode(keyCode);
-        if (keyCode == m_keyboardPreviewKeyCode && note == m_keyboardPreviewNote) {
+        if (m_keyboardPreviewNotes.find(keyCode) != m_keyboardPreviewNotes.end()) {
             return true;
         }
 
-        StopKeyboardPreviewIfActive();
+        root = m_rootSpin ? m_rootSpin->GetValue() : 60;
+        note = std::clamp(root + (semitoneOffset - kKeyboardCenterSemitone), 0, 127);
+
         SaveCurrentSampleFromUI();
-
-        {
-            int best = -1;
-            for (size_t i = 0; i < m_samples.size(); i++) {
-                if (note >= (int)m_samples[i].lowKey && note <= (int)m_samples[i].highKey) {
-                    best = (int)i;
-                    break;
-                }
-            }
-            if (best < 0) {
-                return true;
-            }
-            m_playCallback(m_sampleIndices[(size_t)best], note,
-                           &m_samples[(size_t)best].sampleInfo,
-                           m_samples[(size_t)best].splitVolume,
-                           m_samples[(size_t)best].rootKey,
-                           m_samples[(size_t)best].compressionType,
-                           m_samples[(size_t)best].opusRoundTripResample);
+        if (!TriggerPreviewNote(note, keyCode)) {
+            return true;
         }
 
-        m_keyboardPreviewKeyCode = keyCode;
-        m_keyboardPreviewNote = note;
-        if (m_pianoPanel) {
-            m_pianoPanel->SetExternalPressedNote(note);
-        }
+        m_keyboardPreviewNotes[keyCode] = note;
+        UpdateKeyboardPreviewHighlight();
         return true;
     }
 
     void HandleKeyboardPreviewKeyUp(wxKeyEvent &event) {
         int keyCode = NormalizeAsciiKeyCode(event.GetKeyCode());
-        if (keyCode == m_keyboardPreviewKeyCode) {
-            StopKeyboardPreviewIfActive();
+        auto found = m_keyboardPreviewNotes.find(keyCode);
+
+        if (found == m_keyboardPreviewNotes.end()) {
+            event.Skip();
             return;
         }
-        event.Skip();
+
+        m_keyboardPreviewNotes.erase(found);
+
+        if (m_stopTaggedCallback) {
+            m_stopTaggedCallback(keyCode);
+        } else if (m_stopCallback) {
+            m_stopCallback();
+            for (auto const &entry : m_keyboardPreviewNotes) {
+                TriggerPreviewNote(entry.second, entry.first);
+            }
+        }
+
+        UpdateKeyboardPreviewHighlight();
     }
 
     /* ---- Instrument Tab ---- */
@@ -2850,8 +2896,9 @@ bool ShowInstrumentExtEditorDialog(
     std::function<void(wxString const &)> beginUndoCallback,
     std::function<void(wxString const &)> commitUndoCallback,
     std::function<void()> cancelUndoCallback,
-    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool)> playCallback,
+    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool, int)> playCallback,
     std::function<void()> stopCallback,
+    std::function<void(int)> stopTaggedCallback,
     std::function<bool(uint32_t, wxString const &)> replaceCallback,
     std::function<bool(uint32_t, wxString const &)> exportCallback,
     std::vector<uint32_t> *outDeletedSampleIndices,
@@ -2865,6 +2912,7 @@ bool ShowInstrumentExtEditorDialog(
                                      std::move(cancelUndoCallback),
                                      std::move(playCallback),
                                      std::move(stopCallback),
+                                     std::move(stopTaggedCallback),
                                      std::move(replaceCallback),
                                      std::move(exportCallback));
 

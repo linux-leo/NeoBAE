@@ -13,8 +13,15 @@
 - ~~Export only certain channel(s)~~
 
 # 0.07a
-- Changing the program/bank of an note does not reflect in preview/output
-- tick0 note seen as 2:0 instead of 2:4, missing CC? (`Rhodium.rmf`)
+- tick0 note seen as 2:0 instead of 2:4, missing CC? (`Rhodium.rmf`) (tick0 seems fine (2:1) for `DoorSlam.rmf`)
+- ~~"Musical Keyboard"~~
+  - ~~releasing key sometimes doesnt stop playback~~
+  - ~~cannot play multiple notes~~
+  - ~~highlight ALL active notes~~
+  - ~~center "musical keyboard" around rootKey~~
+- Changing the program/bank of a note does not reflect in preview/output
+- "Clone all used instruments" - Clone used instruments from MIDI stream to RMF instruments, reassigning the notes and events banks/programs as needed
+  - Example: A MIDI uses 0:1 piano. We clone it, it becomes 2:0, we reassign all 0:1 notes to 2:0.  
 - ~~Musical keyboard doesn't stop when key released~~
 - ~~Make it easier to get back to the channel dialog~~
 - ~~Allow export of RMF/ZMF to MIDI with warning about the output file not having custom instruments/samples.~~
@@ -22,8 +29,6 @@
 - Interpolation configuration (none, linear, cubic, etc, current is just on/off)
 
 # Future
-- "Clone all used instruments" - Clone used instruments from MIDI stream to RMF instruments, reassigning the notes and events banks/programs as needed
-  - Example: A MIDI uses 0:1 piano. We clone it, it becomes 2:0, we reassign all 0:1 notes to 2:0.  
 - Implement ZSB (Zefie Sound Bank), same deal as RMF/ZMF, used for newer codecs. Uses ZREZ.
 - Tab design, one tab for MIDI data (current), one for instrument and sample data (replace instrument dialog), one for Bank Editing
   - Bank Edit tab has all instruments/samples listed in a large tree
