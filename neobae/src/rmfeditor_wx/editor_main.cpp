@@ -1607,14 +1607,17 @@ private:
         BAERmfEditorSampleInfo sampleInfo;
         unsigned char channel;
         BAEResult result;
+        BAEResult loadInstrumentResult;
         uint32_t previewEventTime;
         uint32_t previewNoteOnTime;
         bool armPreview;
         uint32_t instID;
+        uint32_t selectedInstID;
         uint32_t bankId;
         uint32_t progId;
         uint32_t noteId;
         BAE_INSTRUMENT instrumentID;
+        BAE_INSTRUMENT translatedInstrumentID;
         unsigned char previewProgram;
         unsigned char previewBank;
         bool hasDialogOverrides;
@@ -1657,14 +1660,17 @@ private:
         previewProgram = sampleInfo.program;
         previewBank = 0;
         instID = 0;
+        selectedInstID = 0;
         bankId = 0;
         progId = 0;
         noteId = 0;
         instrumentID = 0;
+        translatedInstrumentID = 0;
         if (BAERmfEditorDocument_GetInstIDForSample(m_document, sampleIndex, &instID) == BAE_NO_ERROR &&
             instID != 0 &&
             TranslateInstrumentToBankProgram(instID, &bankId, &progId, &noteId) == BAE_NO_ERROR)
         {
+            selectedInstID = instID;
             previewProgram = static_cast<unsigned char>(std::clamp<uint32_t>(progId, 0, 127));
             previewBank = static_cast<unsigned char>(std::clamp<uint32_t>(bankId, 0, 127));
         }
@@ -1888,16 +1894,38 @@ private:
                                     previewNoteOnTime);
         }
 
-        instrumentID = TranslateBankProgramToInstrument(previewBank,
-                                                        previewProgram,
-                                                        channel,
-                                                        static_cast<unsigned char>(std::clamp(midiKey, 0, 127)));
+        translatedInstrumentID = TranslateBankProgramToInstrument(previewBank,
+                                                                  previewProgram,
+                                                                  channel,
+                                                                  static_cast<unsigned char>(std::clamp(midiKey, 0, 127)));
+        instrumentID = selectedInstID ? static_cast<BAE_INSTRUMENT>(selectedInstID) : translatedInstrumentID;
 #if _DEBUG
-        fprintf(stderr, "[nbstudio] instrument-lookup: ch=%u prog=%u bank=%u key=%d -> instID=%u\n",
-                channel, previewProgram, previewBank, midiKey, instrumentID);
+        fprintf(stderr,
+                "[nbstudio] instrument-lookup: ch=%u prog=%u bank=%u key=%d selected=%u translated=%u using=%u\n",
+                channel,
+                previewProgram,
+                previewBank,
+                midiKey,
+                static_cast<unsigned>(selectedInstID),
+                static_cast<unsigned>(translatedInstrumentID),
+                static_cast<unsigned>(instrumentID));
 #endif
         if (instrumentID != 0) {
-            (void)BAESong_LoadInstrument(m_keyboardPreviewSong, instrumentID);
+            loadInstrumentResult = BAESong_LoadInstrument(m_keyboardPreviewSong, instrumentID);
+            if (loadInstrumentResult != BAE_NO_ERROR && translatedInstrumentID != 0 && translatedInstrumentID != instrumentID) {
+                instrumentID = translatedInstrumentID;
+                loadInstrumentResult = BAESong_LoadInstrument(m_keyboardPreviewSong, instrumentID);
+            }
+            if (loadInstrumentResult != BAE_NO_ERROR) {
+#if _DEBUG
+                fprintf(stderr,
+                        "[nbstudio] BAESong_LoadInstrument failed: instID=%u translated=%u err=%d\n",
+                        static_cast<unsigned>(instrumentID),
+                        static_cast<unsigned>(translatedInstrumentID),
+                        static_cast<int>(loadInstrumentResult));
+#endif
+                return false;
+            }
         } else {
             /* Fallback: ensure channel has a default instrument even if lookup failed */
             (void)BAESong_LoadInstrument(m_keyboardPreviewSong, 0);
@@ -5905,6 +5933,7 @@ private:
         CommitUndoAction("Clone Instrument from Bank");
 
         PopulateSampleList();
+        StopKeyboardPreview();
         /* Select the last added sample */
         {
             uint32_t sampleCount = 0;
@@ -5916,7 +5945,9 @@ private:
     }
 
     void OnCloneAllUsedFromBank(wxCommandEvent &) {
-        static const uint16_t kClonedInstrumentBank = 2;
+          /* Editor stores banks as 14-bit values (MSB<<7 | LSB). We want MIDI bank MSB=2,
+              so internal target bank must be 2<<7. */
+          static const uint16_t kClonedInstrumentBank = (2u << 7);
 
         struct SourcePair {
             uint16_t bank;
@@ -6090,7 +6121,7 @@ private:
                 wxMessageBox(wxString::Format("Failed to remap source %u:%u to %u:%u.",
                                               static_cast<unsigned>(plan.sourceBank),
                                               static_cast<unsigned>(plan.sourceProgram),
-                                              static_cast<unsigned>(kClonedInstrumentBank),
+                                              static_cast<unsigned>(DisplayBankFromInternal(kClonedInstrumentBank)),
                                               static_cast<unsigned>(plan.targetProgram)),
                              "Clone All Used Instruments",
                              wxOK | wxICON_ERROR,
@@ -6101,6 +6132,7 @@ private:
         CommitUndoAction("Clone All Used Instruments");
 
         PopulateSampleList();
+        StopKeyboardPreview();
         PianoRollPanel_RefreshFromDocument(m_pianoRoll, false);
         InvalidatePianoRollPreviewSong();
         SetStatusText(wxString::Format("Cloned and remapped %u instrument pair(s)", static_cast<unsigned>(plans.size())), 0);
@@ -6234,6 +6266,7 @@ private:
         CommitUndoAction("Alias Instrument from Bank");
 
         PopulateSampleList();
+        StopKeyboardPreview();
         {
             uint32_t sampleCount = 0;
             if (BAERmfEditorDocument_GetSampleCount(m_document, &sampleCount) == BAE_NO_ERROR && sampleCount > 0) {

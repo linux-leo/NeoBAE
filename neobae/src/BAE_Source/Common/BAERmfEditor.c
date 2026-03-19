@@ -12491,8 +12491,8 @@ BAEResult BAERmfEditorDocument_CloneInstrumentFromBank(BAERmfEditorDocument *doc
     useSoundModifierAsRootKey = TEST_FLAG_VALUE(inst->flags2, ZBF_useSoundModifierAsRootKey);
     instMiscParam1 = (int16_t)XGetShort(&inst->miscParameter1);
 
-    /* Target INST ID: bank 2 namespace (2 * 128 + program) */
-    targetInstID = (XLongResourceID)(256 + (uint32_t)targetProgram);
+    /* Target INST ID: deterministic clone namespace (512 + program). */
+    targetInstID = (XLongResourceID)(512 + (uint32_t)targetProgram);
 
     if (splitCount > 0)
     {
@@ -12542,6 +12542,9 @@ BAEResult BAERmfEditorDocument_CloneInstrumentFromBank(BAERmfEditorDocument *doc
             }
             else
             {
+                /* Cloned embedded samples must use local asset IDs so save remaps
+                   to local SND resources instead of reusing source-bank IDs. */
+                document->samples[document->sampleCount - 1].sampleAssetID = PV_AllocateSampleAssetID(document);
                 document->samples[document->sampleCount - 1].splitVolume = split.miscParameter2;
             }
         }
@@ -12583,6 +12586,9 @@ BAEResult BAERmfEditorDocument_CloneInstrumentFromBank(BAERmfEditorDocument *doc
         }
         else
         {
+            /* Cloned embedded samples must use local asset IDs so save remaps
+               to local SND resources instead of reusing source-bank IDs. */
+            document->samples[document->sampleCount - 1].sampleAssetID = PV_AllocateSampleAssetID(document);
             document->samples[document->sampleCount - 1].splitVolume =
                 (int16_t)XGetShort(&inst->miscParameter2);
         }
@@ -12679,7 +12685,7 @@ BAEResult BAERmfEditorDocument_AliasInstrumentFromBank(BAERmfEditorDocument *doc
     useSoundModifierAsRootKey = TEST_FLAG_VALUE(inst->flags2, ZBF_useSoundModifierAsRootKey);
     instMiscParam1 = (int16_t)XGetShort(&inst->miscParameter1);
 
-    targetInstID = (XLongResourceID)(256 + (uint32_t)targetProgram);
+    targetInstID = (XLongResourceID)(512 + (uint32_t)targetProgram);
 
     if (splitCount > 0)
     {
