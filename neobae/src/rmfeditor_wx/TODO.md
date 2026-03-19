@@ -28,13 +28,19 @@
 - ~~Sample mismatch when a SNDID = 0~~
 - ~~Piano roll preview should respect channel and if its the percussion channel (9, zero indexed), it should preview drum notes when clicking notes~~
 - ~~`Crazy Dream fix.rmf` plays bass/gt sample instead of saw lead~~
-- "Clone all used instruments" - Clone used instruments from MIDI stream to RMF instruments, reassigning the notes and events banks/programs as needed
-  - Example: A MIDI uses 0:1 piano. We clone it, it becomes 2:0, we reassign all 0:1 notes to 2:0.  
 - Interpolation configuration (none, linear, cubic, etc, current is just on/off)
-- Opus RT loop end is off
-- so is normal Opus a little
-- Check ADSR (doesn't work in instrument dialog preview) `Grasp.rmf`
-- Instrument dialog preview allows playing of notes outside of key range
+- ~~Opus RT loop end is off~~
+- ~~so is normal Opus a little~~
+- ~~Check ADSR (doesn't work in instrument dialog preview) `Grasp.rmf`~~
+- ~~Instrument dialog preview allows playing of notes outside of key range~~
+- ~~No polyphony on instrument dialog preview~~
+- ~~Releasing one note when polyphonic on instrument dialog preview stops all notes~~
+- ~~Pressing two notes at the same time in the instrument dialog preview, one note will be a piano~~
+- "Clone all used instruments" - Clone used instruments from MIDI stream to RMF instruments, reassigning the notes and events banks/programs as needed
+  - Example: A MIDI uses 0:1 piano. We clone it, it becomes 2:0, we reassign all 0:1 notes to 2:0.
+  - Feature is incomplete and broken
+- Confirmation on exit if session data is different from source file
+  - Same when opening another file
 
 # Future
 - Implement ZSB (Zefie Sound Bank), same deal as RMF/ZMF, used for newer codecs. Uses ZREZ.

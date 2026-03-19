@@ -31,6 +31,7 @@
 
 extern "C" {
 #include "NeoBAE.h"
+#include "GenSnd.h"
 }
 
 #include "editor_instrument_ext_dialog.h"
@@ -278,6 +279,7 @@ public:
                     m_playbackMixer(nullptr),
                     m_playbackSong(nullptr),
                     m_notePreviewSong(nullptr),
+                    m_keyboardPreviewSong(nullptr),
                     m_previewSound(nullptr),
                     m_playbackTimer(this, ID_PlaybackTimer),
                     m_notePreviewTimer(this, ID_NotePreviewTimer),
@@ -603,6 +605,7 @@ public:
         }
         StopPlayback(true);
         StopPianoRollPreview(true);
+        StopKeyboardPreview();
         StopPreviewSample();
         ShutdownPlaybackEngine();
     }
@@ -656,8 +659,17 @@ private:
     std::vector<unsigned char> m_playbackSongBlob;
     BAESong m_notePreviewSong;
     std::vector<unsigned char> m_notePreviewSongBlob;
+    BAESong m_keyboardPreviewSong;
+    std::vector<unsigned char> m_keyboardPreviewSongBlob;
     BAESound m_previewSound;
     std::unordered_map<int, BAESound> m_taggedPreviewSounds;
+    struct TaggedInstrumentPreviewNote {
+        unsigned char channel;
+        unsigned char note;
+        unsigned char program;
+        unsigned char bank;
+    };
+    std::unordered_map<int, TaggedInstrumentPreviewNote> m_taggedInstrumentPreviewNotes;
     wxString m_playbackTempPath;
     wxString m_previewSampleTempPath;
     wxTimer m_playbackTimer;
@@ -1583,6 +1595,353 @@ private:
         }
     }
 
+    bool PreviewInstrumentDialogNote(uint32_t sampleIndex,
+                                     int midiKey,
+                                     int previewTag,
+                                     BAESampleInfo const *overrideInfo,
+                                     int16_t splitVolumeOverride,
+                                     unsigned char rootKeyOverride,
+                                     BAERmfEditorCompressionType compressionOverride,
+                                     bool opusRoundTripOverride,
+                                     BAERmfEditorInstrumentExtInfo const *extOverride) {
+        BAERmfEditorSampleInfo sampleInfo;
+        unsigned char channel;
+        BAEResult result;
+        uint32_t previewEventTime;
+        uint32_t previewNoteOnTime;
+        bool armPreview;
+        uint32_t instID;
+        uint32_t bankId;
+        uint32_t progId;
+        uint32_t noteId;
+        BAE_INSTRUMENT instrumentID;
+        unsigned char previewProgram;
+        unsigned char previewBank;
+        bool hasDialogOverrides;
+        auto mapPreviewTagToChannel = [](int tag) -> unsigned char {
+            switch (tag) {
+                /* Match InstrumentExtEditorDialog musical typing order:
+                 * A W S E D F T G Y H U J K O */
+                case 'A': return 0;
+                case 'W': return 1;
+                case 'S': return 2;
+                case 'E': return 3;
+                case 'D': return 4;
+                case 'F': return 5;
+                case 'T': return 6;
+                case 'G': return 7;
+                case 'Y': return 8;
+                case 'H': return 15;
+                case 'U': return 11;
+                case 'J': return 12;
+                case 'K': return 13;
+                case 'O': return 14;
+                default: return 0;
+            }
+        };
+
+        if (!m_document) {
+            return false;
+        }
+        if (BAERmfEditorDocument_GetSampleInfo(m_document, sampleIndex, &sampleInfo) != BAE_NO_ERROR) {
+            return false;
+        }
+
+        hasDialogOverrides = (extOverride != nullptr) ||
+                             (overrideInfo != nullptr) ||
+                             (rootKeyOverride <= 127) ||
+                             (compressionOverride != BAE_EDITOR_COMPRESSION_DONT_CHANGE) ||
+                             (splitVolumeOverride != 0) ||
+                             opusRoundTripOverride;
+
+        previewProgram = sampleInfo.program;
+        previewBank = 0;
+        instID = 0;
+        bankId = 0;
+        progId = 0;
+        noteId = 0;
+        instrumentID = 0;
+        if (BAERmfEditorDocument_GetInstIDForSample(m_document, sampleIndex, &instID) == BAE_NO_ERROR &&
+            instID != 0 &&
+            TranslateInstrumentToBankProgram(instID, &bankId, &progId, &noteId) == BAE_NO_ERROR)
+        {
+            previewProgram = static_cast<unsigned char>(std::clamp<uint32_t>(progId, 0, 127));
+            previewBank = static_cast<unsigned char>(std::clamp<uint32_t>(bankId, 0, 127));
+        }
+
+        channel = 0;
+        armPreview = m_taggedInstrumentPreviewNotes.empty();
+
+        if (previewTag != -1) {
+            auto existing = m_taggedInstrumentPreviewNotes.find(previewTag);
+#if _DEBUG
+            fprintf(stderr, "[nbstudio] preview-tag=%d (char=%c) existing=%s\n",
+                    previewTag, (char)previewTag, existing != m_taggedInstrumentPreviewNotes.end() ? "yes" : "no");
+#endif
+            if (existing != m_taggedInstrumentPreviewNotes.end()) {
+                channel = existing->second.channel;
+                (void)BAESong_ProgramBankChange(m_keyboardPreviewSong,
+                                                existing->second.channel,
+                                                existing->second.program,
+                                                existing->second.bank,
+                                                0);
+                BAESong_NoteOff(m_keyboardPreviewSong,
+                                existing->second.channel,
+                                existing->second.note,
+                                0,
+                                0);
+                m_taggedInstrumentPreviewNotes.erase(existing);
+            } else {
+                channel = mapPreviewTagToChannel(previewTag);
+#if _DEBUG
+                fprintf(stderr, "[nbstudio]   -> mapped to channel=%u\n", channel);
+#endif
+            }
+        }
+
+        if (armPreview) {
+            /* For keyboard preview, use isolated minimal song to avoid timeline interference.
+             * Ensure keyboard preview song and stop any existing playback. */
+            if (hasDialogOverrides) {
+                BAERmfEditorDocument *previewDoc;
+                unsigned char *blobData;
+                uint32_t blobSize;
+                BAELoadResult loadInfo;
+                bool requiresZmf;
+                BAEResult saveResult;
+                BAEResult loadResult;
+                std::string sampleDisplayName;
+
+                if (!EnsurePlaybackEngine()) {
+                    return false;
+                }
+                StopKeyboardPreview();
+
+                blobData = nullptr;
+                blobSize = 0;
+                requiresZmf = (BAERmfEditorDocument_RequiresZmf(m_document) != 0);
+                saveResult = BAERmfEditorDocument_SaveAsRmfToMemory(m_document,
+                                                                    requiresZmf ? TRUE : FALSE,
+                                                                    &blobData,
+                                                                    &blobSize);
+                if (saveResult != BAE_NO_ERROR || !blobData || blobSize == 0) {
+                    return false;
+                }
+
+                previewDoc = BAERmfEditorDocument_LoadFromMemory(blobData, blobSize, BAE_RMF);
+                XDisposePtr((XPTR)blobData);
+                if (!previewDoc) {
+                    return false;
+                }
+
+                if (overrideInfo || rootKeyOverride <= 127 ||
+                    compressionOverride != BAE_EDITOR_COMPRESSION_DONT_CHANGE ||
+                    splitVolumeOverride != 0 || opusRoundTripOverride) {
+                    BAERmfEditorSampleInfo previewSampleInfo;
+
+                    if (BAERmfEditorDocument_GetSampleInfo(previewDoc, sampleIndex, &previewSampleInfo) != BAE_NO_ERROR) {
+                        BAERmfEditorDocument_Delete(previewDoc);
+                        return false;
+                    }
+                    sampleDisplayName = previewSampleInfo.displayName ? previewSampleInfo.displayName : "";
+                    previewSampleInfo.displayName = const_cast<char *>(sampleDisplayName.c_str());
+                    if (overrideInfo) {
+                        previewSampleInfo.sampleInfo = *overrideInfo;
+                    }
+                    if (splitVolumeOverride != 0) {
+                        previewSampleInfo.splitVolume = splitVolumeOverride;
+                    }
+                    if (rootKeyOverride <= 127) {
+                        previewSampleInfo.rootKey = rootKeyOverride;
+                    }
+                    if (compressionOverride != BAE_EDITOR_COMPRESSION_DONT_CHANGE) {
+                        previewSampleInfo.compressionType = compressionOverride;
+                    }
+                    if (opusRoundTripOverride) {
+                        previewSampleInfo.opusRoundTripResample = TRUE;
+                    }
+                    if (BAERmfEditorDocument_SetSampleInfo(previewDoc, sampleIndex, &previewSampleInfo) != BAE_NO_ERROR) {
+                        BAERmfEditorDocument_Delete(previewDoc);
+                        return false;
+                    }
+                }
+
+                if (extOverride) {
+                    uint32_t previewInstID;
+                    BAERmfEditorInstrumentExtInfo previewExt;
+
+                    if (BAERmfEditorDocument_GetInstIDForSample(previewDoc, sampleIndex, &previewInstID) == BAE_NO_ERROR &&
+                        previewInstID != 0) {
+                        previewExt = *extOverride;
+                        previewExt.instID = previewInstID;
+                        if (BAERmfEditorDocument_SetInstrumentExtInfo(previewDoc, previewInstID, &previewExt) != BAE_NO_ERROR) {
+                            BAERmfEditorDocument_Delete(previewDoc);
+                            return false;
+                        }
+                    }
+                }
+
+                m_keyboardPreviewSongBlob.clear();
+                if (!BuildPreviewPlaybackBlob(previewDoc, &m_keyboardPreviewSongBlob)) {
+                    BAERmfEditorDocument_Delete(previewDoc);
+                    return false;
+                }
+                BAERmfEditorDocument_Delete(previewDoc);
+
+                memset(&loadInfo, 0, sizeof(loadInfo));
+                loadResult = BAEMixer_LoadFromMemory(m_playbackMixer,
+                                                     m_keyboardPreviewSongBlob.data(),
+                                                     static_cast<uint32_t>(m_keyboardPreviewSongBlob.size()),
+                                                     &loadInfo);
+                if (loadResult != BAE_NO_ERROR || loadInfo.type != BAE_LOAD_TYPE_SONG || !loadInfo.data.song) {
+                    BAELoadResult_Cleanup(&loadInfo);
+                    m_keyboardPreviewSongBlob.clear();
+                    return false;
+                }
+                m_keyboardPreviewSong = loadInfo.data.song;
+                loadInfo.type = BAE_LOAD_TYPE_NONE;
+                loadInfo.data.song = nullptr;
+                BAESong_Preroll(m_keyboardPreviewSong);
+                BAESong_SetVolume(m_keyboardPreviewSong, GetPreviewVolumeFixed());
+                BAESong_SetLoops(m_keyboardPreviewSong, 0);
+                if (BAESong_Start(m_keyboardPreviewSong, 0) != BAE_NO_ERROR) {
+                    BAESong_Delete(m_keyboardPreviewSong);
+                    m_keyboardPreviewSong = nullptr;
+                    m_keyboardPreviewSongBlob.clear();
+                    return false;
+                }
+                SeekKeyboardPreviewToSongEnd();
+            } else if (!EnsureKeyboardPreviewSong()) {
+                return false;
+            }
+            BAESong_AllNotesOff(m_keyboardPreviewSong, 0);
+        } else if (!m_keyboardPreviewSong && !EnsureKeyboardPreviewSong()) {
+            return false;
+        }
+
+        previewEventTime = static_cast<uint32_t>(GM_GetSyncTimeStampQuantizedAhead());
+        previewNoteOnTime = previewEventTime + 1;
+
+        BAESong_UnmuteChannel(m_keyboardPreviewSong, channel);
+        BAESong_ControlChange(m_keyboardPreviewSong, channel, 7, 127, previewEventTime);
+        BAESong_ControlChange(m_keyboardPreviewSong, channel, 11, 127, previewEventTime);
+        BAESong_ControlChange(m_keyboardPreviewSong, channel, 10, 64, previewEventTime);
+        BAESong_ControlChange(m_keyboardPreviewSong, channel, 121, 0, previewEventTime);
+        BAESong_ControlChange(m_keyboardPreviewSong, channel, 127, 0, previewEventTime);
+        BAESong_ControlChange(m_keyboardPreviewSong, channel, 64, 0, previewEventTime);
+        BAESong_ControlChange(m_keyboardPreviewSong, channel, 66, 0, previewEventTime);
+        if (channel == 9 && noteId > 0 && noteId <= 127U) {
+            midiKey = static_cast<int>(noteId);
+        }
+        result = BAESong_ProgramBankChange(m_keyboardPreviewSong,
+                                           channel,
+                                           previewProgram,
+                                           previewBank,
+                                           previewEventTime);
+        if (result != BAE_NO_ERROR) {
+            return false;
+        }
+
+        {
+            unsigned char syncedProgram = 0;
+            unsigned char syncedBank = 0;
+            int syncAttempt;
+
+            /* Program/bank changes are queued; preroll to flush queue work, then
+             * park at song end to avoid timeline events during preview typing. */
+            BAESong_Preroll(m_keyboardPreviewSong);
+            SeekKeyboardPreviewToSongEnd();
+
+            /* Wait for channel state to catch up before note-on so instrument
+             * resolution doesn't use a stale/default channel patch. */
+            
+            for (syncAttempt = 0; syncAttempt < 50; ++syncAttempt) {
+                if (BAESong_GetProgramBank(m_keyboardPreviewSong,
+                                           channel,
+                                           &syncedProgram,
+                                           &syncedBank,
+                                           FALSE) == BAE_NO_ERROR &&
+                    syncedProgram == previewProgram &&
+                    syncedBank == previewBank) {
+                    break;
+                }
+                wxMilliSleep(10);
+            }
+#if _DEBUG
+            fprintf(stderr,
+                    "[nbstudio] channel-sync: ch=%u want_prog=%u want_bank=%u got_prog=%u got_bank=%u tries=%d (max_wait=%dms)\n",
+                    channel,
+                    previewProgram,
+                    previewBank,
+                    syncedProgram,
+                    syncedBank,
+                    syncAttempt + 1,
+                    (syncAttempt + 1) * 10);
+#endif
+
+                    /* Reassert patch right before note-on in case another queued update
+                     * raced this channel state between sync and trigger. */
+                    (void)BAESong_ProgramBankChange(m_keyboardPreviewSong,
+                                    channel,
+                                    previewProgram,
+                                    previewBank,
+                                    previewNoteOnTime);
+        }
+
+        instrumentID = TranslateBankProgramToInstrument(previewBank,
+                                                        previewProgram,
+                                                        channel,
+                                                        static_cast<unsigned char>(std::clamp(midiKey, 0, 127)));
+#if _DEBUG
+        fprintf(stderr, "[nbstudio] instrument-lookup: ch=%u prog=%u bank=%u key=%d -> instID=%u\n",
+                channel, previewProgram, previewBank, midiKey, instrumentID);
+#endif
+        if (instrumentID != 0) {
+            (void)BAESong_LoadInstrument(m_keyboardPreviewSong, instrumentID);
+        } else {
+            /* Fallback: ensure channel has a default instrument even if lookup failed */
+            (void)BAESong_LoadInstrument(m_keyboardPreviewSong, 0);
+        }
+
+        result = BAESong_NoteOn(m_keyboardPreviewSong,
+                    channel,
+                    static_cast<unsigned char>(std::clamp(midiKey, 0, 127)),
+                    100,
+                previewNoteOnTime);
+#if _DEBUG
+        fprintf(stderr,
+            "[nbstudio] note-on: ch=%u key=%u vel=100 t_prog=%u t_on=%u result=%d\n",
+            channel,
+            std::clamp(midiKey, 0, 127),
+            previewEventTime,
+            previewNoteOnTime,
+            result);
+#endif
+        if (result != BAE_NO_ERROR) {
+            return false;
+        }
+        if (previewTag != -1) {
+            TaggedInstrumentPreviewNote tagged;
+
+            tagged.channel = channel;
+            tagged.note = static_cast<unsigned char>(std::clamp(midiKey, 0, 127));
+            tagged.program = previewProgram;
+            tagged.bank = previewBank;
+            m_taggedInstrumentPreviewNotes[previewTag] = tagged;
+#if _DEBUG
+            fprintf(stderr,
+                    "[nbstudio] note-preview on tag=%d ch=%u note=%u prog=%u bank=%u active=%zu\n",
+                    previewTag,
+                    static_cast<unsigned>(tagged.channel),
+                    static_cast<unsigned>(tagged.note),
+                    static_cast<unsigned>(tagged.program),
+                    static_cast<unsigned>(tagged.bank),
+                    m_taggedInstrumentPreviewNotes.size());
+#endif
+        }
+        return true;
+    }
+
     bool PreviewSampleAtKey(uint32_t sampleIndex,
                             int midiKey,
                             BAESampleInfo const *overrideInfo = nullptr,
@@ -1590,7 +1949,20 @@ private:
                             unsigned char rootKeyOverride = 0xFF,
                             BAERmfEditorCompressionType compressionOverride = BAE_EDITOR_COMPRESSION_DONT_CHANGE,
                             bool opusRoundTripOverride = false,
-                            int previewTag = -1) {
+                            int previewTag = -1,
+                            BAERmfEditorInstrumentExtInfo const *extOverride = nullptr) {
+        if (extOverride) {
+            return PreviewInstrumentDialogNote(sampleIndex,
+                                               midiKey,
+                                               previewTag,
+                                               overrideInfo,
+                                               splitVolumeOverride,
+                                               rootKeyOverride,
+                                               compressionOverride,
+                                               opusRoundTripOverride,
+                                               extOverride);
+        }
+
         BAERmfEditorSampleInfo sampleInfo;
         BAEResult loadResult;
         BAEResult startResult;
@@ -2489,14 +2861,67 @@ private:
     void StopPreviewSampleForTag(int previewTag) {
         auto found = m_taggedPreviewSounds.find(previewTag);
 
-        if (found == m_taggedPreviewSounds.end()) {
-            return;
+        if (found != m_taggedPreviewSounds.end()) {
+            if (found->second) {
+                BAESound_Stop(found->second, FALSE);
+                BAESound_Delete(found->second);
+            }
+            m_taggedPreviewSounds.erase(found);
         }
-        if (found->second) {
-            BAESound_Stop(found->second, FALSE);
-            BAESound_Delete(found->second);
+
+        {
+            auto noteFound = m_taggedInstrumentPreviewNotes.find(previewTag);
+            if (noteFound != m_taggedInstrumentPreviewNotes.end()) {
+                    if (m_keyboardPreviewSong) {
+#if _DEBUG
+                    fprintf(stderr,
+                            "[nbstudio] note-preview off-start tag=%d ch=%u note=%u prog=%u bank=%u active=%zu\n",
+                            previewTag,
+                            static_cast<unsigned>(noteFound->second.channel),
+                            static_cast<unsigned>(noteFound->second.note),
+                            static_cast<unsigned>(noteFound->second.program),
+                            static_cast<unsigned>(noteFound->second.bank),
+                            m_taggedInstrumentPreviewNotes.size());
+#endif
+                        (void)BAESong_ProgramBankChange(m_keyboardPreviewSong,
+                                                    noteFound->second.channel,
+                                                    noteFound->second.program,
+                                                    noteFound->second.bank,
+                                                    0);
+                        BAESong_NoteOff(m_keyboardPreviewSong,
+                                    noteFound->second.channel,
+                                    noteFound->second.note,
+                                    0,
+                                    0);
+                        BAESong_ControlChange(m_keyboardPreviewSong,
+                                              noteFound->second.channel,
+                                              64,
+                                              0,
+                                              0);
+                        BAESong_ControlChange(m_keyboardPreviewSong,
+                                              noteFound->second.channel,
+                                              66,
+                                              0,
+                                              0);
+#if _DEBUG
+                    fprintf(stderr,
+                            "[nbstudio] note-preview off-sent tag=%d ch=%u note=%u + channel-panic\n",
+                            previewTag,
+                            static_cast<unsigned>(noteFound->second.channel),
+                            static_cast<unsigned>(noteFound->second.note));
+#endif
+                }
+                m_taggedInstrumentPreviewNotes.erase(noteFound);
+            }
+#if _DEBUG
+            else {
+                fprintf(stderr,
+                        "[nbstudio] note-preview off-miss tag=%d active=%zu\n",
+                        previewTag,
+                        m_taggedInstrumentPreviewNotes.size());
+            }
+#endif
         }
-        m_taggedPreviewSounds.erase(found);
     }
 
     void StopPreviewSample() {
@@ -2513,6 +2938,26 @@ private:
             BAESound_Delete(entry.second);
         }
         m_taggedPreviewSounds.clear();
+        if (m_keyboardPreviewSong) {
+            for (auto const &entry : m_taggedInstrumentPreviewNotes) {
+                (void)BAESong_ProgramBankChange(m_keyboardPreviewSong,
+                                                entry.second.channel,
+                                                entry.second.program,
+                                                entry.second.bank,
+                                                0);
+                BAESong_NoteOff(m_keyboardPreviewSong,
+                                entry.second.channel,
+                                entry.second.note,
+                                0,
+                                0);
+            }
+        }
+        m_taggedInstrumentPreviewNotes.clear();
+    }
+
+    void StopAndDestroyInstrumentPreviewSession() {
+        StopPreviewSample();
+        StopKeyboardPreview();
     }
 
     bool ExportSampleToPath(uint32_t sampleIndex, wxString const &path) {
@@ -3096,6 +3541,30 @@ private:
         }
     }
 
+    void StopKeyboardPreview() {
+        if (m_keyboardPreviewSong) {
+            BAESong_AllNotesOff(m_keyboardPreviewSong, 0);
+            BAESong_Stop(m_keyboardPreviewSong, FALSE);
+            BAESong_Delete(m_keyboardPreviewSong);
+            m_keyboardPreviewSong = nullptr;
+            m_keyboardPreviewSongBlob.clear();
+            m_taggedInstrumentPreviewNotes.clear();
+        }
+    }
+
+    void SeekKeyboardPreviewToSongEnd() {
+        uint32_t songLengthUsec;
+
+        if (!m_keyboardPreviewSong) {
+            return;
+        }
+        songLengthUsec = 0;
+        if (BAESong_GetMicrosecondLength(m_keyboardPreviewSong, &songLengthUsec) == BAE_NO_ERROR &&
+            songLengthUsec > 0) {
+            BAESong_SetMicrosecondPosition(m_keyboardPreviewSong, songLengthUsec - 1);
+        }
+    }
+
     void PreviewPianoRollNote(uint16_t bank,
                               unsigned char program,
                               unsigned char noteChannel,
@@ -3472,6 +3941,127 @@ private:
         *outLoopEnd = info.sampleInfo.endLoop;
 
         BAERmfEditorDocument_Delete(previewDoc);
+        return true;
+    }
+
+    bool BuildMinimalKeyboardPreviewMidi(std::vector<unsigned char> *outData) {
+        // Builds a minimal MIDI file with just one empty track for keyboard preview
+        // This isolates keyboard events from document timeline events
+        outData->clear();
+        
+        // MIDI Header: MThd
+        outData->push_back('M');
+        outData->push_back('T');
+        outData->push_back('h');
+        outData->push_back('d');
+        
+        // Header length: 6 bytes
+        outData->push_back(0x00);
+        outData->push_back(0x00);
+        outData->push_back(0x00);
+        outData->push_back(0x06);
+        
+        // Format: 0 (single track)
+        outData->push_back(0x00);
+        outData->push_back(0x00);
+        
+        // Number of tracks: 1
+        outData->push_back(0x00);
+        outData->push_back(0x01);
+        
+        // Division (PPQ): 480
+        outData->push_back(0x01);
+        outData->push_back(0xE0);
+        
+        // Track header: MTrk
+        outData->push_back('M');
+        outData->push_back('T');
+        outData->push_back('r');
+        outData->push_back('k');
+        
+        // Track length: 4 bytes (delta-time + end-of-track meta event)
+        outData->push_back(0x00);
+        outData->push_back(0x00);
+        outData->push_back(0x00);
+        outData->push_back(0x04);
+        
+        // End of track: delta-time (0) + FF 2F 00
+        outData->push_back(0x00);  // delta-time = 0
+        outData->push_back(0xFF);  // Meta event
+        outData->push_back(0x2F);  // End of track
+        outData->push_back(0x00);  // Length = 0
+        
+        return true;
+    }
+
+    bool BuildKeyboardPreviewRmfWithInstruments(std::vector<unsigned char> *outData) {
+        // Build an RMF from the document that includes all instruments and samples
+        // for keyboard preview. This allows instrument resolution to work properly
+        // instead of falling back to GM on bank notes.
+        unsigned char *blobData;
+        uint32_t blobSize;
+        BAEResult saveResult;
+        bool requiresZmf;
+
+        if (!m_document || !outData) {
+            return false;
+        }
+
+        outData->clear();
+
+        // Use the document directly to save as RMF - it includes all instruments
+        requiresZmf = (BAERmfEditorDocument_RequiresZmf(m_document) != 0);
+        blobData = nullptr;
+        blobSize = 0;
+        saveResult = BAERmfEditorDocument_SaveAsRmfToMemory(m_document,
+                                                            requiresZmf ? TRUE : FALSE,
+                                                            &blobData,
+                                                            &blobSize);
+        if (saveResult != BAE_NO_ERROR || !blobData || blobSize == 0) {
+            return false;
+        }
+
+        outData->assign(blobData, blobData + blobSize);
+        XDisposePtr((XPTR)blobData);
+        return true;
+    }
+
+    bool EnsureKeyboardPreviewSong() {
+        BAEResult loadResult;
+        BAELoadResult loadInfo;
+
+        if (m_keyboardPreviewSong) {
+            return true;
+        }
+        if (!EnsurePlaybackEngine()) {
+            return false;
+        }
+        if (!BuildKeyboardPreviewRmfWithInstruments(&m_keyboardPreviewSongBlob)) {
+            return false;
+        }
+        memset(&loadInfo, 0, sizeof(loadInfo));
+        loadResult = BAEMixer_LoadFromMemory(m_playbackMixer,
+                                             m_keyboardPreviewSongBlob.data(),
+                                             static_cast<uint32_t>(m_keyboardPreviewSongBlob.size()),
+                                             &loadInfo);
+        if (loadResult != BAE_NO_ERROR || loadInfo.type != BAE_LOAD_TYPE_SONG || !loadInfo.data.song) {
+            BAELoadResult_Cleanup(&loadInfo);
+            m_keyboardPreviewSongBlob.clear();
+            return false;
+        }
+        m_keyboardPreviewSong = loadInfo.data.song;
+        loadInfo.type = BAE_LOAD_TYPE_NONE;
+        loadInfo.data.song = nullptr;
+        BAESong_Preroll(m_keyboardPreviewSong);
+        BAESong_SetVolume(m_keyboardPreviewSong, GetPreviewVolumeFixed());
+        BAESong_SetLoops(m_keyboardPreviewSong, 0);
+        if (BAESong_Start(m_keyboardPreviewSong, 0) != BAE_NO_ERROR) {
+            BAESong_Delete(m_keyboardPreviewSong);
+            m_keyboardPreviewSong = nullptr;
+            m_keyboardPreviewSongBlob.clear();
+            return false;
+        }
+        SeekKeyboardPreviewToSongEnd();
         return true;
     }
 
@@ -6107,7 +6697,7 @@ private:
             [this](wxString const &label) { BeginUndoAction(label); },
             [this](wxString const &label) { CommitUndoAction(label); },
             [this]() { CancelUndoAction(); },
-            [this](uint32_t sampleIndex, int key, BAESampleInfo const *overrideInfo, int16_t splitVolumeOverride, unsigned char rootKeyOverride, BAERmfEditorCompressionType compressionOverride, bool opusRoundTripOverride, int previewTag) {
+            [this](uint32_t sampleIndex, int key, BAESampleInfo const *overrideInfo, int16_t splitVolumeOverride, unsigned char rootKeyOverride, BAERmfEditorCompressionType compressionOverride, bool opusRoundTripOverride, int previewTag, BAERmfEditorInstrumentExtInfo const *extOverride) {
                 if (!PreviewSampleAtKey(sampleIndex,
                                         key,
                                         overrideInfo,
@@ -6115,7 +6705,8 @@ private:
                                         rootKeyOverride,
                                         compressionOverride,
                                         opusRoundTripOverride,
-                                        previewTag)) {
+                                        previewTag,
+                                        extOverride)) {
                     wxMessageBox("Preview playback failed for this sample.",
                                  "Sample Preview", wxOK | wxICON_ERROR, this);
                 }
@@ -6137,10 +6728,10 @@ private:
             &editedSamples);
 
         if (!accepted) {
-            StopPreviewSample();
+            StopAndDestroyInstrumentPreviewSession();
             return;
         }
-        StopPreviewSample();
+        StopAndDestroyInstrumentPreviewSession();
 
         /* Apply sample edits */
         {

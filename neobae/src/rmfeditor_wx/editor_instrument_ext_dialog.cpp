@@ -1087,6 +1087,7 @@ private:
 class InstrumentExtEditorDialog final : public wxDialog {
 public:
     using EditedSample = InstrumentEditorEditedSample;
+    static constexpr int kMousePreviewTag = -1000000;
 
     InstrumentExtEditorDialog(wxWindow *parent,
                                                             BAERmfEditorDocument *document,
@@ -1095,7 +1096,7 @@ public:
                               std::function<void(wxString const &)> beginUndoCallback,
                               std::function<void(wxString const &)> commitUndoCallback,
                               std::function<void()> cancelUndoCallback,
-                              std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool, int)> playCallback,
+                              std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool, int, BAERmfEditorInstrumentExtInfo const *)> playCallback,
                               std::function<void()> stopCallback,
                               std::function<void(int)> stopTaggedCallback,
                               std::function<bool(uint32_t, wxString const &)> replaceCallback,
@@ -1140,6 +1141,7 @@ public:
             [this](int note) {
                 if (!m_playCallback || m_sampleIndices.empty()) return;
                 SaveCurrentSampleFromUI();
+                SaveExtInfoFromUI();
                 /* Find the sample whose key range contains the played note */
                 int best = -1;
                 for (size_t i = 0; i < m_samples.size(); i++) {
@@ -1155,10 +1157,17 @@ public:
                                m_samples[(size_t)best].rootKey,
                                m_samples[(size_t)best].compressionType,
                                m_samples[(size_t)best].opusRoundTripResample,
-                               -1);
+                               kMousePreviewTag,
+                               &m_extInfo);
+                m_mousePreviewActive = true;
             },
             [this]() {
-                if (m_stopCallback) m_stopCallback();
+                if (m_mousePreviewActive && m_stopTaggedCallback) {
+                    m_stopTaggedCallback(kMousePreviewTag);
+                } else if (m_stopCallback) {
+                    m_stopCallback();
+                }
+                m_mousePreviewActive = false;
             });
         rootSizer->Add(m_pianoPanel, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5);
 
@@ -1235,9 +1244,6 @@ public:
                     }
                 }
             }
-            if (!ctrlDown && !event.AltDown() && StartKeyboardPreviewForKey(keyCode)) {
-                return;
-            }
             event.Skip();
         });
         BindKeyboardReleaseHandlers(this);
@@ -1296,6 +1302,23 @@ public:
         }
         if (m_codecChoice) m_codecChoice->Bind(wxEVT_CHOICE, instantApply);
         if (m_bitrateChoice) m_bitrateChoice->Bind(wxEVT_CHOICE, instantApply);
+        if (m_adsrStageSpin) {
+            m_adsrStageSpin->Bind(wxEVT_SPINCTRL, instantApply);
+            m_adsrStageSpin->Bind(wxEVT_TEXT, instantApply);
+        }
+        for (int i = 0; i < BAE_EDITOR_MAX_ADSR_STAGES; ++i) {
+            if (m_adsrLevel[i]) {
+                m_adsrLevel[i]->Bind(wxEVT_SPINCTRL, instantApply);
+                m_adsrLevel[i]->Bind(wxEVT_TEXT, instantApply);
+            }
+            if (m_adsrTime[i]) {
+                m_adsrTime[i]->Bind(wxEVT_SPINCTRLDOUBLE, instantApply);
+                m_adsrTime[i]->Bind(wxEVT_TEXT, instantApply);
+            }
+            if (m_adsrFlags[i]) {
+                m_adsrFlags[i]->Bind(wxEVT_CHOICE, instantApply);
+            }
+        }
     }
 
     BAERmfEditorInstrumentExtInfo const &GetExtInfo() {
@@ -1326,7 +1349,7 @@ private:
     std::function<void(wxString const &)> m_beginUndoCallback;
     std::function<void(wxString const &)> m_commitUndoCallback;
     std::function<void()> m_cancelUndoCallback;
-    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool, int)> m_playCallback;
+    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool, int, BAERmfEditorInstrumentExtInfo const *)> m_playCallback;
     std::function<void()> m_stopCallback;
     std::function<void(int)> m_stopTaggedCallback;
     std::function<bool(uint32_t, wxString const &)> m_replaceCallback;
@@ -1388,6 +1411,7 @@ private:
     WaveformPanelExt *m_waveformPanel;
     wxButton *m_deleteSampleButton;
     std::unordered_map<int, int> m_keyboardPreviewNotes;
+    bool m_mousePreviewActive = false;
 
     static int NormalizeAsciiKeyCode(int keyCode) {
         if (keyCode >= 'a' && keyCode <= 'z') {
@@ -1485,6 +1509,7 @@ private:
         if (!window) {
             return;
         }
+        window->Bind(wxEVT_KEY_DOWN, &InstrumentExtEditorDialog::HandleKeyboardPreviewKeyDown, this);
         window->Bind(wxEVT_KEY_UP, &InstrumentExtEditorDialog::HandleKeyboardPreviewKeyUp, this);
         node = window->GetChildren().GetFirst();
         while (node) {
@@ -1512,7 +1537,8 @@ private:
                        m_samples[(size_t)best].rootKey,
                        m_samples[(size_t)best].compressionType,
                        m_samples[(size_t)best].opusRoundTripResample,
-                       previewTag);
+                       previewTag,
+                       &m_extInfo);
         return true;
     }
 
@@ -1532,10 +1558,24 @@ private:
     }
 
     void StopKeyboardPreviewIfActive() {
-        if (!m_keyboardPreviewNotes.empty() && m_stopCallback) {
-            m_stopCallback();
+        if (!m_keyboardPreviewNotes.empty()) {
+            if (m_stopTaggedCallback) {
+                for (auto const &entry : m_keyboardPreviewNotes) {
+                    m_stopTaggedCallback(entry.first);
+                }
+            } else if (m_stopCallback) {
+                m_stopCallback();
+            }
         }
         m_keyboardPreviewNotes.clear();
+        if (m_mousePreviewActive) {
+            if (m_stopTaggedCallback) {
+                m_stopTaggedCallback(kMousePreviewTag);
+            } else if (m_stopCallback) {
+                m_stopCallback();
+            }
+            m_mousePreviewActive = false;
+        }
         if (m_pianoPanel) {
             m_pianoPanel->ClearExternalPressedNote();
         }
@@ -1564,12 +1604,36 @@ private:
 
         SaveCurrentSampleFromUI();
         if (!TriggerPreviewNote(note, keyCode)) {
+    #if _DEBUG
+            fprintf(stderr, "[nbstudio] key-preview down key=%d note=%d trigger=miss active=%zu\n",
+                keyCode,
+                note,
+                m_keyboardPreviewNotes.size());
+    #endif
             return true;
         }
 
         m_keyboardPreviewNotes[keyCode] = note;
+    #if _DEBUG
+        fprintf(stderr, "[nbstudio] key-preview down key=%d note=%d trigger=ok active=%zu\n",
+            keyCode,
+            note,
+            m_keyboardPreviewNotes.size());
+    #endif
         UpdateKeyboardPreviewHighlight();
         return true;
+    }
+
+    void HandleKeyboardPreviewKeyDown(wxKeyEvent &event) {
+        int keyCode = event.GetKeyCode();
+        bool ctrlDown = event.ControlDown() || event.CmdDown();
+        if (!ctrlDown && !event.AltDown()) {
+            if (StartKeyboardPreviewForKey(keyCode)) {
+                event.Skip();
+                return;
+            }
+        }
+        event.Skip();
     }
 
     void HandleKeyboardPreviewKeyUp(wxKeyEvent &event) {
@@ -1577,11 +1641,21 @@ private:
         auto found = m_keyboardPreviewNotes.find(keyCode);
 
         if (found == m_keyboardPreviewNotes.end()) {
+#if _DEBUG
+            fprintf(stderr, "[nbstudio] key-preview up key=%d state=missing active=%zu\n",
+                    keyCode,
+                    m_keyboardPreviewNotes.size());
+#endif
             event.Skip();
             return;
         }
 
         m_keyboardPreviewNotes.erase(found);
+#if _DEBUG
+        fprintf(stderr, "[nbstudio] key-preview up key=%d state=found active=%zu\n",
+                keyCode,
+                m_keyboardPreviewNotes.size());
+#endif
 
         if (m_stopTaggedCallback) {
             m_stopTaggedCallback(keyCode);
@@ -2896,7 +2970,7 @@ bool ShowInstrumentExtEditorDialog(
     std::function<void(wxString const &)> beginUndoCallback,
     std::function<void(wxString const &)> commitUndoCallback,
     std::function<void()> cancelUndoCallback,
-    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool, int)> playCallback,
+    std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool, int, BAERmfEditorInstrumentExtInfo const *)> playCallback,
     std::function<void()> stopCallback,
     std::function<void(int)> stopTaggedCallback,
     std::function<bool(uint32_t, wxString const &)> replaceCallback,

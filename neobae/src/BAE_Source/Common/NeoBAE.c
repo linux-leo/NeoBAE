@@ -7901,7 +7901,6 @@ BAEResult BAESong_LoadRmfFromMemory(BAESong song, void const *pRMFData, uint32_t
 #endif // #if USE_FULL_RMF_SUPPORT == TRUE
 }
 
-#if USE_SF2_SUPPORT == TRUE
 // Forward declaration
 // Enumerate INST resource IDs in an RMF/IREZ image. If pOutInstruments is non-NULL, up to maxInstruments
 // IDs are written into that array. pOutNumInstruments always receives the total number of INST resources
@@ -7932,7 +7931,6 @@ BAEResult TranslateInstrumentToBankProgram(uint32_t rmfInstId, uint32_t *bankId,
     }
     return BAE_NO_ERROR;
 }
-#endif
 
 // BAESong_LoadRmfFromFile()
 // --------------------------------------
