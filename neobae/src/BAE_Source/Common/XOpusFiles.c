@@ -493,7 +493,12 @@ static long PV_PushEncodedPacket(XOpusEncoder *enc, int packetBytes, XFILE outpu
     op.bytes = packetBytes;
     op.b_o_s = 0;
     op.e_o_s = endOfStream ? 1 : 0;
-    op.granulepos = enc->granule_pos;
+    /* Ogg Opus granule position tracks decoded sample count at 48 kHz.
+     * For EOS packets include pre-skip so op_pcm_total() reports the
+     * original input length rather than (input - preSkip). */
+    op.granulepos = endOfStream
+                        ? (enc->granule_pos + (ogg_int64_t)enc->preskip)
+                        : enc->granule_pos;
     op.packetno = enc->packet_no++;
 
     if (ogg_stream_packetin(&enc->os, &op) != 0)
@@ -703,7 +708,7 @@ void* XInitOpusEncoder(UINT32 sample_rate, UINT32 channels, UINT32 bitrate, UINT
     {
         enc->preskip = 0;
     }
-    enc->granule_pos = (ogg_int64_t)enc->preskip;
+    enc->granule_pos = 0;
 
     if (ogg_stream_init(&enc->os, rand()) != 0)
     {

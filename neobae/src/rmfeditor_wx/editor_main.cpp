@@ -114,6 +114,7 @@ enum {
     ID_DeleteAllInstruments,
     ID_CurrentBankDisplay,
     ID_CloneFromBank,
+    ID_CloneAllUsedFromBank,
     ID_AliasFromBank,
     ID_SaveSession,
     ID_SaveSessionAs,
@@ -329,6 +330,7 @@ public:
         soundBankMenu->AppendSeparator();
         soundBankMenu->Append(ID_LoadBank, "Load a &Bank for Preview(HSB)...\tCtrl+B");
         soundBankMenu->Append(ID_CloneFromBank, "&Clone an Instrument from currently loaded Bank...");
+        soundBankMenu->Append(ID_CloneAllUsedFromBank, "Clone &All Used Instruments from MIDI Stream...");
         soundBankMenu->Append(ID_AliasFromBank, "&Alias an Instrument from currently loaded Bank...");
         m_reloadInternalBankMenuItem = soundBankMenu->Append(ID_ReloadInternalBank, "&Unload All Banks and Reload Internal Bank");
         fileMenu->AppendSubMenu(soundBankMenu, "Sound &Bank");
@@ -580,6 +582,7 @@ public:
         Bind(wxEVT_MENU, &MainFrame::OnCompressAllInstruments, this, ID_CompressAllInstruments);
         Bind(wxEVT_MENU, &MainFrame::OnDeleteAllInstruments, this, ID_DeleteAllInstruments);
         Bind(wxEVT_MENU, &MainFrame::OnCloneFromBank, this, ID_CloneFromBank);
+        Bind(wxEVT_MENU, &MainFrame::OnCloneAllUsedFromBank, this, ID_CloneAllUsedFromBank);
         Bind(wxEVT_MENU, &MainFrame::OnAliasFromBank, this, ID_AliasFromBank);
         Bind(wxEVT_TIMER, &MainFrame::OnPlaybackTimer, this, ID_PlaybackTimer);
         Bind(wxEVT_TIMER, &MainFrame::OnNotePreviewTimer, this, ID_NotePreviewTimer);
@@ -5320,6 +5323,197 @@ private:
             }
         }
         SetStatusText(wxString::Format("Cloned instrument to program %ld", targetProgram));
+    }
+
+    void OnCloneAllUsedFromBank(wxCommandEvent &) {
+        static const uint16_t kClonedInstrumentBank = 2;
+
+        struct SourcePair {
+            uint16_t bank;
+            unsigned char program;
+        };
+        struct ClonePlan {
+            uint16_t sourceBank;
+            unsigned char sourceProgram;
+            uint32_t instrumentIndex;
+            unsigned char targetProgram;
+        };
+
+        std::unordered_map<uint32_t, SourcePair> usedPairs;
+        std::unordered_map<uint32_t, uint32_t> bankInstByPair;
+        std::vector<ClonePlan> plans;
+        uint16_t trackCount;
+        char friendlyBuf[128];
+        wxString bankLabel;
+        uint32_t availableInstCount;
+        uint32_t nextProgram;
+
+        if (!m_document) {
+            wxMessageBox("Open or create a document first.", "Clone All Used Instruments", wxOK | wxICON_INFORMATION, this);
+            return;
+        }
+        if (!EnsurePlaybackEngine()) {
+            wxMessageBox("Failed to initialize playback engine.", "Clone All Used Instruments", wxOK | wxICON_ERROR, this);
+            return;
+        }
+        if (!m_bankToken) {
+            wxMessageBox("No active bank loaded. Load a bank first.", "Clone All Used Instruments", wxOK | wxICON_INFORMATION, this);
+            return;
+        }
+
+        availableInstCount = 0;
+        if (BAERmfEditorBank_GetInstrumentCount(m_bankToken, &availableInstCount) != BAE_NO_ERROR || availableInstCount == 0) {
+            wxMessageBox("No instruments found in the active bank.", "Clone All Used Instruments", wxOK | wxICON_INFORMATION, this);
+            return;
+        }
+
+        if (BAE_GetBankFriendlyName(m_playbackMixer, m_bankToken, friendlyBuf, sizeof(friendlyBuf)) == BAE_NO_ERROR) {
+            bankLabel = wxString::FromUTF8(friendlyBuf);
+        }
+
+        /* Build lookup table from source bank/program -> bank instrument index. */
+        for (uint32_t i = 0; i < availableInstCount; ++i) {
+            BAERmfEditorBankInstrumentInfo info;
+            uint32_t key;
+
+            if (BAERmfEditorBank_GetInstrumentInfo(m_bankToken, i, &info) != BAE_NO_ERROR) {
+                continue;
+            }
+            key = (static_cast<uint32_t>(info.bank) << 8) | static_cast<uint32_t>(info.program);
+            if (bankInstByPair.find(key) == bankInstByPair.end()) {
+                bankInstByPair[key] = i;
+            }
+        }
+
+        /* Gather all bank/program pairs used by notes and track defaults. */
+        trackCount = 0;
+        BAERmfEditorDocument_GetTrackCount(m_document, &trackCount);
+        for (uint16_t trackIndex = 0; trackIndex < trackCount; ++trackIndex) {
+            BAERmfEditorTrackInfo trackInfo;
+            uint32_t noteCount;
+
+            if (BAERmfEditorDocument_GetTrackInfo(m_document, trackIndex, &trackInfo) == BAE_NO_ERROR) {
+                uint32_t key = (static_cast<uint32_t>(trackInfo.bank) << 8) | static_cast<uint32_t>(trackInfo.program);
+                usedPairs.emplace(key, SourcePair{trackInfo.bank, trackInfo.program});
+            }
+
+            noteCount = 0;
+            if (BAERmfEditorDocument_GetNoteCount(m_document, trackIndex, &noteCount) != BAE_NO_ERROR) {
+                continue;
+            }
+            for (uint32_t noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
+                BAERmfEditorNoteInfo noteInfo;
+                uint32_t key;
+
+                if (BAERmfEditorDocument_GetNoteInfo(m_document, trackIndex, noteIndex, &noteInfo) != BAE_NO_ERROR) {
+                    continue;
+                }
+                key = (static_cast<uint32_t>(noteInfo.bank) << 8) | static_cast<uint32_t>(noteInfo.program);
+                usedPairs.emplace(key, SourcePair{noteInfo.bank, noteInfo.program});
+            }
+        }
+
+        if (usedPairs.empty()) {
+            wxMessageBox("No instrument references were found in the current document.", "Clone All Used Instruments", wxOK | wxICON_INFORMATION, this);
+            return;
+        }
+
+        nextProgram = 0;
+        {
+            std::vector<uint32_t> sortedKeys;
+            sortedKeys.reserve(usedPairs.size());
+            for (auto const &entry : usedPairs) {
+                sortedKeys.push_back(entry.first);
+            }
+            std::sort(sortedKeys.begin(), sortedKeys.end());
+
+            for (uint32_t key : sortedKeys) {
+                auto bankIt = bankInstByPair.find(key);
+                if (bankIt == bankInstByPair.end()) {
+                    continue;
+                }
+                if (nextProgram >= 128) {
+                    wxMessageBox("Clone-all supports up to 128 deterministic slots (INST 512-639).",
+                                 "Clone All Used Instruments",
+                                 wxOK | wxICON_ERROR,
+                                 this);
+                    return;
+                }
+
+                plans.push_back(ClonePlan{
+                    usedPairs[key].bank,
+                    usedPairs[key].program,
+                    bankIt->second,
+                    static_cast<unsigned char>(nextProgram)
+                });
+                ++nextProgram;
+            }
+        }
+
+        if (plans.empty()) {
+            wxString msg = "No used bank/program pairs matched instruments in the active bank.";
+            if (!bankLabel.empty()) {
+                msg += "\nActive bank: ";
+                msg += bankLabel;
+            }
+            wxMessageBox(msg, "Clone All Used Instruments", wxOK | wxICON_INFORMATION, this);
+            return;
+        }
+
+        if (wxMessageBox(wxString::Format("Clone and remap %u used instrument pair(s)%s?",
+                                          static_cast<unsigned>(plans.size()),
+                                          bankLabel.empty() ? "" : wxString::Format(" from bank '%s'", bankLabel)),
+                         "Clone All Used Instruments",
+                         wxYES_NO | wxICON_QUESTION,
+                         this) != wxYES) {
+            return;
+        }
+
+        BeginUndoAction("Clone All Used Instruments");
+        for (ClonePlan const &plan : plans) {
+            BAEResult cloneResult;
+            BAEResult remapResult;
+
+            cloneResult = BAERmfEditorDocument_CloneInstrumentFromBank(m_document,
+                                                                        m_bankToken,
+                                                                        plan.instrumentIndex,
+                                                                        plan.targetProgram);
+            if (cloneResult != BAE_NO_ERROR) {
+                CancelUndoAction();
+                wxMessageBox(wxString::Format("Failed to clone source %u:%u from bank.",
+                                              static_cast<unsigned>(plan.sourceBank),
+                                              static_cast<unsigned>(plan.sourceProgram)),
+                             "Clone All Used Instruments",
+                             wxOK | wxICON_ERROR,
+                             this);
+                return;
+            }
+
+            /* Cloned instruments are authored into bank 2; remap every reference there. */
+            remapResult = BAERmfEditorDocument_RemapInstrumentReferences(m_document,
+                                                                          plan.sourceBank,
+                                                                          plan.sourceProgram,
+                                                                          kClonedInstrumentBank,
+                                                                          plan.targetProgram);
+            if (remapResult != BAE_NO_ERROR) {
+                CancelUndoAction();
+                wxMessageBox(wxString::Format("Failed to remap source %u:%u to %u:%u.",
+                                              static_cast<unsigned>(plan.sourceBank),
+                                              static_cast<unsigned>(plan.sourceProgram),
+                                              static_cast<unsigned>(kClonedInstrumentBank),
+                                              static_cast<unsigned>(plan.targetProgram)),
+                             "Clone All Used Instruments",
+                             wxOK | wxICON_ERROR,
+                             this);
+                return;
+            }
+        }
+        CommitUndoAction("Clone All Used Instruments");
+
+        PopulateSampleList();
+        PianoRollPanel_RefreshFromDocument(m_pianoRoll, false);
+        InvalidatePianoRollPreviewSong();
+        SetStatusText(wxString::Format("Cloned and remapped %u instrument pair(s)", static_cast<unsigned>(plans.size())), 0);
     }
 
     void OnAliasFromBank(wxCommandEvent &) {

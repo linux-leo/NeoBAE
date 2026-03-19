@@ -3072,6 +3072,13 @@ BAEResult BAERmfEditorDocument_SetTrackDefaultInstrument(BAERmfEditorDocument *d
                                                          uint16_t trackIndex,
                                                          uint16_t bank,
                                                          unsigned char program);
+/* Remap all references of one instrument pair to another across track defaults,
+ * notes, and embedded MIDI event streams (bank/program changes). */
+BAEResult BAERmfEditorDocument_RemapInstrumentReferences(BAERmfEditorDocument *document,
+                                                         uint16_t sourceBank,
+                                                         unsigned char sourceProgram,
+                                                         uint16_t targetBank,
+                                                         unsigned char targetProgram);
 BAEResult BAERmfEditorDocument_DeleteTrack(BAERmfEditorDocument *document,
                                            uint16_t trackIndex);
 BAEResult BAERmfEditorDocument_AddNote(BAERmfEditorDocument *document,

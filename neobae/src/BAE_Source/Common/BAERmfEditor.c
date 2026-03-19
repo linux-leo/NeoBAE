@@ -8180,55 +8180,35 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 {
                     decodedSampleRateForSnd = (uint32_t)decodedInfo.rate;
                 }
-                decodedFramesForRate = encodedFrames;
-                PV_ForceSndDecodedFrameCount(sndResource, encodedFrames);
                 loopStart = (int32_t)writeWaveform.startLoop;
                 loopEnd = (int32_t)writeWaveform.endLoop;
 
-
 #if USE_OPUS_ENCODER == TRUE && USE_OPUS_DECODER == TRUE
-
                 if (compType == C_OPUS && sample->opusUseRoundTripResampling)
                 {
-                    if (loopStart < 0 || loopEnd <= loopStart ||
-                        (uint32_t)loopStart >= encodedFrames)
+                    /* RT mode: PCM was fed to the encoder at its native sample rate
+                     * with no resampling.  XCreateSoundObjectFromData already stored
+                     * frameCount = src.waveFrames in the SND header.  Force it back
+                     * to the source frame count (Opus pre-skip can make the probed
+                     * decode slightly shorter).
+                     *
+                     * Loop points are in source sample-rate domain.  Clamp loopEnd
+                     * to encodedFrames (the actual Opus decode capacity) so that
+                     * XExpandOpus never silently clips them at playback time. */
+                    PV_ForceSndDecodedFrameCount(sndResource, writeWaveform.waveFrames);
+                    decodedFramesForRate = writeWaveform.waveFrames;
+                    if (encodedFrames > 0 && loopEnd > (int32_t)encodedFrames)
                     {
-                        loopStart = 0;
-                        loopEnd = 0;
-                    }
-                    else if ((uint32_t)loopEnd > encodedFrames)
-                    {
-                        int32_t overflow;
-
-                        overflow = loopEnd - (int32_t)encodedFrames;
-                        loopStart -= overflow;
                         loopEnd = (int32_t)encodedFrames;
-                        if (loopStart < 0)
-                        {
-                            loopStart = 0;
-                        }
-                        if (loopEnd <= loopStart)
+                        if (loopStart >= loopEnd)
                         {
                             loopStart = 0;
                             loopEnd = 0;
                         }
                     }
-                }
-                else
-#endif
-                {
-                    PV_RemapLoopPointsToFrameCount(writeWaveform.waveFrames,
-                                                   encodedFrames,
-                                                   &loopStart,
-                                                   &loopEnd);
-                }
-
-                writeWaveform.startLoop = (uint32_t)loopStart;
-                writeWaveform.endLoop = (uint32_t)loopEnd;
-#if USE_OPUS_ENCODER == TRUE && USE_OPUS_DECODER == TRUE                
-                if (compType == C_OPUS && sample->opusUseRoundTripResampling)
-                {
-                    BAE_STDERR("[RMF Save] Sample[%u] Opus RT loop keep/clamp srcFrames=%u encFrames=%u -> %u-%u\n",
+                    writeWaveform.startLoop = (uint32_t)loopStart;
+                    writeWaveform.endLoop = (uint32_t)loopEnd;
+                    BAE_STDERR("[RMF Save] Sample[%u] Opus RT: frameCount=%u encFrames=%u loop %u-%u\n",
                                (unsigned)index,
                                (unsigned)writeWaveform.waveFrames,
                                (unsigned)encodedFrames,
@@ -8236,8 +8216,16 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                                (unsigned)writeWaveform.endLoop);
                 }
                 else
-#endif                
+#endif
                 {
+                    decodedFramesForRate = encodedFrames;
+                    PV_ForceSndDecodedFrameCount(sndResource, encodedFrames);
+                    PV_RemapLoopPointsToFrameCount(writeWaveform.waveFrames,
+                                                   encodedFrames,
+                                                   &loopStart,
+                                                   &loopEnd);
+                    writeWaveform.startLoop = (uint32_t)loopStart;
+                    writeWaveform.endLoop = (uint32_t)loopEnd;
                     BAE_STDERR("[RMF Save] Sample[%u] loop remap srcFrames=%u encFrames=%u -> %u-%u\n",
                                (unsigned)index,
                                (unsigned)writeWaveform.waveFrames,
@@ -10179,6 +10167,413 @@ BAEResult BAERmfEditorDocument_SetTrackDefaultInstrument(BAERmfEditorDocument *d
     return BAE_NO_ERROR;
 }
 
+typedef struct PV_AuxOrderRef
+{
+    uint32_t index;
+    uint32_t tick;
+    uint32_t eventOrder;
+} PV_AuxOrderRef;
+
+static int PV_CompareAuxOrderRef(void const *left, void const *right)
+{
+    PV_AuxOrderRef const *a;
+    PV_AuxOrderRef const *b;
+
+    a = (PV_AuxOrderRef const *)left;
+    b = (PV_AuxOrderRef const *)right;
+    if (a->tick < b->tick)
+    {
+        return -1;
+    }
+    if (a->tick > b->tick)
+    {
+        return 1;
+    }
+    if (a->eventOrder < b->eventOrder)
+    {
+        return -1;
+    }
+    if (a->eventOrder > b->eventOrder)
+    {
+        return 1;
+    }
+    return 0;
+}
+
+static void PV_ShiftTrackEventOrders(BAERmfEditorTrack *track,
+                                     uint32_t startOrder,
+                                     uint32_t delta)
+{
+    uint32_t i;
+
+    if (!track || delta == 0)
+    {
+        return;
+    }
+
+    for (i = 0; i < track->noteCount; ++i)
+    {
+        if (track->notes[i].noteOnOrder >= startOrder)
+        {
+            track->notes[i].noteOnOrder += delta;
+        }
+        if (track->notes[i].noteOffOrder >= startOrder)
+        {
+            track->notes[i].noteOffOrder += delta;
+        }
+    }
+    for (i = 0; i < track->ccEventCount; ++i)
+    {
+        if (track->ccEvents[i].eventOrder >= startOrder)
+        {
+            track->ccEvents[i].eventOrder += delta;
+        }
+    }
+    for (i = 0; i < track->sysexEventCount; ++i)
+    {
+        if (track->sysexEvents[i].eventOrder >= startOrder)
+        {
+            track->sysexEvents[i].eventOrder += delta;
+        }
+    }
+    for (i = 0; i < track->auxEventCount; ++i)
+    {
+        if (track->auxEvents[i].eventOrder >= startOrder)
+        {
+            track->auxEvents[i].eventOrder += delta;
+        }
+    }
+    for (i = 0; i < track->metaEventCount; ++i)
+    {
+        if (track->metaEvents[i].eventOrder >= startOrder)
+        {
+            track->metaEvents[i].eventOrder += delta;
+        }
+    }
+    track->nextEventOrder += delta;
+}
+
+static BAEResult PV_InsertBankSelectBeforeAuxEvent(BAERmfEditorTrack *track,
+                                                   uint32_t auxIndex,
+                                                   unsigned char channel,
+                                                   uint16_t targetBank,
+                                                   XBOOL insertMsb,
+                                                   XBOOL insertLsb)
+{
+    uint32_t insertCount;
+    uint32_t targetOrder;
+    uint32_t tick;
+    uint32_t writeOffset;
+    BAEResult result;
+
+    if (!track || auxIndex >= track->auxEventCount)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    insertCount = 0;
+    if (insertMsb)
+    {
+        insertCount++;
+    }
+    if (insertLsb)
+    {
+        insertCount++;
+    }
+    if (insertCount == 0)
+    {
+        return BAE_NO_ERROR;
+    }
+
+    targetOrder = track->auxEvents[auxIndex].eventOrder;
+    tick = track->auxEvents[auxIndex].tick;
+
+    PV_ShiftTrackEventOrders(track, targetOrder, insertCount);
+
+    writeOffset = 0;
+    if (insertMsb)
+    {
+        result = PV_AddAuxEventToTrack(track,
+                                       tick,
+                                       (unsigned char)(CONTROL_CHANGE | (channel & 0x0F)),
+                                       BANK_MSB,
+                                       (unsigned char)((targetBank >> 7) & 0x7F),
+                                       2);
+        if (result != BAE_NO_ERROR)
+        {
+            return result;
+        }
+        track->auxEvents[track->auxEventCount - 1].eventOrder = targetOrder + writeOffset;
+        writeOffset++;
+    }
+    if (insertLsb)
+    {
+        result = PV_AddAuxEventToTrack(track,
+                                       tick,
+                                       (unsigned char)(CONTROL_CHANGE | (channel & 0x0F)),
+                                       BANK_LSB,
+                                       (unsigned char)(targetBank & 0x7F),
+                                       2);
+        if (result != BAE_NO_ERROR)
+        {
+            return result;
+        }
+        track->auxEvents[track->auxEventCount - 1].eventOrder = targetOrder + writeOffset;
+    }
+    return BAE_NO_ERROR;
+}
+
+static BAEResult PV_RemapTrackInstrumentReferences(BAERmfEditorTrack *track,
+                                                   uint16_t sourceBank,
+                                                   unsigned char sourceProgram,
+                                                   uint16_t targetBank,
+                                                   unsigned char targetProgram,
+                                                   uint16_t remapChannelMask,
+                                                   XBOOL *outChanged)
+{
+    XBOOL changed;
+    XBOOL restartScan;
+
+    if (!track)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    changed = FALSE;
+    do
+    {
+        uint16_t currentBank[BAE_MAX_MIDI_CHANNELS];
+        uint32_t lastBankMsbIndex[BAE_MAX_MIDI_CHANNELS];
+        uint32_t lastBankLsbIndex[BAE_MAX_MIDI_CHANNELS];
+        PV_AuxOrderRef *refs;
+        uint32_t i;
+
+        restartScan = FALSE;
+
+        if (track->auxEventCount == 0)
+        {
+            break;
+        }
+
+        refs = (PV_AuxOrderRef *)XNewPtr((int32_t)(sizeof(PV_AuxOrderRef) * track->auxEventCount));
+        if (!refs)
+        {
+            return BAE_MEMORY_ERR;
+        }
+
+        for (i = 0; i < BAE_MAX_MIDI_CHANNELS; ++i)
+        {
+            currentBank[i] = 0;
+            lastBankMsbIndex[i] = 0xFFFFFFFFu;
+            lastBankLsbIndex[i] = 0xFFFFFFFFu;
+        }
+
+        for (i = 0; i < track->auxEventCount; ++i)
+        {
+            refs[i].index = i;
+            refs[i].tick = track->auxEvents[i].tick;
+            refs[i].eventOrder = track->auxEvents[i].eventOrder;
+        }
+        qsort(refs, track->auxEventCount, sizeof(PV_AuxOrderRef), PV_CompareAuxOrderRef);
+
+        for (i = 0; i < track->auxEventCount; ++i)
+        {
+            BAERmfEditorAuxEvent *aux;
+            unsigned char eventType;
+            unsigned char channel;
+
+            aux = &track->auxEvents[refs[i].index];
+            eventType = (unsigned char)(aux->status & 0xF0);
+            channel = (unsigned char)(aux->status & 0x0F);
+
+            if (eventType == CONTROL_CHANGE && aux->dataBytes >= 2)
+            {
+                if (sourceBank != targetBank && (remapChannelMask & (uint16_t)(1u << channel)) != 0)
+                {
+                    if (aux->data1 == BANK_MSB && aux->data2 == (unsigned char)((sourceBank >> 7) & 0x7F))
+                    {
+                        aux->data2 = (unsigned char)((targetBank >> 7) & 0x7F);
+                        changed = TRUE;
+                    }
+                    else if (aux->data1 == BANK_LSB && aux->data2 == (unsigned char)(sourceBank & 0x7F))
+                    {
+                        aux->data2 = (unsigned char)(targetBank & 0x7F);
+                        changed = TRUE;
+                    }
+                }
+
+                if (aux->data1 == BANK_MSB)
+                {
+                    currentBank[channel] = (uint16_t)((((uint16_t)aux->data2) << 7) | (currentBank[channel] & 0x7F));
+                    lastBankMsbIndex[channel] = refs[i].index;
+                }
+                else if (aux->data1 == BANK_LSB)
+                {
+                    currentBank[channel] = (uint16_t)((currentBank[channel] & 0x3F80) | ((uint16_t)aux->data2 & 0x7F));
+                    lastBankLsbIndex[channel] = refs[i].index;
+                }
+            }
+            else if (eventType == PROGRAM_CHANGE && aux->dataBytes >= 1)
+            {
+                XBOOL channelFallbackAllowed;
+
+                channelFallbackAllowed = ((((remapChannelMask & (uint16_t)(1u << channel)) != 0)
+                                           && (lastBankMsbIndex[channel] == 0xFFFFFFFFu)
+                                           && (lastBankLsbIndex[channel] == 0xFFFFFFFFu))
+                                          ? TRUE
+                                          : FALSE);
+
+                if (aux->data1 == sourceProgram
+                    && (currentBank[channel] == sourceBank
+                        || channelFallbackAllowed))
+                {
+                    aux->data1 = targetProgram;
+                    changed = TRUE;
+
+                    if (sourceBank != targetBank && currentBank[channel] != targetBank)
+                    {
+                        BAEResult insertResult;
+                        XBOOL needMsb;
+                        XBOOL needLsb;
+
+                        needMsb = (lastBankMsbIndex[channel] == 0xFFFFFFFFu) ? TRUE : FALSE;
+                        needLsb = (lastBankLsbIndex[channel] == 0xFFFFFFFFu) ? TRUE : FALSE;
+
+                        if (!needMsb)
+                        {
+                            track->auxEvents[lastBankMsbIndex[channel]].data2 = (unsigned char)((targetBank >> 7) & 0x7F);
+                            changed = TRUE;
+                        }
+                        if (!needLsb)
+                        {
+                            track->auxEvents[lastBankLsbIndex[channel]].data2 = (unsigned char)(targetBank & 0x7F);
+                            changed = TRUE;
+                        }
+
+                        if (needMsb || needLsb)
+                        {
+                            insertResult = PV_InsertBankSelectBeforeAuxEvent(track,
+                                                                              refs[i].index,
+                                                                              channel,
+                                                                              targetBank,
+                                                                              needMsb,
+                                                                              needLsb);
+                            if (insertResult != BAE_NO_ERROR)
+                            {
+                                XDisposePtr(refs);
+                                return insertResult;
+                            }
+                            changed = TRUE;
+                            restartScan = TRUE;
+                            break;
+                        }
+
+                        currentBank[channel] = targetBank;
+                    }
+                }
+            }
+        }
+
+        XDisposePtr(refs);
+    } while (restartScan);
+
+    if (outChanged)
+    {
+        *outChanged = changed;
+    }
+    return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorDocument_RemapInstrumentReferences(BAERmfEditorDocument *document,
+                                                         uint16_t sourceBank,
+                                                         unsigned char sourceProgram,
+                                                         uint16_t targetBank,
+                                                         unsigned char targetProgram)
+{
+    uint32_t trackIndex;
+    XBOOL changed;
+
+    if (!document || sourceBank > 16383 || targetBank > 16383 || sourceProgram >= 128 || targetProgram >= 128)
+    {
+        return BAE_PARAM_ERR;
+    }
+    if (sourceBank == targetBank && sourceProgram == targetProgram)
+    {
+        return BAE_NO_ERROR;
+    }
+
+    changed = FALSE;
+    for (trackIndex = 0; trackIndex < document->trackCount; ++trackIndex)
+    {
+        BAERmfEditorTrack *track;
+        uint32_t noteIndex;
+        XBOOL trackChanged;
+        uint16_t remapChannelMask;
+        BAEResult remapResult;
+
+        track = &document->tracks[trackIndex];
+        remapChannelMask = 0;
+
+        if (track->bank == sourceBank && track->program == sourceProgram)
+        {
+            remapChannelMask |= (uint16_t)(1u << (track->channel & 0x0F));
+        }
+        for (noteIndex = 0; noteIndex < track->noteCount; ++noteIndex)
+        {
+            BAERmfEditorNote const *note;
+
+            note = &track->notes[noteIndex];
+            if (note->bank == sourceBank && note->program == sourceProgram)
+            {
+                remapChannelMask |= (uint16_t)(1u << (note->channel & 0x0F));
+            }
+        }
+
+        if (track->bank == sourceBank && track->program == sourceProgram)
+        {
+            track->bank = targetBank;
+            track->program = targetProgram;
+            changed = TRUE;
+        }
+
+        for (noteIndex = 0; noteIndex < track->noteCount; ++noteIndex)
+        {
+            BAERmfEditorNote *note;
+
+            note = &track->notes[noteIndex];
+            if (note->bank == sourceBank && note->program == sourceProgram)
+            {
+                note->bank = targetBank;
+                note->program = targetProgram;
+                changed = TRUE;
+            }
+        }
+
+        trackChanged = FALSE;
+        remapResult = PV_RemapTrackInstrumentReferences(track,
+                                                        sourceBank,
+                                                        sourceProgram,
+                                                        targetBank,
+                                                        targetProgram,
+                                                        remapChannelMask,
+                                                        &trackChanged);
+        if (remapResult != BAE_NO_ERROR)
+        {
+            return remapResult;
+        }
+        if (trackChanged)
+        {
+            changed = TRUE;
+        }
+    }
+
+    if (changed)
+    {
+        PV_MarkDocumentDirty(document);
+    }
+    return BAE_NO_ERROR;
+}
+
 BAEResult BAERmfEditorDocument_DeleteTrack(BAERmfEditorDocument *document,
                                            uint16_t trackIndex)
 {
@@ -12096,8 +12491,8 @@ BAEResult BAERmfEditorDocument_CloneInstrumentFromBank(BAERmfEditorDocument *doc
     useSoundModifierAsRootKey = TEST_FLAG_VALUE(inst->flags2, ZBF_useSoundModifierAsRootKey);
     instMiscParam1 = (int16_t)XGetShort(&inst->miscParameter1);
 
-    /* Target INST ID: 512 + targetProgram matches the standard editor convention */
-    targetInstID = (XLongResourceID)(512 + (uint32_t)targetProgram);
+    /* Target INST ID: bank 2 namespace (2 * 128 + program) */
+    targetInstID = (XLongResourceID)(256 + (uint32_t)targetProgram);
 
     if (splitCount > 0)
     {
@@ -12284,7 +12679,7 @@ BAEResult BAERmfEditorDocument_AliasInstrumentFromBank(BAERmfEditorDocument *doc
     useSoundModifierAsRootKey = TEST_FLAG_VALUE(inst->flags2, ZBF_useSoundModifierAsRootKey);
     instMiscParam1 = (int16_t)XGetShort(&inst->miscParameter1);
 
-    targetInstID = (XLongResourceID)(512 + (uint32_t)targetProgram);
+    targetInstID = (XLongResourceID)(256 + (uint32_t)targetProgram);
 
     if (splitCount > 0)
     {

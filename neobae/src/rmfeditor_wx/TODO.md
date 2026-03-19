@@ -31,6 +31,10 @@
 - "Clone all used instruments" - Clone used instruments from MIDI stream to RMF instruments, reassigning the notes and events banks/programs as needed
   - Example: A MIDI uses 0:1 piano. We clone it, it becomes 2:0, we reassign all 0:1 notes to 2:0.  
 - Interpolation configuration (none, linear, cubic, etc, current is just on/off)
+- Opus RT loop end is off
+- so is normal Opus a little
+- Check ADSR (doesn't work in instrument dialog preview) `Grasp.rmf`
+- Instrument dialog preview allows playing of notes outside of key range
 
 # Future
 - Implement ZSB (Zefie Sound Bank), same deal as RMF/ZMF, used for newer codecs. Uses ZREZ.
