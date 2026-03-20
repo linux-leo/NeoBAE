@@ -2737,7 +2737,8 @@ static BAEResult PV_CaptureOriginalResourcesFromFile(BAERmfEditorDocument *docum
 
     if (XFileSetPosition(fileRef, 0L) != 0 ||
         XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) != 0 ||
-        !XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
+        !XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)) ||
+        !XFILERESOURCE_VERSION_IS_VALID(XGetLong(&map.version)))
     {
         return BAE_BAD_FILE;
     }
@@ -6237,7 +6238,8 @@ static BAEResult PV_GetAvailableResourceID(XFILE fileRef,
     nextID = (startingID > 0) ? startingID : 1;
     if (XFileSetPosition(fileRef, 0L) != 0 ||
         XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) != 0 ||
-        !XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
+        !XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)) ||
+        !XFILERESOURCE_VERSION_IS_VALID(XGetLong(&map.version)))
     {
         return BAE_FILE_IO_ERROR;
     }
@@ -6298,7 +6300,7 @@ static BAEResult PV_EnsureResourceFileReady(XFILE fileRef, int32_t resourceID)
     }
     XFileFreeResourceCache(fileRef);
     XPutLong(&map.mapID, resourceID);
-    XPutLong(&map.version, 1);
+    XPutLong(&map.version, XFILERESOURCE_VERSION_FOR_ID(resourceID));
     XPutLong(&map.totalResources, 0);
     if (XFileSetPosition(fileRef, 0L) != 0)
     {
@@ -6326,7 +6328,8 @@ static BAEResult PV_PrepareResourceFilePath(XFILENAME *name, int32_t resourceID)
     if (fileRef)
     {
         if (XFileRead(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0 &&
-            XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
+            XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)) &&
+            XFILERESOURCE_VERSION_IS_VALID(XGetLong(&map.version)))
         {
             isValid = TRUE;
         }
@@ -6347,7 +6350,7 @@ static BAEResult PV_PrepareResourceFilePath(XFILENAME *name, int32_t resourceID)
         return BAE_FILE_IO_ERROR;
     }
     XPutLong(&map.mapID, resourceID);
-    XPutLong(&map.version, 1);
+    XPutLong(&map.version, XFILERESOURCE_VERSION_FOR_ID(resourceID));
     XPutLong(&map.totalResources, 0);
     if (XFileSetPosition(fileRef, 0L) != 0 ||
         XFileWrite(fileRef, &map, (int32_t)sizeof(XFILERESOURCEMAP)) != 0)

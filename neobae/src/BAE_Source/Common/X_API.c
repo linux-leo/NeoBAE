@@ -1371,7 +1371,7 @@ XBOOL XFileIsValidResource(XFILE file)
         {
             if (XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
             {
-                if (XGetLong(&map.version) == 0)
+                if (XFILERESOURCE_VERSION_IS_VALID(XGetLong(&map.version)))
                 {
                     valid = TRUE;
                 }
@@ -1439,7 +1439,8 @@ XFILE XFileOpenResourceFromMemory(XPTR pResource, uint32_t resourceLength, XBOOL
                 XFileSetPosition(pReference, 0L);        // at start
                 if (XFileRead(pReference, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
                 {
-                    if (!XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
+                    if (!XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)) ||
+                        !XFILERESOURCE_VERSION_IS_VALID(XGetLong(&map.version)))
                     {
                         err = 2;
                     }
@@ -1506,7 +1507,7 @@ XFILE XFileOpenResource(XFILENAME *file, XBOOL readOnly)
                     // prepare it as a resource file
                     XFileSetPosition(pReference, 0L);        // at start
                     XPutLong(&map.mapID, XFILERESOURCE_ID);
-                    XPutLong(&map.version, 1);
+                    XPutLong(&map.version, XFILERESOURCE_VERSION_RMF);
                     XPutLong(&map.totalResources, 0);
                     XFileWrite(pReference, &map, (int32_t)sizeof(XFILERESOURCEMAP));
                 }
@@ -1545,7 +1546,8 @@ XFILE XFileOpenResource(XFILENAME *file, XBOOL readOnly)
                 XFileSetPosition(pReference, 0L);        // at start
                 if (XFileRead(pReference, &map, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
                 {
-                    if (!XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
+                    if (!XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)) ||
+                        !XFILERESOURCE_VERSION_IS_VALID(XGetLong(&map.version)))
                     {
                         err = -1;
                     }
@@ -1608,7 +1610,7 @@ XFILE XFileOpenVirtualResource(int32_t resourceID)
     }
 
     XPutLong(&map.mapID, resourceID);
-    XPutLong(&map.version, 1);
+    XPutLong(&map.version, XFILERESOURCE_VERSION_FOR_ID(resourceID));
     XPutLong(&map.totalResources, 0);
 
     if (XFileSetPosition(pReference, 0L) != 0 ||
@@ -2825,7 +2827,8 @@ XFILERESOURCECACHE * XCreateAccessCache(XFILE fileRef)
     {
         return NULL;
     }
-    if (!XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)))
+    if (!XFILERESOURCE_ID_IS_VALID(XGetLong(&map.mapID)) ||
+        !XFILERESOURCE_VERSION_IS_VALID(XGetLong(&map.version)))
     {
         return NULL;
     }
