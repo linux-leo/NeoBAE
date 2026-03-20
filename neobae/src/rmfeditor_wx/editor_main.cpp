@@ -334,7 +334,7 @@ public:
             m_currentBankMenuItem->Enable(false);
         }
         soundBankMenu->AppendSeparator();
-        soundBankMenu->Append(ID_LoadBank, "Load a &Bank for Preview(HSB)...\tCtrl+B");
+        soundBankMenu->Append(ID_LoadBank, "Load a &Bank for Preview (HSB/ZSB)...\tCtrl+B");
         soundBankMenu->Append(ID_CloneFromBank, "&Clone an Instrument from currently loaded Bank...");
         soundBankMenu->Append(ID_CloneAllUsedFromBank, "Clone &All Used Instruments from MIDI Stream...");
         soundBankMenu->Append(ID_AliasFromBank, "&Alias an Instrument from currently loaded Bank...");
@@ -5993,10 +5993,10 @@ private:
 
     void OnLoadBank(wxCommandEvent &) {
         wxFileDialog dialog(this,
-                            "Load HSB Bank",
+                            "Load Sound Bank",
                             wxEmptyString,
                             wxEmptyString,
-                            "HSB banks (*.hsb)|*.hsb|All files (*.*)|*.*",
+                            "Sound banks (*.hsb;*.zsb)|*.hsb;*.zsb|HSB banks (*.hsb)|*.hsb|ZSB banks (*.zsb)|*.zsb|All files (*.*)|*.*",
                             wxFD_OPEN | wxFD_FILE_MUST_EXIST);
         if (dialog.ShowModal() != wxID_OK) {
             return;

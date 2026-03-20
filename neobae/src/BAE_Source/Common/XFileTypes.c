@@ -317,6 +317,8 @@ BAEFileType X_DetermineFileTypeByPath(const char *filePath)
         return BAE_MIDI_TYPE;
     else if (strcmp(extLower, ".rmf") == 0 || strcmp(extLower, ".zmf") == 0)
         return BAE_RMF;
+    else if (strcmp(extLower, ".hsb") == 0 || strcmp(extLower, ".zsb") == 0)
+        return BAE_RMF;
     else if (strcmp(extLower, ".rmi") == 0)
         return BAE_RMI;        
 #if USE_XMF_SUPPORT == TRUE

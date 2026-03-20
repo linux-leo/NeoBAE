@@ -62,6 +62,7 @@ ID_VERS = b'VERS'
 ID_SND = b'snd '
 ID_INST = b'INST'
 IREZ_ID = b'IREZ'
+ZREZ_ID = b'ZREZ'
 
 # SF2 Generator IDs
 SF2_GEN_START_ADDRS_OFFSET = 0
@@ -425,10 +426,10 @@ def _be32(n: int) -> bytes:
     return struct.pack('>I', n & 0xFFFFFFFF)
 
 class HSBWriter:
-    """Write IREZ resource files in the exact layout miniBAE expects.
+    """Write IREZ/ZREZ resource files in the exact layout miniBAE expects.
 
     Layout:
-      Header: 'IREZ' (4) + version(4, BE, value 1) + resourceCount(4, BE)
+      Header: 'IREZ'/'ZREZ' (4) + version(4, BE) + resourceCount(4, BE)
       For each resource entry:
         nextOffset (uint32 BE) -> absolute file offset of next entry, or EOF for last
         resourceType (4 bytes)
@@ -441,6 +442,14 @@ class HSBWriter:
     def __init__(self, filepath: str):
         self.filepath = filepath
         self.resources: List[Dict[str, object]] = []
+        # Choose header and version based on file extension
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext == '.zsb':
+            self.map_id = ZREZ_ID
+            self.version = 2
+        else:
+            self.map_id = IREZ_ID
+            self.version = 1
 
     def add_resource(self, res_type: bytes, res_id: int, data: bytes, name: str = ""):
         self.resources.append({
@@ -465,7 +474,7 @@ class HSBWriter:
             entry.extend(res['data'])
             entries.append(bytes(entry))
 
-        header = IREZ_ID + _be32(1) + _be32(len(entries))
+        header = self.map_id + _be32(self.version) + _be32(len(entries))
         # Compute absolute offsets for each entry
         offsets: List[int] = []
         cur = len(header)
@@ -986,13 +995,13 @@ def convert_sample_to_snd(sf2_bank: SF2Bank, sample: SF2Sample, resource_id: int
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Convert SF2 SoundFont files to miniBAE HSB format',
+        description='Convert SF2 SoundFont files to miniBAE HSB/ZSB format',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
     
     parser.add_argument('input', help='Input SF2 file')
-    parser.add_argument('output', help='Output HSB/BSN file')
+    parser.add_argument('output', help='Output HSB/ZSB/BSN file')
     parser.add_argument('--bank-name', help='Bank name (default: derived from filename)')
     parser.add_argument('--bank-url', default='', help='Bank URL (default: empty)')
     parser.add_argument('--verbose', '-v', action='store_true', help='Verbose output')

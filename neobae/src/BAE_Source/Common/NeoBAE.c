@@ -869,6 +869,7 @@ static BAE_BOOL PV_BAEMixer_ValidateObject(BAEMixer mixer, void *theObject, BAE_
 
 static BAEResult PV_BAEMixer_AddBank(BAEMixer mixer, XFILE newPatchFile);
 static void PV_BAEMixer_SubmitBankOrder(BAEMixer mixer);
+static XBOOL PV_XFileHasModernCodecSamples(XFILE fileRef);
 
 static BAE_FIXED PV_CalculateTimeDeltaForFade(
     BAE_FIXED sourceVolume,
@@ -2098,6 +2099,24 @@ BAEResult BAEMixer_AddBankFromMemory(BAEMixer mixer, void *pAudioFile, uint32_t 
         newPatchFile = XFileOpenResourceFromMemory(pAudioFile, fileSize, FALSE);
         if (newPatchFile)
         {
+            /* Reject IREZ (classic HSB) banks that contain modern-codec samples.
+            ** Only ZREZ (ZSB) banks are permitted to embed FLAC, Vorbis, or Opus. */
+            {
+                XFILERESOURCEMAP mapHdr;
+                XFileSetPosition(newPatchFile, 0L);
+                if (XFileRead(newPatchFile, &mapHdr, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
+                {
+                    if (XGetLong(&mapHdr.mapID) == XFILERESOURCE_ID) /* IREZ, not ZREZ */
+                    {
+                        if (PV_XFileHasModernCodecSamples(newPatchFile))
+                        {
+                            BAE_PRINTF("[Bank] IREZ bank rejected: contains FLAC/Vorbis/Opus sample(s) — upgrade to ZSB (.zsb)\n");
+                            XFileClose(newPatchFile);
+                            return BAE_UNSUPPORTED_FORMAT;
+                        }
+                    }
+                }
+            }
             theErr = PV_BAEMixer_AddBank(mixer, newPatchFile);
             if (outToken)
             {
@@ -2161,6 +2180,24 @@ BAEResult BAEMixer_AddBankFromFile(BAEMixer mixer, BAEPathName pAudioPathName, B
         newPatchFile = XFileOpenResource(&theFile, TRUE);
         if (newPatchFile)
         {
+            /* Reject IREZ (classic HSB) banks that contain modern-codec samples.
+            ** Only ZREZ (ZSB) banks are permitted to embed FLAC, Vorbis, or Opus. */
+            {
+                XFILERESOURCEMAP mapHdr;
+                XFileSetPosition(newPatchFile, 0L);
+                if (XFileRead(newPatchFile, &mapHdr, (int32_t)sizeof(XFILERESOURCEMAP)) == 0)
+                {
+                    if (XGetLong(&mapHdr.mapID) == XFILERESOURCE_ID) /* IREZ, not ZREZ */
+                    {
+                        if (PV_XFileHasModernCodecSamples(newPatchFile))
+                        {
+                            BAE_PRINTF("[Bank] IREZ bank rejected: contains FLAC/Vorbis/Opus sample(s) — upgrade to ZSB (.zsb)\n");
+                            XFileClose(newPatchFile);
+                            return BAE_UNSUPPORTED_FORMAT;
+                        }
+                    }
+                }
+            }
             theErr = PV_BAEMixer_AddBank(mixer, newPatchFile);
             if (outToken)
             {
@@ -7650,7 +7687,6 @@ BAEResult BAESong_LoadMidiFromFile(BAESong song, BAEPathName filePath, BAE_BOOL 
 //
 // Returns TRUE if at least one such resource is found, FALSE otherwise.
 //
-#if USE_FULL_RMF_SUPPORT == TRUE
 static XBOOL PV_XFileHasModernCodecSamples(XFILE fileRef)
 {
     static const XResourceType sndTypes[] = { ID_SND, ID_CSND, ID_ESND };
@@ -7695,7 +7731,6 @@ static XBOOL PV_XFileHasModernCodecSamples(XFILE fileRef)
     }
     return FALSE;
 }
-#endif // USE_FULL_RMF_SUPPORT == TRUE
 
 // BAESong_LoadRmfFromMemory()
 // --------------------------------------

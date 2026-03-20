@@ -21,13 +21,14 @@ def inspect(path):
         print(path, "too small")
         return
     sig = data[0:4]
-    if sig != b'IREZ':
-        print(path, "missing IREZ signature:", sig)
+    if sig not in (b'IREZ', b'ZREZ'):
+        print(path, "missing IREZ/ZREZ signature:", sig)
         return
     # try big-endian
     ver = struct.unpack('>I', data[4:8])[0]
     num = struct.unpack('>I', data[8:12])[0]
-    print(f"File: {path}\n  version: {ver}  resource count (claimed): {num}")
+    fmt_name = "HSB (IREZ)" if sig == b'IREZ' else "ZSB (ZREZ)"
+    print(f"File: {path}\n  format: {fmt_name}  version: {ver}  resource count (claimed): {num}")
     offset = 12
     idx = 0
     while offset + 12 < len(data) and idx < num+1000:

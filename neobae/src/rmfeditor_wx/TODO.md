@@ -51,14 +51,15 @@
 - ~~Resizable tracks (allow user to expand or shrink the track by click/dragging the far right end of the ruler)~~
 
 # Future
-- Embed ZMF version into SONG (current version: 1)
-- Implement ZSB (Zefie Sound Bank), same deal as RMF/ZMF, used for newer codecs. Uses ZREZ.
+- ~~Implement ZSB (Zefie Sound Bank), same deal as RMF/ZMF, used for newer codecs. Uses ZREZ.~~
 - Interpolation configuration (none, linear, cubic, etc, current is just on/off)
-- Tab design, one tab for MIDI data (current), one for instrument and sample data (replace instrument dialog), one for Bank Editing
+- Tab design and Bank Editor, one tab for MIDI data (current), one for Bank Editing
   - Bank Edit tab has all instruments/samples listed in a large tree
   - Context menu options for Clone/Alias functionality
   - Context menu for compressing one instrument's samples or All instruments samples in the bank like we have for songs
   - Maybe MIDI Data and Bank Editor should be mutually exclusive (show midi data for MID/RMF/ZMF, show Bank Editor for HSB/ZSB)
+  - Tabbed interface, when switching from bank editor to midi editor we should load the bank in memory from the bank editor for realtime usage
+
 - Allow for automation like Volume to be able have a slide on it so its easy to make a fadeout/fadein for example, the edit dialog could have "start (item)" "end (item)"
 - Neo Reverb for preview player
   - Custom .neoreverb support
