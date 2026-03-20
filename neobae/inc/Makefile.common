@@ -459,17 +459,23 @@ else
 						# libNeoBAE srcs + mid2rmi.c
 						SRC_BIN	:= $(SRC) src/mid2rmi/mid2rmi.c
 					else
-						ifeq ($(NBSTUDIO),1)
-							SRC_BIN := $(SRC) \
-								src/rmfeditor_wx/editor_main.cpp \
-								src/rmfeditor_wx/editor_instrument_ext_dialog.cpp \
-								src/rmfeditor_wx/editor_metadata_dialog.cpp \
-								src/rmfeditor_wx/editor_pianoroll_panel.cpp \
-								src/rmfeditor_wx/batch_compress_dialog.cpp
-							BAE_LIBS += -lz
+						ifeq ($(BANKRECOMP),1)
+							# libNeoBAE srcs + bankrecomp.c
+							SRC_BIN	:= $(SRC) src/bankrecomp/bankrecomp.c
 						else
-							# playbae = libNeoBAE srcs + playbae.c
-							SRC_BIN	:= $(SRC) src/playbae/playbae.c
+							ifeq ($(NBSTUDIO),1)
+								SRC_BIN := $(SRC) \
+									src/rmfeditor_wx/editor_main.cpp \
+									src/rmfeditor_wx/editor_bank.cpp \
+									src/rmfeditor_wx/editor_instrument_ext_dialog.cpp \
+									src/rmfeditor_wx/editor_metadata_dialog.cpp \
+									src/rmfeditor_wx/editor_pianoroll_panel.cpp \
+									src/rmfeditor_wx/batch_compress_dialog.cpp
+								BAE_LIBS += -lz
+							else
+								# playbae = libNeoBAE srcs + playbae.c
+								SRC_BIN	:= $(SRC) src/playbae/playbae.c
+							endif
 						endif
 					endif
 				endif

@@ -432,7 +432,7 @@ static void init_playFileString(void)
 }
 
 char const usageStringFmt[] =
-    "USAGE:  playbae  -p  {patches.hsb}\n"
+    "USAGE:  playbae  -p  {patches.hsb/zsb}\n"
     "                 -f  {%s}\n"
     "                 -o  {write output to file}\n"
 #ifdef SUPPORT_KARAOKE
@@ -2016,7 +2016,7 @@ int main(int argc, char *argv[])
                bankLoaded = TRUE;
             }
 #endif
-            if (ext && strcasecmp(ext, ".hsb") == 0 && !bankLoaded) {
+            if (ext && (strcasecmp(ext, ".hsb") == 0 || strcasecmp(ext, ".zsb") == 0) && !bankLoaded) {
                err = BAEMixer_AddBankFromFile(theMixer, (BAEPathName)parmFile, &bank);
                bankLoaded = TRUE;
             }

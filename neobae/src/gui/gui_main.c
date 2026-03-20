@@ -1015,7 +1015,7 @@ int main(int argc, char *argv[])
 
     if (!g_bae.bank_loaded)
     {
-        BAE_PRINTF("WARNING: No patch bank loaded. Place patches.hsb next to executable or use built-in patches.\n");
+        BAE_PRINTF("WARNING: No patch bank loaded. Place patches.hsb (or .zsb) next to executable or use built-in patches.\n");
     }
 
     // Calculate correct window height including playlist panel
@@ -1084,31 +1084,35 @@ int main(int argc, char *argv[])
 
         if (!loaded_saved)
         {
-            BAE_PRINTF("Saved bank missing or failed to load. Trying patches.hsb in executable dir...\n");
+            BAE_PRINTF("Saved bank missing or failed to load. Trying patches.hsb/zsb in executable dir...\n");
 
-            // Next priority: patches.hsb located next to the executable
+            // Next priority: patches.hsb or patches.zsb located next to the executable
             char exe_dir_try[512];
             char patches_try[1024];
             get_executable_directory(exe_dir_try, sizeof(exe_dir_try));
-#ifdef _WIN32
-            snprintf(patches_try, sizeof(patches_try), "%s\\patches.hsb", exe_dir_try);
-#else
-            snprintf(patches_try, sizeof(patches_try), "%s/patches.hsb", exe_dir_try);
-#endif
-            FILE *tf = fopen(patches_try, "r");
-            if (tf)
+            static const char *patch_names[] = {"patches.hsb", "patches.zsb", NULL};
+            for (int pi = 0; patch_names[pi] && !loaded_saved; ++pi)
             {
-                fclose(tf);
-                if (load_bank_simple(patches_try, false, reverbType, loopPlay))
+#ifdef _WIN32
+                snprintf(patches_try, sizeof(patches_try), "%s\\%s", exe_dir_try, patch_names[pi]);
+#else
+                snprintf(patches_try, sizeof(patches_try), "%s/%s", exe_dir_try, patch_names[pi]);
+#endif
+                FILE *tf = fopen(patches_try, "r");
+                if (tf)
                 {
-                    // Remember which bank we loaded for UI (do not overwrite user settings file)
-                    safe_strncpy(g_current_bank_path, patches_try, sizeof(g_current_bank_path) - 1);
-                    g_current_bank_path[sizeof(g_current_bank_path) - 1] = '\0';
-                    loaded_saved = true; // treat as loaded to skip built-in fallback
-                }
-                else
-                {
-                    BAE_PRINTF("Found patches.hsb but failed to load it: %s\n", patches_try);
+                    fclose(tf);
+                    if (load_bank_simple(patches_try, false, reverbType, loopPlay))
+                    {
+                        // Remember which bank we loaded for UI (do not overwrite user settings file)
+                        safe_strncpy(g_current_bank_path, patches_try, sizeof(g_current_bank_path) - 1);
+                        g_current_bank_path[sizeof(g_current_bank_path) - 1] = '\0';
+                        loaded_saved = true; // treat as loaded to skip built-in fallback
+                    }
+                    else
+                    {
+                        BAE_PRINTF("Found %s but failed to load it: %s\n", patch_names[pi], patches_try);
+                    }
                 }
             }
 
@@ -1137,43 +1141,41 @@ int main(int argc, char *argv[])
     }
     else
     {
-        BAE_PRINTF("No saved bank found, trying patches.hsb in executable dir then built-in...\n");
+        BAE_PRINTF("No saved bank found, trying patches.hsb/zsb in executable dir then built-in...\n");
 
         // First try patches.hsb next to the executable
         char exe_dir_try[512];
         char patches_try[1024];
         get_executable_directory(exe_dir_try, sizeof(exe_dir_try));
-#ifdef _WIN32
-        snprintf(patches_try, sizeof(patches_try), "%s\\patches.hsb", exe_dir_try);
-#else
-        snprintf(patches_try, sizeof(patches_try), "%s/patches.hsb", exe_dir_try);
-#endif
-        FILE *tf = fopen(patches_try, "r");
-        if (tf)
+        static const char *patch_names2[] = {"patches.hsb", "patches.zsb", NULL};
+        bool found_patches = false;
+        for (int pi = 0; patch_names2[pi] && !found_patches; ++pi)
         {
-            fclose(tf);
-            if (load_bank_simple(patches_try, false, reverbType, loopPlay))
-            {
-                safe_strncpy(g_current_bank_path, patches_try, sizeof(g_current_bank_path) - 1);
-                g_current_bank_path[sizeof(g_current_bank_path) - 1] = '\0';
-            }
-            else
-            {
-                BAE_PRINTF("Found patches.hsb but failed to load it: %s\n", patches_try);
-#ifdef _BUILT_IN_PATCHES
-                if (!load_bank_simple("__builtin__", false, reverbType, loopPlay))
-                {
-                    (void)load_bank_simple(NULL, false, reverbType, loopPlay);
-                }
+#ifdef _WIN32
+            snprintf(patches_try, sizeof(patches_try), "%s\\%s", exe_dir_try, patch_names2[pi]);
 #else
-                (void)load_bank_simple(NULL, false, reverbType, loopPlay);
+            snprintf(patches_try, sizeof(patches_try), "%s/%s", exe_dir_try, patch_names2[pi]);
 #endif
+            FILE *tf = fopen(patches_try, "r");
+            if (tf)
+            {
+                fclose(tf);
+                if (load_bank_simple(patches_try, false, reverbType, loopPlay))
+                {
+                    safe_strncpy(g_current_bank_path, patches_try, sizeof(g_current_bank_path) - 1);
+                    g_current_bank_path[sizeof(g_current_bank_path) - 1] = '\0';
+                    found_patches = true;
+                }
+                else
+                {
+                    BAE_PRINTF("Found %s but failed to load it: %s\n", patch_names2[pi], patches_try);
+                }
             }
         }
-        else
+        if (!found_patches)
         {
 #ifdef _BUILT_IN_PATCHES
-            // No patches.hsb; try built-in if available
+            // No patches.hsb/zsb; try built-in if available
             if (!load_bank_simple("__builtin__", false, reverbType, loopPlay))
             {
                 (void)load_bank_simple(NULL, false, reverbType, loopPlay);
@@ -1272,7 +1274,7 @@ int main(int argc, char *argv[])
                     if (ext)
                     {
 #ifdef _WIN32
-                        is_bank_file = _stricmp(ext, ".hsb") == 0;
+                        is_bank_file = _stricmp(ext, ".hsb") == 0 || _stricmp(ext, ".zsb") == 0;
 #if USE_SF2_SUPPORT == TRUE
                         if (!is_bank_file)
                             is_bank_file = _stricmp(ext, ".sf2") == 0;
@@ -1292,7 +1294,7 @@ int main(int argc, char *argv[])
 #endif
 
 #else
-                        is_bank_file = strcasecmp(ext, ".hsb") == 0;
+                        is_bank_file = strcasecmp(ext, ".hsb") == 0 || strcasecmp(ext, ".zsb") == 0;
 #if USE_SF2_SUPPORT == TRUE
                         if (!is_bank_file)
                             is_bank_file = strcasecmp(ext, ".sf2") == 0;
@@ -1649,7 +1651,7 @@ int main(int argc, char *argv[])
                     if (ext)
                     {
 #ifdef _WIN32
-                        is_bank_file = _stricmp(ext, ".hsb") == 0;
+                        is_bank_file = _stricmp(ext, ".hsb") == 0 || _stricmp(ext, ".zsb") == 0;
 #if USE_SF2_SUPPORT == TRUE
                         if (!is_bank_file)
                             is_bank_file = _stricmp(ext, ".sf2") == 0;
@@ -1666,7 +1668,7 @@ int main(int argc, char *argv[])
 #endif
                         is_playlist_file = (_stricmp(ext, ".m3u") == 0);
 #else
-                        is_bank_file = strcasecmp(ext, ".hsb") == 0;
+                        is_bank_file = strcasecmp(ext, ".hsb") == 0 || strcasecmp(ext, ".zsb") == 0;
 #if USE_SF2_SUPPORT == TRUE
                         if (!is_bank_file)
                             is_bank_file = strcasecmp(ext, ".sf2") == 0;
@@ -6188,16 +6190,16 @@ int main(int argc, char *argv[])
                 ofn.lpstrFilter =
 #if USE_SF2_SUPPORT == TRUE
     #if _USING_FLUIDSYNTH == TRUE
-                    "Bank Files (*.hsb;*.sf2;*.sf3;*.sfo;*.dls)\0*.hsb;*.sf2;*.sf3;*.sfo;*.dls\0HSB Banks\0*.hsb\0SF2 SoundFonts\0*.sf2\0SF3 SoundFonts\0*.sf3\0SFO SoundFonts\0*.sfo\0DLS Banks\0*.dls\0All Files\0*.*\0"
+                    "Bank Files (*.hsb;*.zsb;*.sf2;*.sf3;*.sfo;*.dls)\0*.hsb;*.zsb;*.sf2;*.sf3;*.sfo;*.dls\0HSB/ZSB Banks\0*.hsb;*.zsb\0SF2 SoundFonts\0*.sf2\0SF3 SoundFonts\0*.sf3\0SFO SoundFonts\0*.sfo\0DLS Banks\0*.dls\0All Files\0*.*\0"
     #else
         #if USE_VORBIS_DECODER == TRUE
-                    "Bank Files (*.hsb;*.sf2;*.sf3;*.sfo)\0*.hsb;*.sf2;*.sf3;*.sfo\0HSB Banks\0*.hsb\0SF2 SoundFonts\0*.sf2\0SF3 SoundFonts\0*.sf3\0SFO SoundFonts\0*.sfo\0All Files\0*.*\0"
+                    "Bank Files (*.hsb;*.zsb;*.sf2;*.sf3;*.sfo)\0*.hsb;*.zsb;*.sf2;*.sf3;*.sfo\0HSB/ZSB Banks\0*.hsb;*.zsb\0SF2 SoundFonts\0*.sf2\0SF3 SoundFonts\0*.sf3\0SFO SoundFonts\0*.sfo\0All Files\0*.*\0"
         #else
-                    "Bank Files (*.hsb;*.sf2)\0*.hsb;*.sf2\0HSB Banks\0*.hsb\0SF2 SoundFonts\0*.sf2\0All Files\0*.*\0"
+                    "Bank Files (*.hsb;*.zsb;*.sf2)\0*.hsb;*.zsb;*.sf2\0HSB/ZSB Banks\0*.hsb;*.zsb\0SF2 SoundFonts\0*.sf2\0All Files\0*.*\0"
         #endif
     #endif
 #else
-                    "Bank Files (*.hsb)\0*.hsb\0HSB Banks\0*.hsb\0All Files\0*.*\0"
+                    "Bank Files (*.hsb;*.zsb)\0*.hsb;*.zsb\0HSB/ZSB Banks\0*.hsb;*.zsb\0All Files\0*.*\0"
 #endif
                     ;
                 ofn.lpstrFile = fileBuf;
@@ -6209,7 +6211,7 @@ int main(int argc, char *argv[])
 #elif defined(__APPLE__)
                 {
                     static const char BANK_TYPE_LIST[] =
-                        "\"hsb\""
+                        "\"hsb\", \"zsb\""
 #if USE_SF2_SUPPORT == TRUE
                         ", \"sf2\""
 #if USE_VORBIS_DECODER == TRUE
@@ -6244,24 +6246,24 @@ int main(int argc, char *argv[])
         const char *cmds[] = {
 #if USE_SF2_SUPPORT == TRUE
     #if _USING_FLUIDSYNTH == TRUE
-            "zenity --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.sf2 *.sf3 *.sfo *.dls' 2>/dev/null",
-            "kdialog --getopenfilename . '*.hsb *.sf2 *.sf3 *.sfo *.dls' 2>/dev/null",
-            "yad --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.sf2 *.sf3 *.sfo *.dls' 2>/dev/null",
+            "zenity --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.zsb *.sf2 *.sf3 *.sfo *.dls' 2>/dev/null",
+            "kdialog --getopenfilename . '*.hsb *.zsb *.sf2 *.sf3 *.sfo *.dls' 2>/dev/null",
+            "yad --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.zsb *.sf2 *.sf3 *.sfo *.dls' 2>/dev/null",
     #else
         #if USE_VORBIS_DECODER == TRUE
-            "zenity --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.sf2 *.sf3 *.sfo' 2>/dev/null",
-            "kdialog --getopenfilename . '*.hsb *.sf2 *.sf3 *.sfo' 2>/dev/null",
-            "yad --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.sf2 *.sf3 *.sfo' 2>/dev/null",
+            "zenity --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.zsb *.sf2 *.sf3 *.sfo' 2>/dev/null",
+            "kdialog --getopenfilename . '*.hsb *.zsb *.sf2 *.sf3 *.sfo' 2>/dev/null",
+            "yad --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.zsb *.sf2 *.sf3 *.sfo' 2>/dev/null",
         #else
-            "zenity --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.sf2' 2>/dev/null",
-            "kdialog --getopenfilename . '*.hsb *.sf2' 2>/dev/null",
-            "yad --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.sf2' 2>/dev/null",
+            "zenity --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.zsb *.sf2' 2>/dev/null",
+            "kdialog --getopenfilename . '*.hsb *.zsb *.sf2' 2>/dev/null",
+            "yad --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.zsb *.sf2' 2>/dev/null",
         #endif
     #endif
 #else
-            "zenity --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb' 2>/dev/null",
-            "kdialog --getopenfilename . '*.hsb' 2>/dev/null",
-            "yad --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb' 2>/dev/null",
+            "zenity --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.zsb' 2>/dev/null",
+            "kdialog --getopenfilename . '*.hsb *.zsb' 2>/dev/null",
+            "yad --file-selection --title='Load Patch Bank' --file-filter='Bank Files | *.hsb *.zsb' 2>/dev/null",
 #endif
             NULL};            
         for (int ci = 0; cmds[ci]; ++ci)
@@ -6278,6 +6280,7 @@ int main(int argc, char *argv[])
                 if (l > 0)
                 {
                     if ((l > 4 && strcasecmp(fileBuf + l - 4, ".hsb") == 0)
+                        || (l > 4 && strcasecmp(fileBuf + l - 4, ".zsb") == 0)
 #if USE_SF2_SUPPORT == TRUE
                         || (l > 4 && strcasecmp(fileBuf + l - 4, ".sf2") == 0)
 #if USE_VORBIS_DECODER == TRUE                        
@@ -6296,16 +6299,16 @@ int main(int argc, char *argv[])
                     {
 #if USE_SF2_SUPPORT == TRUE
     #if _USING_FLUIDSYNTH == TRUE
-                        BAE_PRINTF("Not a bank file (.hsb, .sf2, .sf3, .sfo, or .dls): %s\n", fileBuf);
+                        BAE_PRINTF("Not a bank file (.hsb, .zsb, .sf2, .sf3, .sfo, or .dls): %s\n", fileBuf);
     #else
         #if USE_VORBIS_DECODER == TRUE                        
-                        BAE_PRINTF("Not a bank file (.hsb, .sf2, .sf3, or .sfo): %s\n", fileBuf);
+                        BAE_PRINTF("Not a bank file (.hsb, .zsb, .sf2, .sf3, or .sfo): %s\n", fileBuf);
         #else
-                        BAE_PRINTF("Not a bank file (.hsb or .sf2): %s\n", fileBuf);
+                        BAE_PRINTF("Not a bank file (.hsb, .zsb, or .sf2): %s\n", fileBuf);
         #endif
     #endif
 #else
-                        BAE_PRINTF("Not a bank file (.hsb): %s\n", fileBuf);
+                        BAE_PRINTF("Not a bank file (.hsb or .zsb): %s\n", fileBuf);
 #endif
                     }
                 }
@@ -6321,21 +6324,28 @@ int main(int argc, char *argv[])
 #if defined(_WIN32) || defined(__linux__) || defined(__APPLE__)
             // Check if we should show the Default Bank button
 
-            // Check if patches.hsb exists in executable directory
+            // Check if patches.hsb or patches.zsb exists in executable directory
 
             char exe_dir[512];
             char patches_path[1024];
             get_executable_directory(exe_dir, sizeof(exe_dir));
-#ifdef _WIN32
-            snprintf(patches_path, sizeof(patches_path), "%s\\patches.hsb", exe_dir);
-#else
-            snprintf(patches_path, sizeof(patches_path), "%s/patches.hsb", exe_dir);
-#endif
-            FILE *test_file = fopen(patches_path, "r");
-            if (test_file)
             {
-                fclose(test_file);
-                defaultBankExists = true;
+                static const char *default_names[] = {"patches.hsb", "patches.zsb", NULL};
+                for (int di = 0; default_names[di]; ++di)
+                {
+#ifdef _WIN32
+                    snprintf(patches_path, sizeof(patches_path), "%s\\%s", exe_dir, default_names[di]);
+#else
+                    snprintf(patches_path, sizeof(patches_path), "%s/%s", exe_dir, default_names[di]);
+#endif
+                    FILE *test_file = fopen(patches_path, "r");
+                    if (test_file)
+                    {
+                        fclose(test_file);
+                        defaultBankExists = true;
+                        break;
+                    }
+                }
             }
 
 #endif

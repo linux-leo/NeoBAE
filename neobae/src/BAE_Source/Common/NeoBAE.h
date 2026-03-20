@@ -3321,6 +3321,74 @@ BAEResult BAERmfEditorDocument_IsSampleBankAlias(BAERmfEditorDocument const *doc
  * Implemented in NeoBAE.c so callers without access to sBAEMixer internals can use it. */
 XBOOL BAEMixer_IsAudioTailActive(BAEMixer mixer);
 
+/* ---------- Bank sample enumeration and editing ---------- */
+
+/* Information about a sample/key split within a bank instrument.
+ * For non-split instruments (keySplitCount == 0), sampleIndex 0 refers to the base sample.
+ * For split instruments, sampleIndex 0..keySplitCount-1 refers to each key split. */
+typedef struct BAERmfEditorBankSampleInfo
+{
+    uint32_t instID;                     /* INST resource ID this sample belongs to */
+    uint32_t sampleIndex;                 /* Index of this sample within the instrument (0 for base) */
+    unsigned char lowKey;                 /* Low MIDI key range (for splits) */
+    unsigned char highKey;               /* High MIDI key range (for splits) */
+    unsigned char rootKey;               /* Root key for this sample */
+    int16_t splitVolume;                 /* Per-split volume (miscParameter2), 0 = use default (100) */
+    XShortResourceID sndResourceID;       /* SND resource ID in the bank file */
+    uint32_t sampleRate;                  /* Sample rate in Hz */
+    uint32_t frameCount;                 /* Number of audio frames */
+    int16_t bitDepth;                    /* Sample bit depth (8 or 16) */
+    int16_t channels;                    /* Mono (1) or stereo (2) */
+    uint32_t loopStart;                  /* Loop start frame */
+    uint32_t loopEnd;                    /* Loop end frame */
+    XResourceType compressionType;       /* Compression type (X_UNCOMPRESSED, X_FLAC, etc.) */
+} BAERmfEditorBankSampleInfo;
+
+/* Count the number of samples (key splits) in a bank instrument.
+ * If the instrument has no key splits (keySplitCount == 0), returns 1.
+ * If the instrument has key splits, returns keySplitCount. */
+BAEResult BAERmfEditorBank_GetInstrumentSampleCount(BAEBankToken bankToken,
+                                                     uint32_t instrumentIndex,
+                                                     uint32_t *outCount);
+
+/* Get information about a specific sample (or key split) within a bank instrument.
+ * For sampleIndex: use 0 for non-split instruments, or 0..keySplitCount-1 for split instruments. */
+BAEResult BAERmfEditorBank_GetInstrumentSampleInfo(BAEBankToken bankToken,
+                                                    uint32_t instrumentIndex,
+                                                    uint32_t sampleIndex,
+                                                    BAERmfEditorBankSampleInfo *outInfo);
+
+/* Get extended instrument data (ADSR, LFO, LPF, flags) for a bank instrument.
+ * This parses the extended INST data present after the key split array. */
+BAEResult BAERmfEditorBank_GetInstrumentExtInfo(BAEBankToken bankToken,
+                                                 uint32_t instrumentIndex,
+                                                 BAERmfEditorInstrumentExtInfo *outInfo);
+
+/* Set extended instrument data (ADSR, LFO, LPF, flags) for a bank instrument.
+ * This modifies the in-memory bank state. Call BAERmfEditorBank_SaveToFile to persist. */
+BAEResult BAERmfEditorBank_SetInstrumentExtInfo(BAEBankToken bankToken,
+                                                uint32_t instrumentIndex,
+                                                BAERmfEditorInstrumentExtInfo const *info);
+
+/* Set sample info for a specific sample within a bank instrument.
+ * This modifies the in-memory bank state. Call BAERmfEditorBank_SaveToFile to persist. */
+BAEResult BAERmfEditorBank_SetInstrumentSampleInfo(BAEBankToken bankToken,
+                                                    uint32_t instrumentIndex,
+                                                    uint32_t sampleIndex,
+                                                    BAERmfEditorBankSampleInfo const *info);
+
+/* Save the modified bank to a file.
+ * filePath should have extension .hsb for IREZ format or .zsb for ZREZ format.
+ * The format is auto-detected based on the extension (and codec content). */
+BAEResult BAERmfEditorBank_SaveToFile(BAEBankToken bankToken,
+                                      BAEPathName filePath);
+
+/* Serialize the modified bank to memory.
+ * Caller must free *outData with XDisposePtr when done. */
+BAEResult BAERmfEditorBank_SaveToMemory(BAEBankToken bankToken,
+                                        unsigned char **outData,
+                                        uint32_t *outSize);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

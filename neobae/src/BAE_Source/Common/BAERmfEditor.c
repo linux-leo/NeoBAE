@@ -12980,6 +12980,535 @@ BAEResult BAERmfEditorBank_ResolveInstID(BAEBankToken bankToken,
     return BAE_BAD_FILE;
 }
 
+/* ---------- Bank sample enumeration and editing ---------- */
+
+BAEResult BAERmfEditorBank_GetInstrumentSampleCount(BAEBankToken bankToken,
+                                                     uint32_t instrumentIndex,
+                                                     uint32_t *outCount)
+{
+    enum
+    {
+        kInstHeaderMinSize = 14
+    };
+    XFILE bankFile;
+    XPTR instData;
+    XLongResourceID instID;
+    int32_t instSize;
+    char rawName[256];
+    InstrumentResource *inst;
+    int16_t splitCount;
+
+    if (!outCount)
+    {
+        return BAE_PARAM_ERR;
+    }
+    *outCount = 0;
+    if (!bankToken)
+    {
+        return BAE_PARAM_ERR;
+    }
+    bankFile = (XFILE)bankToken;
+
+    rawName[0] = 0;
+    instData = XGetIndexedFileResource(bankFile, ID_INST, &instID,
+                                       (int32_t)instrumentIndex, rawName, &instSize);
+    if (!instData)
+    {
+        return BAE_BAD_FILE;
+    }
+    if (instSize < kInstHeaderMinSize)
+    {
+        XDisposePtr(instData);
+        return BAE_BAD_FILE;
+    }
+    inst = (InstrumentResource *)instData;
+    splitCount = (int16_t)XGetShort(&inst->keySplitCount);
+    if (splitCount < 0)
+    {
+        splitCount = 0;
+    }
+
+    /* Non-split instruments return 1 (the base sample), split instruments return the split count */
+    *outCount = (splitCount > 0) ? (uint32_t)splitCount : 1;
+
+    XDisposePtr(instData);
+    return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorBank_GetInstrumentSampleInfo(BAEBankToken bankToken,
+                                                    uint32_t instrumentIndex,
+                                                    uint32_t sampleIndex,
+                                                    BAERmfEditorBankSampleInfo *outInfo)
+{
+    enum
+    {
+        kInstHeaderMinSize = 14,
+        kInstKeySplitSize = 8
+    };
+    XFILE bankFile;
+    XPTR instData;
+    XPTR sndData;
+    XLongResourceID instID;
+    int32_t instSize;
+    char rawName[256];
+    InstrumentResource *inst;
+    KeySplit split;
+    XShortResourceID sndID;
+    SampleDataInfo sampleInfo;
+    int16_t splitCount;
+    int16_t baseRootKey;
+    int16_t baseVolume;
+    XBOOL useSoundModifierAsRootKey;
+    int16_t miscParam1;
+
+    if (!outInfo)
+    {
+        return BAE_PARAM_ERR;
+    }
+    XSetMemory(outInfo, (int32_t)sizeof(*outInfo), 0);
+    if (!bankToken)
+    {
+        return BAE_PARAM_ERR;
+    }
+    bankFile = (XFILE)bankToken;
+
+    rawName[0] = 0;
+    instData = XGetIndexedFileResource(bankFile, ID_INST, &instID,
+                                       (int32_t)instrumentIndex, rawName, &instSize);
+    if (!instData)
+    {
+        return BAE_BAD_FILE;
+    }
+    if (instSize < kInstHeaderMinSize)
+    {
+        XDisposePtr(instData);
+        return BAE_BAD_FILE;
+    }
+    inst = (InstrumentResource *)instData;
+
+    splitCount = (int16_t)XGetShort(&inst->keySplitCount);
+    if (splitCount < 0)
+    {
+        splitCount = 0;
+    }
+
+    /* Validate sampleIndex */
+    if (splitCount > 0)
+    {
+        if (sampleIndex >= (uint32_t)splitCount)
+        {
+            XDisposePtr(instData);
+            return BAE_PARAM_ERR;
+        }
+    }
+    else
+    {
+        if (sampleIndex != 0)
+        {
+            XDisposePtr(instData);
+            return BAE_PARAM_ERR;
+        }
+    }
+
+    outInfo->instID = (uint32_t)instID;
+    outInfo->sampleIndex = sampleIndex;
+    baseRootKey = (int16_t)XGetShort(&inst->midiRootKey);
+    baseVolume = (int16_t)XGetShort(&inst->miscParameter2);
+    useSoundModifierAsRootKey = TEST_FLAG_VALUE(inst->flags2, ZBF_useSoundModifierAsRootKey);
+    miscParam1 = (int16_t)XGetShort(&inst->miscParameter1);
+
+    if (splitCount > 0)
+    {
+        /* This is a split instrument - get info from the key split */
+        XGetKeySplitFromPtr(inst, (int16_t)sampleIndex, &split);
+        sndID = split.sndResourceID;
+
+        outInfo->lowKey = (unsigned char)split.lowMidi;
+        outInfo->highKey = (unsigned char)split.highMidi;
+        outInfo->splitVolume = split.miscParameter2;
+
+        /* Determine root key */
+        if (useSoundModifierAsRootKey)
+        {
+            int16_t splitRoot = split.miscParameter1;
+            if (split.lowMidi == split.highMidi && splitRoot == 0)
+            {
+                splitRoot = (int16_t)split.lowMidi;
+            }
+            if (splitRoot < 0 || splitRoot > 127)
+            {
+                splitRoot = baseRootKey;
+            }
+            outInfo->rootKey = (unsigned char)splitRoot;
+        }
+        else
+        {
+            outInfo->rootKey = (unsigned char)baseRootKey;
+        }
+    }
+    else
+    {
+        /* Non-split instrument - use base sample */
+        sndID = (XShortResourceID)XGetShort(&inst->sndResourceID);
+        outInfo->lowKey = 0;
+        outInfo->highKey = 127;
+        outInfo->splitVolume = baseVolume;
+
+        /* Determine root key */
+        if (useSoundModifierAsRootKey)
+        {
+            if (miscParam1 > 0 && miscParam1 <= 127)
+            {
+                outInfo->rootKey = (unsigned char)miscParam1;
+            }
+            else
+            {
+                outInfo->rootKey = (unsigned char)baseRootKey;
+            }
+        }
+        else
+        {
+            outInfo->rootKey = (unsigned char)baseRootKey;
+        }
+    }
+
+    outInfo->sndResourceID = sndID;
+
+    /* Get SND resource info — try snd, csnd, esnd in order */
+    {
+        int32_t sndSize;
+        static const XResourceType sndTypes[] = { ID_SND, ID_CSND, ID_ESND, 0 };
+        int32_t typeIdx;
+
+        sndData = NULL;
+        for (typeIdx = 0; sndTypes[typeIdx] != 0; ++typeIdx)
+        {
+            sndData = XGetFileResource(bankFile, sndTypes[typeIdx], (XLongResourceID)sndID, NULL, &sndSize);
+            if (sndData)
+            {
+                break;
+            }
+        }
+        if (sndData && sndSize > 0)
+        {
+            /* Validate the SND resource has a recognizable sound header before
+             * calling XGetSampleInfoFromSnd, which asserts on invalid data.
+             * A valid SND resource starts with a format type (1 or 2) at offset 0. */
+            int16_t soundFormat = (int16_t)XGetShort(sndData);
+            if (soundFormat == 1 || soundFormat == 2)
+            {
+                XSetMemory(&sampleInfo, (int32_t)sizeof(sampleInfo), 0);
+                if (XGetSampleInfoFromSnd(sndData, &sampleInfo) == 0)
+                {
+                    outInfo->sampleRate = (uint32_t)XFIXED_TO_UNSIGNED_LONG(sampleInfo.rate);
+                    outInfo->frameCount = sampleInfo.frames;
+                    outInfo->bitDepth = sampleInfo.bitSize;
+                    outInfo->channels = sampleInfo.channels;
+                    outInfo->loopStart = sampleInfo.loopStart;
+                    outInfo->loopEnd = sampleInfo.loopEnd;
+                    outInfo->compressionType = sampleInfo.compressionType;
+                }
+            }
+            XDisposePtr(sndData);
+        }
+    }
+
+    XDisposePtr(instData);
+    return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorBank_GetInstrumentExtInfo(BAEBankToken bankToken,
+                                                 uint32_t instrumentIndex,
+                                                 BAERmfEditorInstrumentExtInfo *outInfo)
+{
+    enum
+    {
+        kInstHeaderMinSize = 14
+    };
+    XFILE bankFile;
+    XPTR instData;
+    XLongResourceID instID;
+    int32_t instSize;
+    char rawName[256];
+    char instName[256];
+    uint32_t i;
+
+    if (!outInfo)
+    {
+        return BAE_PARAM_ERR;
+    }
+    XSetMemory(outInfo, (int32_t)sizeof(*outInfo), 0);
+    if (!bankToken)
+    {
+        return BAE_PARAM_ERR;
+    }
+    bankFile = (XFILE)bankToken;
+
+    rawName[0] = 0;
+    instData = XGetIndexedFileResource(bankFile, ID_INST, &instID,
+                                       (int32_t)instrumentIndex, rawName, &instSize);
+    if (!instData)
+    {
+        return BAE_BAD_FILE;
+    }
+    if (instSize < kInstHeaderMinSize)
+    {
+        XDisposePtr(instData);
+        return BAE_BAD_FILE;
+    }
+
+    /* Get basic INST header info */
+    PV_DecodeResourceName(rawName, instName);
+    outInfo->instID = (uint32_t)instID;
+    outInfo->displayName = instName[0] ? instName : NULL;
+    outInfo->flags1 = ((unsigned char *)instData)[5];
+    outInfo->flags2 = ((unsigned char *)instData)[6];
+    outInfo->midiRootKey = (int16_t)XGetShort(((unsigned char *)instData) + 2);
+    outInfo->miscParameter2 = (int16_t)XGetShort(((unsigned char *)instData) + 10);
+
+    /* Parse extended data using existing function */
+    {
+        BAERmfEditorInstrumentExt extData;
+        PV_ParseExtendedInstData(instData, instSize, &extData);
+        outInfo->hasExtendedData = extData.hasExtendedData;
+        outInfo->hasDefaultMod = extData.hasDefaultMod;
+        outInfo->LPF_frequency = extData.LPF_frequency;
+        outInfo->LPF_resonance = extData.LPF_resonance;
+        outInfo->LPF_lowpassAmount = extData.LPF_lowpassAmount;
+        PV_CopyEditorADSRToInfo(&extData.volumeADSR, &outInfo->volumeADSR);
+        outInfo->lfoCount = extData.lfoCount;
+        for (i = 0; i < extData.lfoCount && i < BAE_EDITOR_MAX_LFOS; i++)
+        {
+            outInfo->lfos[i].destination = extData.lfos[i].destination;
+            outInfo->lfos[i].period = extData.lfos[i].period;
+            outInfo->lfos[i].waveShape = extData.lfos[i].waveShape;
+            outInfo->lfos[i].DC_feed = extData.lfos[i].DC_feed;
+            outInfo->lfos[i].level = extData.lfos[i].level;
+            PV_CopyEditorADSRToInfo(&extData.lfos[i].adsr, &outInfo->lfos[i].adsr);
+        }
+        outInfo->curveCount = extData.curveCount;
+        for (i = 0; i < extData.curveCount && i < BAE_EDITOR_MAX_CURVES; i++)
+        {
+            uint32_t j;
+            outInfo->curves[i].tieFrom = extData.curves[i].tieFrom;
+            outInfo->curves[i].tieTo = extData.curves[i].tieTo;
+            outInfo->curves[i].curveCount = extData.curves[i].curveCount;
+            for (j = 0; j < extData.curves[i].curveCount && j < BAE_EDITOR_MAX_ADSR_STAGES; j++)
+            {
+                outInfo->curves[i].from_Value[j] = extData.curves[i].from_Value[j];
+                outInfo->curves[i].to_Scalar[j] = extData.curves[i].to_Scalar[j];
+            }
+        }
+    }
+
+    XDisposePtr(instData);
+    return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorBank_SetInstrumentExtInfo(BAEBankToken bankToken,
+                                                uint32_t instrumentIndex,
+                                                BAERmfEditorInstrumentExtInfo const *info)
+{
+    /* TODO: Implement in-memory modification of bank INST resources.
+     * This requires a dirty-tracking layer that stores modified INST blobs
+     * keyed by instrument index, which SaveToMemory would then use instead
+     * of the original resource data.  For now, return unsupported. */
+    (void)bankToken;
+    (void)instrumentIndex;
+    (void)info;
+    return BAE_NOT_SETUP;
+}
+
+BAEResult BAERmfEditorBank_SetInstrumentSampleInfo(BAEBankToken bankToken,
+                                                    uint32_t instrumentIndex,
+                                                    uint32_t sampleIndex,
+                                                    BAERmfEditorBankSampleInfo const *info)
+{
+    /* TODO: Implement in-memory modification of bank key split / SND metadata.
+     * Requires dirty-tracking layer.  For now, return unsupported. */
+    (void)bankToken;
+    (void)instrumentIndex;
+    (void)sampleIndex;
+    (void)info;
+    return BAE_NOT_SETUP;
+}
+
+/* Serialize all resources from a loaded bank file into a new in-memory
+ * resource image.  The output is a complete IREZ or ZREZ blob that can
+ * be written to disk or loaded via BAEMixer_AddBankFromMemory.
+ *
+ * The format is preserved from the source bank (IREZ stays IREZ, ZREZ
+ * stays ZREZ).  All resource types are copied verbatim. */
+BAEResult BAERmfEditorBank_SaveToMemory(BAEBankToken bankToken,
+                                        unsigned char **outData,
+                                        uint32_t *outSize)
+{
+    XFILE bankFile;
+    XFILE outFile;
+    XFILERESOURCEMAP map;
+    int32_t resourceID;
+    XPTR data;
+    int32_t size;
+
+    if (!outData || !outSize)
+    {
+        return BAE_PARAM_ERR;
+    }
+    *outData = NULL;
+    *outSize = 0;
+    if (!bankToken)
+    {
+        return BAE_PARAM_ERR;
+    }
+    bankFile = (XFILE)bankToken;
+
+    /* Read the source bank's map header to determine IREZ vs ZREZ */
+    if (XFileSetPosition(bankFile, 0L) != 0 ||
+        XFileRead(bankFile, &map, (int32_t)sizeof(XFILERESOURCEMAP)) != 0)
+    {
+        return BAE_BAD_FILE;
+    }
+    resourceID = (int32_t)XGetLong(&map.mapID);
+    if (!XFILERESOURCE_ID_IS_VALID(resourceID))
+    {
+        return BAE_BAD_FILE;
+    }
+
+    /* Create a virtual (in-memory) resource file with the same format */
+    outFile = XFileOpenVirtualResource(resourceID);
+    if (!outFile)
+    {
+        return BAE_MEMORY_ERR;
+    }
+
+    /* Enumerate all known bank resource types and copy each resource.
+     * Bank files typically contain: INST, SND/CSND/ESND, ALIAS, and
+     * possibly other types.  We iterate over a fixed list of known types
+     * rather than using XCountTypes/XGetIndexedType (which are unimplemented). */
+    {
+        static const XResourceType bankResourceTypes[] = {
+            ID_INST,
+            ID_SND,
+            ID_CSND,
+            ID_ESND,
+            ID_ALIAS,
+            ID_BANK,
+            ID_SONG,
+            ID_MIDI,
+            ID_MIDI_OLD,
+            ID_CMID,
+            ID_EMID,
+            ID_ECMI,
+            ID_RMF,
+            ID_TEXT,
+            ID_VERS,
+            0  /* sentinel */
+        };
+        int32_t typeIdx;
+
+        for (typeIdx = 0; bankResourceTypes[typeIdx] != 0; ++typeIdx)
+        {
+            XResourceType resType;
+            int32_t resCount;
+            int32_t resIndex;
+
+            resType = bankResourceTypes[typeIdx];
+            resCount = XCountFileResourcesOfType(bankFile, resType);
+            for (resIndex = 0; resIndex < resCount; ++resIndex)
+            {
+                XLongResourceID resID;
+                int32_t resSize;
+                XPTR resData;
+                char resName[256];
+
+                resName[0] = 0;
+                resData = XGetIndexedFileResource(bankFile, resType, &resID,
+                                                  resIndex, resName, &resSize);
+                if (!resData)
+                {
+                    continue;
+                }
+                if (XAddFileResource(outFile, resType, resID, resName, resData, resSize) != 0)
+                {
+                    XDisposePtr(resData);
+                    XFileClose(outFile);
+                    return BAE_FILE_IO_ERROR;
+                }
+                XDisposePtr(resData);
+            }
+        }
+    }
+
+    /* Finalize the resource file */
+    if (XCleanResourceFile(outFile) == FALSE)
+    {
+        XFileClose(outFile);
+        return BAE_FILE_IO_ERROR;
+    }
+
+    /* Extract the serialized data */
+    data = NULL;
+    size = 0;
+    if (XFileGetMemoryFileAsData(outFile, &data, &size) != 0 || !data || size <= 0)
+    {
+        XFileClose(outFile);
+        if (data)
+        {
+            XDisposePtr(data);
+        }
+        return BAE_FILE_IO_ERROR;
+    }
+    XFileClose(outFile);
+
+    *outData = (unsigned char *)data;
+    *outSize = (uint32_t)size;
+    return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorBank_SaveToFile(BAEBankToken bankToken,
+                                      BAEPathName filePath)
+{
+    unsigned char *bankData;
+    uint32_t bankSize;
+    XFILENAME name;
+    XFILE fileRef;
+    BAEResult result;
+
+    if (!bankToken || !filePath)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    bankData = NULL;
+    bankSize = 0;
+    result = BAERmfEditorBank_SaveToMemory(bankToken, &bankData, &bankSize);
+    if (result != BAE_NO_ERROR)
+    {
+        return result;
+    }
+
+    XConvertPathToXFILENAME(filePath, &name);
+    fileRef = XFileOpenForWrite(&name, TRUE);
+    if (!fileRef)
+    {
+        XDisposePtr((XPTR)bankData);
+        return BAE_FILE_IO_ERROR;
+    }
+
+    if (XFileSetLength(fileRef, 0) != 0 ||
+        XFileSetPosition(fileRef, 0L) != 0 ||
+        XFileWrite(fileRef, bankData, (int32_t)bankSize) != 0)
+    {
+        XFileClose(fileRef);
+        XDisposePtr((XPTR)bankData);
+        return BAE_FILE_IO_ERROR;
+    }
+
+    XFileClose(fileRef);
+    XDisposePtr((XPTR)bankData);
+    return BAE_NO_ERROR;
+}
+
 BAEResult BAERmfEditorDocument_CloneInstrumentFromBankToInstID(
     BAERmfEditorDocument *document,
     BAEBankToken bankToken,

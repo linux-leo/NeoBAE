@@ -385,7 +385,7 @@ bool load_bank_simple(const char *path, bool save_to_settings, int reverb_type, 
 #ifdef _BUILT_IN_PATCHES
             "__builtin__",
 #endif
-            "patches.hsb", "npatches.hsb", NULL};
+            "patches.hsb", "patches.zsb", "npatches.hsb", NULL};
         for (int i = 0; autoBanks[i] && !g_bae.bank_loaded; ++i)
         {
             if (load_bank(autoBanks[i], false, 0, 100, 75, loop_enabled, reverb_type, dummy_ch, false))

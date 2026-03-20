@@ -90,7 +90,7 @@ class HomeFragment : Fragment() {
         private val SONG_EXTENSIONS = listOf("mid", "midi", "kar", "rmf", "zmf", "xmf", "mxmf", "rmi")
         
         // Valid sound bank file extensions
-        val BANK_EXTENSIONS = setOf("sf2", "hsb", "sf3", "sfo", "dls")
+        val BANK_EXTENSIONS = setOf("sf2", "hsb", "zsb", "sf3", "sfo", "dls")
         
         // Get appropriate music extensions based on build type
         fun getMusicExtensions(context: Context): Set<String> {
@@ -1193,7 +1193,7 @@ class HomeFragment : Fragment() {
 
         val r = when {
             bankKey == "__builtin__" -> loadBuiltInPatchesFromAssets(requireContext())
-            bankKey.endsWith(".hsb", ignoreCase = true) -> {
+            bankKey.endsWith(".hsb", ignoreCase = true) || bankKey.endsWith(".zsb", ignoreCase = true) -> {
                 val bankFile = File(bankKey)
                 if (bankFile.exists() && bankFile.isFile) {
                     Mixer.addBankFromFile(bankFile.absolutePath)
@@ -1253,7 +1253,7 @@ class HomeFragment : Fragment() {
                 if (Mixer.getMixer() == null) {
                     status = 0
                 } else {
-                    val wantsHsb = lastBankPath == "__builtin__" || lastBankPath.endsWith(".hsb", ignoreCase = true)
+                    val wantsHsb = lastBankPath == "__builtin__" || lastBankPath.endsWith(".hsb", ignoreCase = true) || lastBankPath.endsWith(".zsb", ignoreCase = true)
                     if (wantsHsb) {
                         // HSB bank swapping on Android can require a full mixer teardown/recreate.
                         val recreateStatus = runCatching {
@@ -1460,7 +1460,7 @@ class HomeFragment : Fragment() {
         val basePercent = viewModel.volumePercent.coerceIn(0, 100)
         val prefs = requireContext().getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
         val lastBankPath = prefs.getString("last_bank_path", "__builtin__")
-        val isHsbBank = lastBankPath == "__builtin__" || lastBankPath?.endsWith(".hsb", ignoreCase = true) == true
+        val isHsbBank = lastBankPath == "__builtin__" || lastBankPath?.endsWith(".hsb", ignoreCase = true) == true || lastBankPath?.endsWith(".zsb", ignoreCase = true) == true
 
         // Android-only: HSB banks are noticeably quieter than SF2. Use a post-mix output gain boost
         // (implemented in the native Android audio callback) so we are not dependent on master-volume
@@ -2423,7 +2423,7 @@ class HomeFragment : Fragment() {
                 }
                 
                 // Mixer exists, load bank now
-                val isHsbTarget = file.extension.equals("hsb", ignoreCase = true)
+                val isHsbTarget = file.extension.equals("hsb", ignoreCase = true) || file.extension.equals("zsb", ignoreCase = true)
 
                 // HSB bank swapping requires a full mixer teardown/reopen on Android.
                 // Only do this when a Song is active (banks don't affect Sound playback).

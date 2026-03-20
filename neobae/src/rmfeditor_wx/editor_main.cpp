@@ -21,6 +21,7 @@
 #include <wx/choice.h>
 #include <wx/listbox.h>
 #include <wx/msgdlg.h>
+#include <wx/notebook.h>
 #include <wx/numdlg.h>
 #include <wx/scrolwin.h>
 #include <wx/slider.h>
@@ -36,6 +37,7 @@ extern "C" {
 #include "GenSnd.h"
 }
 
+#include "editor_bank.h"
 #include "editor_instrument_ext_dialog.h"
 #include "editor_metadata_dialog.h"
 #include "editor_pianoroll_panel.h"
@@ -121,6 +123,9 @@ enum {
     ID_AliasFromBank,
     ID_SaveSession,
     ID_SaveSessionAs,
+    ID_BankSave,
+    ID_BankSaveAs,
+    ID_BankLoadBuiltin,
 };
 
 static constexpr uint8_t  kNbsMagic[4] = {'N', 'B', 'S', '\0'};
@@ -279,6 +284,9 @@ public:
         : wxFrame(nullptr, wxID_ANY, wxString::Format("NeoBAE Studio v%s", kVersionString), wxDefaultPosition, wxSize(1400, 860)),
           m_document(nullptr),
                     m_updatingControls(false),
+                    m_editorNotebook(nullptr),
+                    m_bankEditorPanel(nullptr),
+                    m_editorMode(kEditorModeMidi),
                     m_playbackMixer(nullptr),
                     m_playbackSong(nullptr),
                     m_notePreviewSong(nullptr),
@@ -321,6 +329,7 @@ public:
         wxBoxSizer *transportSizer;
         wxBoxSizer *sampleButtonSizer;
 
+        /* MIDI Editor File menu */
         fileMenu = new wxMenu();
         fileMenu->Append(wxID_OPEN, "&Open\tCtrl+O");
         fileMenu->Append(wxID_SAVEAS, "&Export as...\tCtrl+Shift+S");
@@ -342,15 +351,35 @@ public:
         fileMenu->AppendSubMenu(soundBankMenu, "Sound &Bank");
         fileMenu->AppendSeparator();
         fileMenu->Append(wxID_EXIT, "E&xit");
+        m_midiFileMenu = fileMenu;
+
+        /* Bank Editor File menu */
+        {
+            wxMenu *bankMenu = new wxMenu();
+            bankMenu->Append(wxID_OPEN, "&Open\tCtrl+O");
+            bankMenu->AppendSeparator();
+            bankMenu->Append(ID_BankSave, "&Save Bank\tCtrl+S");
+            bankMenu->Append(ID_BankSaveAs, "Save Bank &As...\tCtrl+Shift+S");
+            bankMenu->AppendSeparator();
+            bankMenu->Append(ID_BankLoadBuiltin, "Load &Built-in Bank into Editor");
+            bankMenu->AppendSeparator();
+            bankMenu->Append(ID_SaveSession, "Save S&ession\tCtrl+Alt+S");
+            bankMenu->Append(ID_SaveSessionAs, "Save Se&ssion as...");
+            bankMenu->AppendSeparator();
+            bankMenu->Append(wxID_EXIT, "E&xit");
+            m_bankFileMenu = bankMenu;
+        }
+
         editMenu = new wxMenu();
         editMenu->Append(wxID_UNDO, "&Undo\tCtrl+Z");
         editMenu->Append(wxID_REDO, "&Redo\tCtrl+Y");
         menuBar = new wxMenuBar();
-        menuBar->Append(fileMenu, "&File");
+        menuBar->Append(m_midiFileMenu, "&File");
         menuBar->Append(editMenu, "&Edit");
         SetMenuBar(menuBar);
 
-        splitter = new wxSplitterWindow(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE | wxSP_3D);
+        m_editorNotebook = new wxNotebook(this, wxID_ANY);
+        splitter = new wxSplitterWindow(m_editorNotebook, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE | wxSP_3D);
         sidebar = new wxPanel(splitter);
         editorPanel = new wxPanel(splitter);
         sidebarSizer = new wxBoxSizer(wxVERTICAL);
@@ -530,6 +559,12 @@ public:
         splitter->SplitVertically(sidebar, editorPanel, 240);
         splitter->SetMinimumPaneSize(180);
 
+        m_editorNotebook->AddPage(splitter, "MIDI Editor", true);
+        {
+            m_bankEditorPanel = CreateBankEditorPanel(m_editorNotebook);
+            m_editorNotebook->AddPage(BankEditorPanel_AsWindow(m_bankEditorPanel), "Bank Editor", false);
+        }
+
         CreateStatusBar(2);
         SetStatusText("Open an RMF or MIDI file to begin.");
         UpdateLoadedBankStatus();
@@ -593,6 +628,10 @@ public:
         Bind(wxEVT_MENU, &MainFrame::OnAliasFromBank, this, ID_AliasFromBank);
         Bind(wxEVT_TIMER, &MainFrame::OnPlaybackTimer, this, ID_PlaybackTimer);
         Bind(wxEVT_TIMER, &MainFrame::OnNotePreviewTimer, this, ID_NotePreviewTimer);
+        m_editorNotebook->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED, &MainFrame::OnEditorTabChanged, this);
+        Bind(wxEVT_MENU, &MainFrame::OnBankSave, this, ID_BankSave);
+        Bind(wxEVT_MENU, &MainFrame::OnBankSaveAs, this, ID_BankSaveAs);
+        Bind(wxEVT_MENU, &MainFrame::OnBankLoadBuiltin, this, ID_BankLoadBuiltin);
         LoadIniSettings();
         EnsurePlaybackEngine();
         UpdateLoadedBankStatus();
@@ -630,10 +669,20 @@ public:
     }
 
 private:
+    enum EditorMode {
+        kEditorModeMidi = 0,
+        kEditorModeBank = 1
+    };
+
     BAERmfEditorDocument *m_document;
     bool m_updatingControls;
     wxString m_currentPath;
     wxString m_sessionPath;
+    wxNotebook *m_editorNotebook;
+    BankEditorPanel *m_bankEditorPanel;
+    EditorMode m_editorMode;
+    wxMenu *m_midiFileMenu;
+    wxMenu *m_bankFileMenu;
     wxListBox *m_trackList;
     PianoRollPanel *m_pianoRoll;
     wxSpinCtrl *m_tempoSpin;
@@ -1536,6 +1585,110 @@ private:
         SetStatusText(bankName, 0);
         UpdateLoadedBankStatus();
         return true;
+    }
+
+    void OnBankSave(wxCommandEvent &) {
+        if (!m_bankToken || m_loadedBankPath.empty()) {
+            OnBankSaveAs(*(new wxCommandEvent()));
+            return;
+        }
+        wxScopedCharBuffer utf8 = m_loadedBankPath.utf8_str();
+        BAEResult result = BAERmfEditorBank_SaveToFile(m_bankToken, const_cast<char *>(utf8.data()));
+        if (result != BAE_NO_ERROR) {
+            wxMessageBox(wxString::Format("Failed to save bank (error %d).", static_cast<int>(result)),
+                         "Save Bank", wxOK | wxICON_ERROR, this);
+        } else {
+            SetStatusText(wxString("Bank saved: ") + wxFileNameFromPath(m_loadedBankPath));
+        }
+    }
+
+    void OnBankSaveAs(wxCommandEvent &) {
+        if (!m_bankToken) {
+            wxMessageBox("No bank is loaded.", "Save Bank As", wxOK | wxICON_INFORMATION, this);
+            return;
+        }
+        wxFileDialog dialog(this,
+                            "Save Bank As",
+                            wxEmptyString,
+                            wxEmptyString,
+                            "HSB Bank (*.hsb)|*.hsb|ZSB Bank (*.zsb)|*.zsb|All files (*.*)|*.*",
+                            wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+        if (dialog.ShowModal() == wxID_OK) {
+            wxString savePath = dialog.GetPath();
+            wxScopedCharBuffer utf8 = savePath.utf8_str();
+            BAEResult result = BAERmfEditorBank_SaveToFile(m_bankToken, const_cast<char *>(utf8.data()));
+            if (result != BAE_NO_ERROR) {
+                wxMessageBox(wxString::Format("Failed to save bank (error %d).", static_cast<int>(result)),
+                             "Save Bank As", wxOK | wxICON_ERROR, this);
+            } else {
+                m_loadedBankPath = savePath;
+                SetTitle(wxString("NeoBAE Studio - ") + wxFileNameFromPath(savePath));
+                SetStatusText(wxString("Bank saved: ") + wxFileNameFromPath(savePath));
+            }
+        }
+    }
+
+    void OnBankLoadBuiltin(wxCommandEvent &) {
+#ifdef _BUILT_IN_PATCHES
+        if (!EnsurePlaybackEngine()) {
+            wxMessageBox("Failed to initialize audio engine.",
+                         "Load Built-in Bank", wxOK | wxICON_ERROR, this);
+            return;
+        }
+        /* Unload existing banks */
+        StopPlayback(true);
+        BAEMixer_UnloadBanks(m_playbackMixer);
+        m_bankToken = nullptr;
+        m_bankLoaded = false;
+        m_bankTokens.clear();
+        m_loadedBankPath.clear();
+
+        BAEBankToken builtinToken;
+        BAEResult result = BAEMixer_LoadBuiltinBank(m_playbackMixer, &builtinToken);
+        if (result != BAE_NO_ERROR) {
+            wxMessageBox(wxString::Format("Failed to load built-in bank (error %d).", static_cast<int>(result)),
+                         "Load Built-in Bank", wxOK | wxICON_ERROR, this);
+            return;
+        }
+        m_bankToken = builtinToken;
+        m_bankLoaded = true;
+        m_bankTokens.push_back(builtinToken);
+        UpdateLoadedBankStatus();
+
+        SetTitle("NeoBAE Studio - Built-in Bank");
+        if (m_bankEditorPanel) {
+            BankEditorPanel_LoadBank(m_bankEditorPanel, m_bankToken, "(built-in)");
+        }
+        SwitchToEditorTab(kEditorModeBank);
+#else
+        wxMessageBox("Built-in patches are not available in this build.",
+                     "Load Built-in Bank", wxOK | wxICON_INFORMATION, this);
+#endif
+    }
+
+    void LoadBankForEditing(wxString const &path) {
+        fprintf(stderr, "[nbstudio] LoadBankForEditing: %s\n", static_cast<const char *>(path.utf8_str()));
+        if (!EnsurePlaybackEngine()) {
+            wxMessageBox("Failed to initialize audio engine.",
+                         "Bank Load Error", wxOK | wxICON_ERROR, this);
+            return;
+        }
+        fprintf(stderr, "[nbstudio] LoadBankForEditing: engine ready, loading bank...\n");
+        if (!LoadBankFromFile(path)) {
+            wxMessageBox(wxString::Format("Failed to load bank file:\n%s", path),
+                         "Bank Load Error", wxOK | wxICON_ERROR, this);
+            return;
+        }
+        fprintf(stderr, "[nbstudio] LoadBankForEditing: bank loaded, bankToken=%p\n", static_cast<void *>(m_bankToken));
+        SetTitle(wxString::Format("NeoBAE Studio v%s - %s", kVersionString, wxFileNameFromPath(path)));
+        fprintf(stderr, "[nbstudio] LoadBankForEditing: populating bank editor...\n");
+        if (m_bankEditorPanel) {
+            wxScopedCharBuffer utf8Path = path.utf8_str();
+            BankEditorPanel_LoadBank(m_bankEditorPanel, m_bankToken, utf8Path.data());
+        }
+        fprintf(stderr, "[nbstudio] LoadBankForEditing: switching to bank tab...\n");
+        SwitchToEditorTab(kEditorModeBank);
+        fprintf(stderr, "[nbstudio] LoadBankForEditing: done\n");
     }
 
     void PopulateSampleList() {
@@ -4771,22 +4924,56 @@ private:
         SetTitle(title);
     }
 
+    void OnEditorTabChanged(wxBookCtrlEvent &event) {
+        int page = event.GetSelection();
+        if (page == kEditorModeMidi) {
+            m_editorMode = kEditorModeMidi;
+            SwapFileMenu(m_midiFileMenu);
+            /* TODO Phase 4: hot-reload bank if dirty */
+        } else if (page == kEditorModeBank) {
+            m_editorMode = kEditorModeBank;
+            SwapFileMenu(m_bankFileMenu);
+        }
+        event.Skip();
+    }
+
+    void SwapFileMenu(wxMenu *newFileMenu) {
+        wxMenuBar *menuBar = GetMenuBar();
+        if (!menuBar || !newFileMenu) {
+            return;
+        }
+        /* The File menu is always at index 0 */
+        wxMenu *oldMenu = menuBar->Replace(0, newFileMenu, "&File");
+        (void)oldMenu; /* We keep both menus alive as members; don't delete */
+    }
+
+    void SwitchToEditorTab(EditorMode mode) {
+        if (m_editorNotebook && (int)mode < m_editorNotebook->GetPageCount()) {
+            m_editorNotebook->SetSelection((size_t)mode);
+            m_editorMode = mode;
+        }
+    }
+
     void OnOpen(wxCommandEvent &) {
         if (!ConfirmDiscardUnsavedChanges("Open a new file")) {
             return;
         }
         wxFileDialog dialog(this,
-                            "Open RMF, MIDI, or Session",
+                            "Open RMF, MIDI, Bank, or Session",
                             wxEmptyString,
                             wxEmptyString,
-                            "All supported files (*.rmf;*.zmf;*.mid;*.midi;*.kar;*.rmi;*.nbs)|*.rmf;*.zmf;*.mid;*.midi;*.kar;*.rmi;*.nbs|NeoBAE Session (*.nbs)|*.nbs|RMF files (*.rmf;*.zmf)|*.rmf;*.zmf|MIDI files (*.mid;*.midi;*.kar;*.rmi)|*.mid;*.midi;*.kar;*.rmi|All files (*.*)|*.*",
+                            "All supported files (*.rmf;*.zmf;*.mid;*.midi;*.kar;*.rmi;*.hsb;*.zsb;*.nbs)|*.rmf;*.zmf;*.mid;*.midi;*.kar;*.rmi;*.hsb;*.zsb;*.nbs|NeoBAE Session (*.nbs)|*.nbs|RMF files (*.rmf;*.zmf)|*.rmf;*.zmf|MIDI files (*.mid;*.midi;*.kar;*.rmi)|*.mid;*.midi;*.kar;*.rmi|Bank files (*.hsb;*.zsb)|*.hsb;*.zsb|All files (*.*)|*.*",
                             wxFD_OPEN | wxFD_FILE_MUST_EXIST);
         if (dialog.ShowModal() == wxID_OK) {
             wxString selectedPath = dialog.GetPath();
-            if (wxFileName(selectedPath).GetExt().Lower() == "nbs") {
+            wxString ext = wxFileName(selectedPath).GetExt().Lower();
+            if (ext == "nbs") {
                 LoadSession(selectedPath);
+            } else if (ext == "hsb" || ext == "zsb") {
+                LoadBankForEditing(selectedPath);
             } else {
                 LoadDocument(selectedPath);
+                SwitchToEditorTab(kEditorModeMidi);
             }
         }
     }
