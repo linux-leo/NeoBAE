@@ -44,8 +44,8 @@
   - ~~Cloned instruments should support pointers/aliasing/whatever is needed (eg Chippy bank)~~
   - ~~Needs to support percussions too~~
   - ~~If we clone multiple instruments using the same aliased samples, we should alias too~~
-- Confirmation on exit if session data is different from source file
-  - Same when opening another file
+~~- Confirmation on exit if session data is different from source file~~
+  ~~- Same when opening another file~~
 
 # Future
 - Implement ZSB (Zefie Sound Bank), same deal as RMF/ZMF, used for newer codecs. Uses ZREZ.
@@ -60,7 +60,6 @@
 - Neo Reverb for preview player
   - Custom .neoreverb support
   - means we need the reverb edit dialog from zefidi
-- Larger instrument dialog piano not working 100% correctly
 
 # Harder stuff
 - Externally imported MP3 samples (not encoded by us) may have a gap

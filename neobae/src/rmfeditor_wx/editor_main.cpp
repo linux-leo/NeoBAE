@@ -300,7 +300,8 @@ public:
                     m_pendingLoopHotReloadPaused(false),
                     m_loadingLoopControls(false),
                     m_hasPendingUndo(false),
-                    m_restoringUndo(false) {
+                    m_restoringUndo(false),
+                    m_hasUnsavedChanges(false) {
                 SetMinSize(wxSize(1280, 720));
 #ifdef __WXMSW__
         SetIcon(wxICON(APPICON));
@@ -539,6 +540,7 @@ public:
         Bind(wxEVT_MENU, &MainFrame::OnUndo, this, wxID_UNDO);
         Bind(wxEVT_MENU, &MainFrame::OnRedo, this, wxID_REDO);
         Bind(wxEVT_MENU, [this](wxCommandEvent &) { Close(); }, wxID_EXIT);
+        Bind(wxEVT_CLOSE_WINDOW, &MainFrame::OnCloseWindow, this);
         m_trackList->Bind(wxEVT_LISTBOX, &MainFrame::OnTrackSelected, this);
         m_trackList->Bind(wxEVT_CONTEXT_MENU, &MainFrame::OnTrackContextMenu, this);
         m_sampleTree->Bind(wxEVT_CONTEXT_MENU, &MainFrame::OnSampleContextMenu, this);
@@ -699,6 +701,7 @@ private:
     wxString m_pendingUndoLabel;
     bool m_hasPendingUndo;
     bool m_restoringUndo;
+    bool m_hasUnsavedChanges;
 
     static wxString GetIniPath() {
         return wxFileName::GetHomeDir() + "/.nbstudio.ini";
@@ -1002,6 +1005,91 @@ private:
         UpdateUndoMenuState();
     }
 
+    void MarkDocumentClean() {
+        m_hasUnsavedChanges = false;
+        UpdateFrameTitle();
+    }
+
+    void MarkDocumentDirty() {
+        if (!m_hasUnsavedChanges) {
+            m_hasUnsavedChanges = true;
+            UpdateFrameTitle();
+        }
+    }
+
+    bool ConfirmDiscardUnsavedChanges(wxString const &action) {
+        if (!m_hasUnsavedChanges || !m_document) {
+            return true;
+        }
+        int choice = wxMessageBox(
+            "You have unsaved changes.\n\nWould you like to save your session?",
+            "Unsaved Changes",
+            wxYES_NO | wxCANCEL | wxICON_WARNING,
+            this);
+        if (choice == wxCANCEL) {
+            return false;
+        }
+        if (choice == wxYES) {
+            if (m_sessionPath.empty()) {
+                wxFileDialog dialog(this,
+                                    "Save Session",
+                                    wxEmptyString,
+                                    GetDefaultSessionName(),
+                                    "NeoBAE Session (*.nbs)|*.nbs",
+                                    wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+                if (dialog.ShowModal() != wxID_OK) {
+                    return false;
+                }
+                if (!WriteSessionToFile(dialog.GetPath())) {
+                    return false;
+                }
+            } else {
+                if (!WriteSessionToFile(m_sessionPath)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    void OnCloseWindow(wxCloseEvent &event) {
+        if (event.CanVeto() && m_hasUnsavedChanges && m_document) {
+            int choice = wxMessageBox(
+                "You have unsaved changes.\n\nSave session before exiting?",
+                "Unsaved Changes",
+                wxYES_NO | wxCANCEL | wxICON_WARNING,
+                this);
+            if (choice == wxCANCEL) {
+                event.Veto();
+                return;
+            }
+            if (choice == wxYES) {
+                if (m_sessionPath.empty()) {
+                    wxFileDialog dialog(this,
+                                        "Save Session",
+                                        wxEmptyString,
+                                        GetDefaultSessionName(),
+                                        "NeoBAE Session (*.nbs)|*.nbs",
+                                        wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+                    if (dialog.ShowModal() != wxID_OK) {
+                        event.Veto();
+                        return;
+                    }
+                    if (!WriteSessionToFile(dialog.GetPath())) {
+                        event.Veto();
+                        return;
+                    }
+                } else {
+                    if (!WriteSessionToFile(m_sessionPath)) {
+                        event.Veto();
+                        return;
+                    }
+                }
+            }
+        }
+        Destroy();
+    }
+
     void UpdateUndoMenuState() {
         wxMenuBar *menuBar;
 
@@ -1263,6 +1351,7 @@ private:
         m_pendingUndoState = UndoDocumentState();
         m_pendingUndoLabel.clear();
         m_hasPendingUndo = false;
+        MarkDocumentDirty();
         UpdateUndoMenuState();
     }
 
@@ -1306,6 +1395,7 @@ private:
         PianoRollPanel_RefreshFromDocument(m_pianoRoll, true);
         InvalidatePianoRollPreviewSong();
         UpdateControlsFromSelection();
+        MarkDocumentDirty();
         SetStatusText(entry.label.empty() ? "Undo" : wxString::Format("Undid %s", entry.label), 0);
         UpdateUndoMenuState();
     }
@@ -1344,6 +1434,7 @@ private:
         PianoRollPanel_RefreshFromDocument(m_pianoRoll, true);
         InvalidatePianoRollPreviewSong();
         UpdateControlsFromSelection();
+        MarkDocumentDirty();
         SetStatusText(entry.label.empty() ? "Redo" : wxString::Format("Redid %s", entry.label), 0);
         UpdateUndoMenuState();
     }
@@ -4573,6 +4664,7 @@ private:
         ClearUndoHistory();
         m_currentPath = path;
         m_sessionPath.clear();
+        MarkDocumentClean();
         PianoRollPanel_SetDocument(m_pianoRoll, m_document);
         PianoRollPanel_ClearPlayhead(m_pianoRoll);
         m_ignoreSeekEvent = true;
@@ -4668,12 +4760,20 @@ private:
         displayPath = !m_sessionPath.empty() ? m_sessionPath : m_currentPath;
         if (!displayPath.empty()) {
             title += " - ";
+            if (m_hasUnsavedChanges) {
+                title += "*";
+            }
             title += wxFileNameFromPath(displayPath);
+        } else if (m_hasUnsavedChanges && m_document) {
+            title += " - *untitled";
         }
         SetTitle(title);
     }
 
     void OnOpen(wxCommandEvent &) {
+        if (!ConfirmDiscardUnsavedChanges("Open a new file")) {
+            return;
+        }
         wxFileDialog dialog(this,
                             "Open RMF, MIDI, or Session",
                             wxEmptyString,
@@ -4984,6 +5084,7 @@ private:
         file.Close();
 
         m_sessionPath = path;
+        MarkDocumentClean();
         UpdateFrameTitle();
         SetStatusText(path, 1);
         return true;
@@ -5001,11 +5102,23 @@ private:
         WriteSessionToFile(m_sessionPath);
     }
 
+    wxString GetDefaultSessionName() {
+        if (!m_sessionPath.empty()) {
+            return wxFileNameFromPath(m_sessionPath);
+        }
+        if (!m_currentPath.empty()) {
+            wxFileName fn(m_currentPath);
+            fn.SetExt("nbs");
+            return fn.GetFullName();
+        }
+        return "New Project.nbs";
+    }
+
     void OnSaveSessionAs(wxCommandEvent &) {
         wxFileDialog dialog(this,
                             "Save Session",
                             wxEmptyString,
-                            wxEmptyString,
+                            GetDefaultSessionName(),
                             "NeoBAE Session (*.nbs)|*.nbs",
                             wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
 
@@ -5137,6 +5250,7 @@ private:
         ClearUndoHistory();
         m_currentPath = path;
         m_sessionPath = path;
+        MarkDocumentClean();
         PianoRollPanel_SetDocument(m_pianoRoll, m_document);
         PianoRollPanel_ClearPlayhead(m_pianoRoll);
         m_ignoreSeekEvent = true;
