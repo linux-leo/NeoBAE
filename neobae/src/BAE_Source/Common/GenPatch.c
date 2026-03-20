@@ -888,7 +888,7 @@ GM_Instrument * PV_GetInstrument(GM_Mixer *pMixer, GM_Song *pSong,
                 if (pErr && *pErr == NO_ERR)
                 {
                     *pErr = BAD_INSTRUMENT;
-                    BAE_PRINTF("Debug: Instrument %ld sample load failed (snd=%d) err=%d\n", (long)theID, (int)theSampleID, (int)*pErr);
+                    BAE_PRINTF("[PV_GetInstrument] Instrument %ld sample load failed (snd=%d) err=%d\n", (long)theID, (int)theSampleID, (int)*pErr);
                 }
             }
         }
@@ -960,7 +960,7 @@ GM_Instrument * PV_GetInstrument(GM_Mixer *pMixer, GM_Song *pSong,
                         }
                         else if (pErr && *pErr != NO_ERR)
                         {
-                            BAE_PRINTF("Debug: Instrument %ld split %d load failed snd=%d err=%d\n",
+                            BAE_PRINTF("[PV_GetInstrument] Instrument %ld split %d load failed snd=%d err=%d\n",
                                       (long)theID, (int)count, (int)theXSplit.sndResourceID, (int)*pErr);
                         }
                     }
@@ -1108,7 +1108,7 @@ OPErr GM_LoadInstrument(GM_Song *pSong,
                 {
                     pSong->instrumentData[instrument] = theI;
                 }
-                BAE_PRINTF("Debug: Instrument %d loaded successfully, refCount=%d, stored=%s\n", 
+                BAE_PRINTF("[GM_LoadInstrument]: Instrument %d loaded successfully, refCount=%d, stored=%s\n", 
                           instrument, theI->usageReferenceCount, 
                           pSong->instrumentData[instrument] ? "yes" : "no");
             }
@@ -1346,7 +1346,7 @@ OPErr GM_LoadSongInstruments(GM_Song *theSong,
                     GM_SetUsedInstrument(theSong, DEFAULT_PATCH, -1L, TRUE);        // load the entire piano
                 }
             #if DEBUG_DISPLAY_PATCHES
-                BAE_PRINTF("Loading instruments:\n");
+                BAE_PRINTF("[GM_LoadSongInstruments] Loading instruments:\n");
             #endif
                 instCount = 0;
                 for (count = 0; count < MAX_INSTRUMENTS*MAX_BANKS; count++)
@@ -1427,7 +1427,7 @@ OPErr GM_LoadSongInstruments(GM_Song *theSong,
                             }
                             if (theErr)
                             {
-                                BAE_STDERR("DEBUG: GM_LoadSongInstruments failed instrument=%ld remappedFrom=%ld err=%d ignoreBad=%d\n", (long)realInstrument, (long)count, (int)theErr, theSong->ignoreBadInstruments);
+                                BAE_STDERR("[GM_LoadSongInstruments] failed instrument=%ld remappedFrom=%ld err=%d ignoreBad=%d\n", (long)realInstrument, (long)count, (int)theErr, theSong->ignoreBadInstruments);
                                 break;
                             }
                             // we are in GM, so check our ignore flag
@@ -1689,7 +1689,7 @@ XBOOL GM_IsInstrumentRangeUsed(GM_Song *pSong, XLongResourceID thePatch, INT16 t
     }
 
 #if DEBUG_DISPLAY_PATCHES
-    BAE_PRINTF("---->Testing INST %d - key range (%d to %d) = %s\n", (int32_t)thePatch,
+    BAE_PRINTF("[GM_IsInstrumentRangeUsed] Testing INST %d - key range (%d to %d) = %s\n", (int32_t)thePatch,
                                                                             (int32_t)theLowKey,
                                                                             (int32_t)theHighKey,
                                                                             (used) ? "VALID" : "FAILED");

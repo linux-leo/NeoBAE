@@ -7143,13 +7143,11 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track,
                 {
                     uint16_t bankMsb;
                     uint16_t bankLsb;
-                    uint16_t prevBankMsb;
                     uint16_t prevBankLsb;
 
                     bankMsb = (uint16_t)((event->bank >> 7) & 0x7F);
                     bankLsb = (uint16_t)(event->bank & 0x7F);
 
-                    prevBankMsb = (uint16_t)((currentBank[eventChannel] >> 7) & 0x7F);
                     prevBankLsb = (uint16_t)(currentBank[eventChannel] & 0x7F);
 
                     result = PV_ByteBufferAppendVLQ(trackData, delta);
@@ -8395,7 +8393,6 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
     {
         uint32_t prior;
         uint32_t splitCount;
-        uint32_t splitIndex;
         uint32_t sampleIndex;
         uint32_t leaderIndex;
         uint32_t leaderFrames;
@@ -10036,10 +10033,8 @@ BAEResult BAERmfEditorDocument_SetTrackInfo(BAERmfEditorDocument *document,
     {
         uint32_t i;
         unsigned char oldChannelNibble;
-        unsigned char newChannelNibble;
 
         oldChannelNibble = (unsigned char)(track->channel & 0x0F);
-        newChannelNibble = (unsigned char)(trackInfo->channel & 0x0F);
 
         /* Update notes that matched the old track instrument */
         for (i = 0; i < track->noteCount; ++i)
@@ -10617,6 +10612,8 @@ BAEResult BAERmfEditorDocument_AddNote(BAERmfEditorDocument *document,
                                        unsigned char velocity)
 {
     BAERmfEditorTrack *track;
+    uint32_t noteOnOrder;
+    uint32_t noteOffOrder;
 
     if (!document)
     {
@@ -10634,6 +10631,10 @@ BAEResult BAERmfEditorDocument_AddNote(BAERmfEditorDocument *document,
     {
         BAEResult result;
 
+        noteOnOrder = track->nextEventOrder;
+        noteOffOrder = track->nextEventOrder + 1;
+        track->nextEventOrder += 2;
+
         result = PV_AddNoteToTrack(track,
                        startTick,
                        durationTicks,
@@ -10644,8 +10645,8 @@ BAEResult BAERmfEditorDocument_AddNote(BAERmfEditorDocument *document,
                                    track->program,
                                    (unsigned char)(NOTE_OFF | (track->channel & 0x0F)),
                                    0,
-                                   track->nextEventOrder++,
-                                   track->nextEventOrder++);
+                                   noteOnOrder,
+                                   noteOffOrder);
         if (result == BAE_NO_ERROR)
         {
             PV_MarkDocumentDirty(document);
@@ -11990,9 +11991,15 @@ BAEResult BAERmfEditorDocument_GetInstrumentExtInfo(BAERmfEditorDocument const *
     ext = PV_FindInstrumentExt((BAERmfEditorDocument *)document, (XLongResourceID)instID);
     if (!ext)
     {
-        /* No ext data stored — return defaults */
+        /* No ext data stored — return defaults.
+         * flags1/flags2 must match what PV_AddSampleResources uses when no
+         * ext record exists, otherwise the INST resource written during
+         * preview serialisation loses ZBF_useSampleRate and the engine
+         * plays the sample at the wrong pitch (one octave low for 44 kHz). */
         outInfo->displayName = NULL;
         outInfo->hasExtendedData = FALSE;
+        outInfo->flags1 = ZBF_useSampleRate;
+        outInfo->flags2 = ZBF_useSoundModifierAsRootKey;
         outInfo->midiRootKey = 60;
         outInfo->miscParameter2 = 100;
         outInfo->volumeADSR.stageCount = 1;

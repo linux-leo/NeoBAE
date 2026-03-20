@@ -1099,6 +1099,7 @@ public:
                               std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool, int, BAERmfEditorInstrumentExtInfo const *)> playCallback,
                               std::function<void()> stopCallback,
                               std::function<void(int)> stopTaggedCallback,
+                              std::function<void()> invalidatePreviewCallback,
                               std::function<bool(uint32_t, wxString const &)> replaceCallback,
                               std::function<bool(uint32_t, wxString const &)> exportCallback)
         : wxDialog(parent, wxID_ANY, "Edit Instrument", wxDefaultPosition, wxSize(1180, 560),
@@ -1117,6 +1118,7 @@ public:
           m_playCallback(std::move(playCallback)),
           m_stopCallback(std::move(stopCallback)),
           m_stopTaggedCallback(std::move(stopTaggedCallback)),
+          m_invalidatePreviewCallback(std::move(invalidatePreviewCallback)),
           m_replaceCallback(std::move(replaceCallback)),
           m_exportCallback(std::move(exportCallback)) {
 
@@ -1319,6 +1321,9 @@ public:
                 m_adsrFlags[i]->Bind(wxEVT_CHOICE, instantApply);
             }
         }
+        if (m_instNameText) m_instNameText->Bind(wxEVT_TEXT, [this](wxCommandEvent &) { InvalidatePreviewCache(); });
+        if (m_sndStorageChoice) m_sndStorageChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) { InvalidatePreviewCache(); });
+        if (m_opusModeChoice) m_opusModeChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) { InvalidatePreviewCache(); });
     }
 
     BAERmfEditorInstrumentExtInfo const &GetExtInfo() {
@@ -1352,6 +1357,7 @@ private:
     std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool, int, BAERmfEditorInstrumentExtInfo const *)> m_playCallback;
     std::function<void()> m_stopCallback;
     std::function<void(int)> m_stopTaggedCallback;
+    std::function<void()> m_invalidatePreviewCallback;
     std::function<bool(uint32_t, wxString const &)> m_replaceCallback;
     std::function<bool(uint32_t, wxString const &)> m_exportCallback;
 
@@ -1518,6 +1524,12 @@ private:
         }
     }
 
+    void InvalidatePreviewCache() {
+        if (m_invalidatePreviewCallback) {
+            m_invalidatePreviewCallback();
+        }
+    }
+
     bool TriggerPreviewNote(int note, int previewTag) {
         int best = -1;
 
@@ -1603,6 +1615,7 @@ private:
         note = std::clamp(root + (semitoneOffset - kKeyboardCenterSemitone), 0, 127);
 
         SaveCurrentSampleFromUI();
+        SaveExtInfoFromUI();
         if (!TriggerPreviewNote(note, keyCode)) {
     #if _DEBUG
             fprintf(stderr, "[nbstudio] key-preview down key=%d note=%d trigger=miss active=%zu\n",
@@ -1720,6 +1733,13 @@ private:
             m_chkSampleAndHold->SetValue((m_extInfo.flags1 & 0x04) != 0);
             m_chkPlayAtSampledFreq->SetValue((m_extInfo.flags2 & 0x40) != 0);
             m_chkNotPolyphonic->SetValue((m_extInfo.flags2 & 0x04) != 0);
+
+            auto flagChanged = [this](wxCommandEvent &) { InvalidatePreviewCache(); };
+            m_chkInterpolate->Bind(wxEVT_CHECKBOX, flagChanged);
+            m_chkAvoidReverb->Bind(wxEVT_CHECKBOX, flagChanged);
+            m_chkSampleAndHold->Bind(wxEVT_CHECKBOX, flagChanged);
+            m_chkPlayAtSampledFreq->Bind(wxEVT_CHECKBOX, flagChanged);
+            m_chkNotPolyphonic->Bind(wxEVT_CHECKBOX, flagChanged);
         }
 
         /* LPF */
@@ -1748,9 +1768,9 @@ private:
             previewCol->Add(m_filterGraph, 1, wxEXPAND);
             lpfBox->Add(previewCol, 1, wxEXPAND | wxALL, 4);
 
-            m_lpfFrequency->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { RefreshFilterEnvelopeGraph(); });
-            m_lpfResonance->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { RefreshFilterEnvelopeGraph(); });
-            m_lpfLowpassAmount->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { RefreshFilterEnvelopeGraph(); });
+            m_lpfFrequency->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { RefreshFilterEnvelopeGraph(); InvalidatePreviewCache(); });
+            m_lpfResonance->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { RefreshFilterEnvelopeGraph(); InvalidatePreviewCache(); });
+            m_lpfLowpassAmount->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { RefreshFilterEnvelopeGraph(); InvalidatePreviewCache(); });
 
         }
 
@@ -1888,6 +1908,7 @@ private:
                 RefreshLFOGraph();
                 RefreshLFOEnvelopeGraph();
                 RefreshFilterEnvelopeGraph();
+                InvalidatePreviewCache();
             });
 
             m_lfoCountSpin->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) {
@@ -1907,6 +1928,7 @@ private:
                 RefreshLFOGraph();
                 RefreshLFOEnvelopeGraph();
                 RefreshFilterEnvelopeGraph();
+                InvalidatePreviewCache();
             });
 
             auto lfoChanged = [this](wxCommandEvent &) {
@@ -1915,6 +1937,7 @@ private:
                     SaveLFOFromUI(sel);
                 }
                 RefreshLFOGraph();
+                InvalidatePreviewCache();
             };
             m_lfoDest->Bind(wxEVT_CHOICE, lfoChanged);
             m_lfoShape->Bind(wxEVT_CHOICE, lfoChanged);
@@ -2332,6 +2355,7 @@ private:
             SaveCurrentSampleFromUI();
             int sel = m_splitChoice->GetSelection();
             if (sel >= 0) LoadLocalSample(sel);
+            InvalidatePreviewCache();
         });
         m_loopEnableCheck->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &) { OnLoopEnableChanged(); });
         m_loopStartSpin->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) { OnLoopPointChanged(); });
@@ -2946,6 +2970,7 @@ private:
         if (m_commitUndoCallback) {
             m_commitUndoCallback("Edit Instrument");
         }
+        InvalidatePreviewCache();
         m_inInstantApply = false;
     }
 
@@ -2973,6 +2998,7 @@ bool ShowInstrumentExtEditorDialog(
     std::function<void(uint32_t, int, BAESampleInfo const *, int16_t, unsigned char, BAERmfEditorCompressionType, bool, int, BAERmfEditorInstrumentExtInfo const *)> playCallback,
     std::function<void()> stopCallback,
     std::function<void(int)> stopTaggedCallback,
+    std::function<void()> invalidatePreviewCallback,
     std::function<bool(uint32_t, wxString const &)> replaceCallback,
     std::function<bool(uint32_t, wxString const &)> exportCallback,
     std::vector<uint32_t> *outDeletedSampleIndices,
@@ -2987,6 +3013,7 @@ bool ShowInstrumentExtEditorDialog(
                                      std::move(playCallback),
                                      std::move(stopCallback),
                                      std::move(stopTaggedCallback),
+                                     std::move(invalidatePreviewCallback),
                                      std::move(replaceCallback),
                                      std::move(exportCallback));
 
