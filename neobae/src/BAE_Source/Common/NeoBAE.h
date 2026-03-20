@@ -3287,6 +3287,25 @@ BAEResult BAERmfEditorDocument_AliasInstrumentFromBank(BAERmfEditorDocument *doc
                                                        uint32_t instrumentIndex,
                                                        unsigned char targetProgram);
 
+/* Resolve an INST ID to a concrete instrument index in the bank.
+ * Checks real INST resources first, then falls back to the bank's ID_ALIAS table.
+ * On success outResolvedInstID is the concrete INST ID (may differ when aliased)
+ * and outInstrumentIndex is the ordinal instrument index inside the bank file. */
+BAEResult BAERmfEditorBank_ResolveInstID(BAEBankToken bankToken,
+                                         uint32_t instID,
+                                         uint32_t *outResolvedInstID,
+                                         uint32_t *outInstrumentIndex);
+
+/* Clone a full instrument from a bank, placing it at an explicit target INST ID.
+ * Unlike CloneInstrumentFromBank (which hardcodes INST 512+program), this lets
+ * the caller choose the destination INST ID (e.g. 640+note for percussion). */
+BAEResult BAERmfEditorDocument_CloneInstrumentFromBankToInstID(
+    BAERmfEditorDocument *document,
+    BAEBankToken bankToken,
+    uint32_t instrumentIndex,
+    uint32_t targetInstID,
+    unsigned char targetProgram);
+
 /* Query whether a sample is a bank alias (pointer to bank SND, no embedded data). */
 BAEResult BAERmfEditorDocument_IsSampleBankAlias(BAERmfEditorDocument const *document,
                                                   uint32_t sampleIndex,

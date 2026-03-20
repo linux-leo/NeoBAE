@@ -651,6 +651,39 @@ static void PV_NoteSampleAssetID(BAERmfEditorDocument *document, uint32_t assetI
     }
 }
 
+/* Search for an existing sample that was cloned from the same bank SND resource.
+ * Returns the matching sample's sampleAssetID, or 0 if not found.
+ * Two samples are considered duplicates when they have identical originalSndData blobs.
+ * excludeIndex is skipped (pass sampleCount to skip none). */
+static uint32_t PV_FindClonedAssetForBankSnd(BAERmfEditorDocument const *document,
+                                              XPTR sndData,
+                                              int32_t sndSize,
+                                              uint32_t excludeIndex)
+{
+    uint32_t i;
+
+    if (!document || !sndData || sndSize <= 0)
+    {
+        return 0;
+    }
+    for (i = 0; i < document->sampleCount; ++i)
+    {
+        BAERmfEditorSample const *s;
+        if (i == excludeIndex)
+        {
+            continue;
+        }
+        s = &document->samples[i];
+        if (s->originalSndData &&
+            s->originalSndSize == sndSize &&
+            XMemCmp(s->originalSndData, sndData, (int32_t)sndSize) == 0)
+        {
+            return s->sampleAssetID;
+        }
+    }
+    return 0;
+}
+
 static BAERmfEditorSample *PV_FindFirstSampleForAsset(BAERmfEditorDocument *document, uint32_t assetID)
 {
     uint32_t i;
@@ -12549,10 +12582,13 @@ BAEResult BAERmfEditorDocument_CloneInstrumentFromBank(BAERmfEditorDocument *doc
             }
             else
             {
-                /* Cloned embedded samples must use local asset IDs so save remaps
-                   to local SND resources instead of reusing source-bank IDs. */
-                document->samples[document->sampleCount - 1].sampleAssetID = PV_AllocateSampleAssetID(document);
-                document->samples[document->sampleCount - 1].splitVolume = split.miscParameter2;
+                BAERmfEditorSample *newSample = &document->samples[document->sampleCount - 1];
+                uint32_t sharedAsset = PV_FindClonedAssetForBankSnd(document,
+                                                                    newSample->originalSndData,
+                                                                    newSample->originalSndSize,
+                                                                    document->sampleCount - 1);
+                newSample->sampleAssetID = sharedAsset ? sharedAsset : PV_AllocateSampleAssetID(document);
+                newSample->splitVolume = split.miscParameter2;
             }
         }
     }
@@ -12593,11 +12629,13 @@ BAEResult BAERmfEditorDocument_CloneInstrumentFromBank(BAERmfEditorDocument *doc
         }
         else
         {
-            /* Cloned embedded samples must use local asset IDs so save remaps
-               to local SND resources instead of reusing source-bank IDs. */
-            document->samples[document->sampleCount - 1].sampleAssetID = PV_AllocateSampleAssetID(document);
-            document->samples[document->sampleCount - 1].splitVolume =
-                (int16_t)XGetShort(&inst->miscParameter2);
+            BAERmfEditorSample *newSample = &document->samples[document->sampleCount - 1];
+            uint32_t sharedAsset = PV_FindClonedAssetForBankSnd(document,
+                                                                newSample->originalSndData,
+                                                                newSample->originalSndSize,
+                                                                document->sampleCount - 1);
+            newSample->sampleAssetID = sharedAsset ? sharedAsset : PV_AllocateSampleAssetID(document);
+            newSample->splitVolume = (int16_t)XGetShort(&inst->miscParameter2);
         }
     }
 
@@ -12831,6 +12869,272 @@ BAEResult BAERmfEditorDocument_IsSampleBankAlias(BAERmfEditorDocument const *doc
         return BAE_PARAM_ERR;
     }
     *outIsAlias = document->samples[sampleIndex].isBankAlias;
+    return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorBank_ResolveInstID(BAEBankToken bankToken,
+                                         uint32_t instID,
+                                         uint32_t *outResolvedInstID,
+                                         uint32_t *outInstrumentIndex)
+{
+    XFILE bankFile;
+    int32_t totalInst;
+    int32_t i;
+    uint32_t resolvedID;
+
+    if (!outResolvedInstID || !outInstrumentIndex)
+    {
+        return BAE_PARAM_ERR;
+    }
+    *outResolvedInstID = instID;
+    *outInstrumentIndex = 0;
+    if (!bankToken)
+    {
+        return BAE_PARAM_ERR;
+    }
+    bankFile = (XFILE)bankToken;
+
+    /* Try the requested ID first, then fall back to alias resolution. */
+    resolvedID = instID;
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        if (pass == 1)
+        {
+            /* Second pass: check alias table. */
+            XAliasLinkResource *pAlias;
+            XLongResourceID aliasTarget;
+
+            pAlias = XGetAliasLinkFromFile(bankFile);
+            if (!pAlias)
+            {
+                return BAE_BAD_FILE;
+            }
+            if (XLookupAlias(pAlias, (XLongResourceID)instID, &aliasTarget) != 0)
+            {
+                XDisposePtr((XPTR)pAlias);
+                return BAE_BAD_FILE;
+            }
+            XDisposePtr((XPTR)pAlias);
+            resolvedID = (uint32_t)aliasTarget;
+        }
+
+        totalInst = XCountFileResourcesOfType(bankFile, ID_INST);
+        for (i = 0; i < totalInst; ++i)
+        {
+            XLongResourceID thisID;
+            int32_t size;
+            XPTR data;
+
+            data = XGetIndexedFileResource(bankFile, ID_INST, &thisID,
+                                           i, NULL, &size);
+            if (data)
+            {
+                XDisposePtr(data);
+                if ((uint32_t)thisID == resolvedID)
+                {
+                    *outResolvedInstID = resolvedID;
+                    *outInstrumentIndex = (uint32_t)i;
+                    return BAE_NO_ERROR;
+                }
+            }
+        }
+    }
+    return BAE_BAD_FILE;
+}
+
+BAEResult BAERmfEditorDocument_CloneInstrumentFromBankToInstID(
+    BAERmfEditorDocument *document,
+    BAEBankToken bankToken,
+    uint32_t instrumentIndex,
+    uint32_t targetInstID,
+    unsigned char targetProgram)
+{
+    enum
+    {
+        kInstHeaderMinSize = 14,
+        kInstKeySplitSize = 8
+    };
+    XFILE bankFile;
+    XPTR instData;
+    XLongResourceID instID;
+    int32_t instSize;
+    char rawName[256];
+    char instName[256];
+    InstrumentResource *inst;
+    XShortResourceID baseSndID;
+    int16_t baseRootKey;
+    int16_t splitCount;
+    int16_t splitIndex;
+    XBOOL useSoundModifierAsRootKey;
+    int16_t instMiscParam1;
+
+    if (!document || !bankToken)
+    {
+        return BAE_PARAM_ERR;
+    }
+    bankFile = (XFILE)bankToken;
+
+    rawName[0] = 0;
+    instData = XGetIndexedFileResource(bankFile, ID_INST, &instID,
+                                       (int32_t)instrumentIndex, rawName, &instSize);
+    if (!instData)
+    {
+        return BAE_BAD_FILE;
+    }
+    if (instSize < kInstHeaderMinSize)
+    {
+        XDisposePtr(instData);
+        return BAE_BAD_FILE;
+    }
+
+    PV_DecodeResourceName(rawName, instName);
+    inst = (InstrumentResource *)instData;
+    baseSndID = (XShortResourceID)XGetShort(&inst->sndResourceID);
+    baseRootKey = (int16_t)XGetShort(&inst->midiRootKey);
+    splitCount = (int16_t)XGetShort(&inst->keySplitCount);
+    if (splitCount < 0)
+    {
+        splitCount = 0;
+    }
+    if (instSize < (kInstHeaderMinSize + (splitCount * kInstKeySplitSize)))
+    {
+        XDisposePtr(instData);
+        return BAE_BAD_FILE;
+    }
+
+    useSoundModifierAsRootKey = TEST_FLAG_VALUE(inst->flags2, ZBF_useSoundModifierAsRootKey);
+    instMiscParam1 = (int16_t)XGetShort(&inst->miscParameter1);
+
+    if (splitCount > 0)
+    {
+        for (splitIndex = 0; splitIndex < splitCount; ++splitIndex)
+        {
+            KeySplit split;
+            unsigned char splitRootForLoad;
+            char sampleName[256];
+
+            XGetKeySplitFromPtr(inst, splitIndex, &split);
+            if (useSoundModifierAsRootKey)
+            {
+                int16_t splitRoot = split.miscParameter1;
+                if (split.lowMidi == split.highMidi && splitRoot == 0)
+                {
+                    splitRoot = (int16_t)split.lowMidi;
+                }
+                if (splitRoot < 0 || splitRoot > 127)
+                {
+                    splitRoot = baseRootKey;
+                }
+                splitRootForLoad = PV_ClampMidi7Bit(splitRoot);
+            }
+            else
+            {
+                splitRootForLoad = 0;
+            }
+
+            sampleName[0] = 0;
+            if (PV_GetEmbeddedSampleDisplayName(bankFile, split.sndResourceID, sampleName) != BAE_NO_ERROR)
+            {
+                XStrCpy(sampleName, instName);
+            }
+
+            if (PV_AddEmbeddedSampleVariant(document,
+                                            bankFile,
+                                            (XLongResourceID)targetInstID,
+                                            sampleName,
+                                            targetProgram,
+                                            split.sndResourceID,
+                                            splitRootForLoad,
+                                            PV_ClampMidi7Bit((int32_t)split.lowMidi),
+                                            PV_ClampMidi7Bit((int32_t)split.highMidi)) != BAE_NO_ERROR)
+            {
+                BAE_STDERR("[CloneToInstID] INST ID=%ld split=%d failed to load sndID=%d\n",
+                           (long)instID, (int)splitIndex, (int)split.sndResourceID);
+            }
+            else
+            {
+                BAERmfEditorSample *newSample = &document->samples[document->sampleCount - 1];
+                uint32_t sharedAsset = PV_FindClonedAssetForBankSnd(document,
+                                                                    newSample->originalSndData,
+                                                                    newSample->originalSndSize,
+                                                                    document->sampleCount - 1);
+                newSample->sampleAssetID = sharedAsset ? sharedAsset : PV_AllocateSampleAssetID(document);
+                newSample->splitVolume = split.miscParameter2;
+            }
+        }
+    }
+    else
+    {
+        unsigned char nonSplitRootForLoad;
+        char sampleName[256];
+
+        if (useSoundModifierAsRootKey)
+        {
+            nonSplitRootForLoad = PV_ClampMidi7Bit(instMiscParam1 ? instMiscParam1 : baseRootKey);
+        }
+        else
+        {
+            nonSplitRootForLoad = 0;
+        }
+
+        sampleName[0] = 0;
+        if (PV_GetEmbeddedSampleDisplayName(bankFile, baseSndID, sampleName) != BAE_NO_ERROR)
+        {
+            XStrCpy(sampleName, instName);
+        }
+
+        if (PV_AddEmbeddedSampleVariant(document,
+                                        bankFile,
+                                        (XLongResourceID)targetInstID,
+                                        sampleName,
+                                        targetProgram,
+                                        baseSndID,
+                                        nonSplitRootForLoad,
+                                        0,
+                                        127) != BAE_NO_ERROR)
+        {
+            BAE_STDERR("[CloneToInstID] INST ID=%ld failed to load base sndID=%d\n",
+                       (long)instID, (int)baseSndID);
+            XDisposePtr(instData);
+            return BAE_GENERAL_ERR;
+        }
+        else
+        {
+            BAERmfEditorSample *newSample = &document->samples[document->sampleCount - 1];
+            uint32_t sharedAsset = PV_FindClonedAssetForBankSnd(document,
+                                                                newSample->originalSndData,
+                                                                newSample->originalSndSize,
+                                                                document->sampleCount - 1);
+            newSample->sampleAssetID = sharedAsset ? sharedAsset : PV_AllocateSampleAssetID(document);
+            newSample->splitVolume = (int16_t)XGetShort(&inst->miscParameter2);
+        }
+    }
+
+    /* Parse and store extended instrument data (ADSR, LFO, LPF, curves) */
+    if (!PV_FindInstrumentExt(document, (XLongResourceID)targetInstID))
+    {
+        BAERmfEditorInstrumentExt extData;
+        PV_ParseExtendedInstData(instData, instSize, &extData);
+        extData.instID = (XLongResourceID)targetInstID;
+        extData.dirty = FALSE;
+        extData.displayName = instName[0] ? PV_DuplicateString(instName) : NULL;
+        extData.originalInstData = XNewPtr(instSize);
+        if (extData.originalInstData)
+        {
+            XBlockMove(instData, extData.originalInstData, instSize);
+            extData.originalInstSize = instSize;
+        }
+        if (PV_AddInstrumentExt(document, &extData) != BAE_NO_ERROR)
+        {
+            PV_FreeString(&extData.displayName);
+            if (extData.originalInstData)
+            {
+                XDisposePtr(extData.originalInstData);
+            }
+        }
+    }
+
+    XDisposePtr(instData);
     return BAE_NO_ERROR;
 }
 

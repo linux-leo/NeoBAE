@@ -37,12 +37,13 @@
 - ~~Pressing two notes at the same time in the instrument dialog preview, one note will be a piano~~
 - ~~Custom instrument doesn't play in piano roll preview, but works in output~~
 - ~~Custom instrument doesn't play in instrument dialog preview~~
-- Instrument dialog preview can be broken with key mashing
-- Clone all used instruments
+- ~~Instrument dialog preview can be broken with key mashing~~
+~~- Clone all used instruments~~
   - ~~Clone used instruments from MIDI stream to RMF instruments, reassigning the notes and events banks/programs as needed~~
   - ~~Example: A MIDI uses 0:1 piano. We clone it, it becomes 2:0, we reassign all 0:1 notes to 2:0.~~
-  - Cloned instruments should support pointers/aliasing/whatever is needed (eg Chippy bank)
-  - Needs to support percussions too
+  - ~~Cloned instruments should support pointers/aliasing/whatever is needed (eg Chippy bank)~~
+  - ~~Needs to support percussions too~~
+  - ~~If we clone multiple instruments using the same aliased samples, we should alias too~~
 - Confirmation on exit if session data is different from source file
   - Same when opening another file
 
@@ -53,7 +54,7 @@
   - Bank Edit tab has all instruments/samples listed in a large tree
   - Context menu options for Clone/Alias functionality
   - Context menu for compressing one instrument's samples or All instruments samples in the bank like we have for songs
-  - Maybe MIDI Data and Bank Editor should be mutually exclusive (show midi data for MID/RMF/ZMF, show Bank Editor for HSB/ZSB)\
+  - Maybe MIDI Data and Bank Editor should be mutually exclusive (show midi data for MID/RMF/ZMF, show Bank Editor for HSB/ZSB)
 - Allow for automation like Volume to be able have a slide on it so its easy to make a fadeout/fadein for example, the edit dialog could have "start (item)" "end (item)"
 - Resizable tracks (allow user to expand or shrink the track by click/dragging the far right end of the ruler)
 - Neo Reverb for preview player
