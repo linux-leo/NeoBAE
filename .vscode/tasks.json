@@ -45,7 +45,6 @@
       "args": ["-f", "Makefile.gui-mingw", "DEBUG=1", "-j20"],
       "group": {
         "kind": "build",
-        "isDefault": true
       },
       "dependsOn": ["Clean"],
       "problemMatcher": "$gcc"
@@ -60,10 +59,23 @@
       "args": ["-f", "Makefile.gui-mingw", "DEBUG=1", "LDEBUG=1","-j20"],
       "group": {
         "kind": "build",
-        "isDefault": true
       },
       "dependsOn": ["Clean"],
       "problemMatcher": "$gcc"
-    }    
+    },
+    {
+      "label": "Build NeoBAE Studio (RMF Editor)",
+      "type": "shell",
+      "command": "make",
+      "options": {
+        "cwd": "${workspaceFolder}/neobae"
+      },
+      "args": ["-f", "Makefile.rmfeditor-wx", "DEBUG=1", "-j20"],
+      "group": {
+        "kind": "build",
+      },
+      "dependsOn": ["Clean"],
+      "problemMatcher": "$gcc"
+    }        
   ]
 }
