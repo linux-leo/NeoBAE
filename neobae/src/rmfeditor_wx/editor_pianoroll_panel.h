@@ -49,5 +49,7 @@ void PianoRollPanel_SetPlayheadTick(PianoRollPanel *panel, uint32_t tick);
 void PianoRollPanel_EnsurePlayheadVisible(PianoRollPanel *panel, uint32_t tick);
 void PianoRollPanel_JumpToTick(PianoRollPanel *panel, uint32_t tick);
 uint32_t PianoRollPanel_GetDocumentEndTick(PianoRollPanel *panel);
+void PianoRollPanel_SetUserEndTick(PianoRollPanel *panel, uint32_t tick);
+uint32_t PianoRollPanel_GetUserEndTick(PianoRollPanel *panel);
 void PianoRollPanel_ClearPlayhead(PianoRollPanel *panel);
 void PianoRollPanel_Refresh(PianoRollPanel *panel);

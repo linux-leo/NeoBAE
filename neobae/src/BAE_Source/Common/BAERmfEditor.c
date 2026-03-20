@@ -10171,6 +10171,41 @@ BAEResult BAERmfEditorDocument_SetTrackInfo(BAERmfEditorDocument *document,
     return BAE_NO_ERROR;
 }
 
+BAEResult BAERmfEditorDocument_GetTrackEndOfTrackTick(BAERmfEditorDocument const *document,
+                                                      uint16_t trackIndex,
+                                                      uint32_t *outTick)
+{
+    BAERmfEditorTrack const *track;
+
+    if (!outTick)
+    {
+        return BAE_PARAM_ERR;
+    }
+    track = PV_GetTrackConst(document, trackIndex);
+    if (!track)
+    {
+        return BAE_PARAM_ERR;
+    }
+    *outTick = track->endOfTrackTick;
+    return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorDocument_SetTrackEndOfTrackTick(BAERmfEditorDocument *document,
+                                                      uint16_t trackIndex,
+                                                      uint32_t tick)
+{
+    BAERmfEditorTrack *track;
+
+    track = PV_GetTrack(document, trackIndex);
+    if (!track)
+    {
+        return BAE_PARAM_ERR;
+    }
+    track->endOfTrackTick = tick;
+    PV_MarkDocumentDirty(document);
+    return BAE_NO_ERROR;
+}
+
 BAEResult BAERmfEditorDocument_SetTrackDefaultInstrument(BAERmfEditorDocument *document,
                                                          uint16_t trackIndex,
                                                          uint16_t bank,

@@ -3068,6 +3068,12 @@ BAEResult BAERmfEditorDocument_GetTrackInfo(BAERmfEditorDocument const *document
 BAEResult BAERmfEditorDocument_SetTrackInfo(BAERmfEditorDocument *document,
                                             uint16_t trackIndex,
                                             BAERmfEditorTrackInfo const *trackInfo);
+BAEResult BAERmfEditorDocument_GetTrackEndOfTrackTick(BAERmfEditorDocument const *document,
+                                                      uint16_t trackIndex,
+                                                      uint32_t *outTick);
+BAEResult BAERmfEditorDocument_SetTrackEndOfTrackTick(BAERmfEditorDocument *document,
+                                                      uint16_t trackIndex,
+                                                      uint32_t tick);
 BAEResult BAERmfEditorDocument_SetTrackDefaultInstrument(BAERmfEditorDocument *document,
                                                          uint16_t trackIndex,
                                                          uint16_t bank,

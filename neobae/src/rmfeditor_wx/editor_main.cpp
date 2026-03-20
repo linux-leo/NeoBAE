@@ -48,7 +48,7 @@ extern "C" {
 #include <wx/msw/winundef.h>
 #endif // __WXMSW__
 
-#define VERSION "0.07a"
+#define VERSION "0.08a"
 
 namespace {
 
@@ -128,6 +128,7 @@ static constexpr uint16_t kNbsVersion = 1;
 static constexpr uint16_t kNbsFieldRmfBlob      = 0x0001;
 static constexpr uint16_t kNbsFieldSettings     = 0x0002;
 static constexpr uint16_t kNbsFieldOriginalPath = 0x0003;
+static constexpr uint16_t kNbsFieldUserEndTick  = 0x0004;
 
 #pragma pack(push, 1)
 struct NbsSessionSettings {
@@ -5055,6 +5056,18 @@ private:
                            reinterpret_cast<unsigned char const *>(utf8.data()) + len);
         }
 
+        /* Build TLV payload: user end tick */
+        {
+            uint32_t userEndTick;
+
+            userEndTick = PianoRollPanel_GetUserEndTick(m_pianoRoll);
+            if (userEndTick > 0) {
+                AppendLE16(payload, kNbsFieldUserEndTick);
+                AppendLE32(payload, 4);
+                AppendLE32(payload, userEndTick);
+            }
+        }
+
         /* Compress */
         compBound = compressBound(static_cast<uLong>(payload.size()));
         compressed.resize(static_cast<size_t>(compBound));
@@ -5146,10 +5159,12 @@ private:
         NbsSessionSettings settings;
         bool haveSettings;
         size_t offset;
+        uint32_t userEndTick;
 
         memset(&settings, 0, sizeof(settings));
         settings.selectedTrack = -1;
         haveSettings = false;
+        userEndTick = 0;
 
         if (!file.Open(path, wxFile::read)) {
             wxMessageBox("Could not open session file.", "Open Session", wxOK | wxICON_ERROR, this);
@@ -5209,6 +5224,10 @@ private:
                     memcpy(&settings, payload.data() + offset, sizeof(NbsSessionSettings));
                     haveSettings = true;
                 }
+            } else if (fieldId == kNbsFieldUserEndTick) {
+                if (fieldLen >= 4) {
+                    userEndTick = ReadLE32(payload.data() + offset);
+                }
             }
             /* Unknown fields are silently skipped */
             offset += fieldLen;
@@ -5252,6 +5271,9 @@ private:
         m_sessionPath = path;
         MarkDocumentClean();
         PianoRollPanel_SetDocument(m_pianoRoll, m_document);
+        if (userEndTick > 0) {
+            PianoRollPanel_SetUserEndTick(m_pianoRoll, userEndTick);
+        }
         PianoRollPanel_ClearPlayhead(m_pianoRoll);
         m_ignoreSeekEvent = true;
         m_positionSlider->SetValue(0);

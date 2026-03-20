@@ -29,6 +29,7 @@ enum class DragMode {
     ResizeLeft,
     ResizeRight,
     SelectBox,
+    TimelineEnd,
 };
 
 enum class MidiLoopDragMode {
@@ -334,7 +335,10 @@ public:
           m_newNoteBank(0),
                     m_newNoteProgram(0),
                     m_zoomScale(1.0f),
-          m_lastPreviewDragNote(-1) {
+          m_lastPreviewDragNote(-1),
+          m_userEndTick(0),
+          m_draggingTimelineEnd(false),
+          m_timelineEndDragTick(0) {
         SetBackgroundStyle(wxBG_STYLE_PAINT);
         SetScrollRate(16, 16);
         Bind(wxEVT_PAINT, &PianoRollPanel::OnPaint, this);
@@ -365,6 +369,8 @@ public:
         m_selectBoxActive = false;
         m_dragOriginalNoteIndices.clear();
         m_dragOriginalNotes.clear();
+        m_userEndTick = 0;
+        m_draggingTimelineEnd = false;
         UpdateVirtualSize();
         ScrollToMidiContentCenter();
         Refresh();
@@ -614,6 +620,16 @@ public:
         return GetDocumentEndTick();
     }
 
+    void SetUserEndTick(uint32_t tick) {
+        m_userEndTick = tick;
+        UpdateVirtualSize();
+        Refresh();
+    }
+
+    uint32_t GetUserEndTick() const {
+        return m_userEndTick;
+    }
+
 private:
     BAERmfEditorDocument *m_document;
     int m_selectedTrack;
@@ -657,6 +673,9 @@ private:
     std::vector<long> m_dragOriginalNoteIndices;
     std::vector<BAERmfEditorNoteInfo> m_dragOriginalNotes;
     int m_lastPreviewDragNote;
+    uint32_t m_userEndTick;
+    bool m_draggingTimelineEnd;
+    uint32_t m_timelineEndDragTick;
 
     bool ScrollHorizontallyWithWheel(wxMouseEvent const &event, int stepMultiplier) {
         int wheelDelta;
@@ -876,6 +895,10 @@ private:
         long hitNote;
         MidiLoopDragMode loopDragMode;
 
+        if (HitTestTimelineEndHandle(point)) {
+            SetCursor(wxCursor(wxCURSOR_SIZEWE));
+            return;
+        }
         loopDragMode = MidiLoopDragMode::None;
         if (HitTestMidiLoopHandle(point, &loopDragMode)) {
             SetCursor(wxCursor(wxCURSOR_SIZEWE));
@@ -1815,7 +1838,7 @@ private:
         Scroll(viewUnitsX, targetTop / scrollPixelsY);
     }
 
-    uint32_t GetDocumentEndTick() const {
+    uint32_t GetContentEndTick() const {
         uint32_t lastTick;
 
         lastTick = GetTicksPerQuarter() * 8;
@@ -1905,6 +1928,253 @@ private:
             }
         }
         return lastTick;
+    }
+
+    uint32_t GetDocumentEndTick() const {
+        uint32_t contentEnd;
+
+        contentEnd = GetContentEndTick();
+        if (m_userEndTick > 0) {
+            return std::max(contentEnd, m_userEndTick);
+        }
+        return contentEnd;
+    }
+
+    void ApplyTimelineResize(uint32_t newEndTick) {
+        uint32_t minTick;
+        uint16_t trackCount;
+        bool applyAll;
+
+        minTick = GetTicksPerQuarter() * 4;
+        if (newEndTick < minTick) {
+            newEndTick = minTick;
+        }
+        if (!m_document) {
+            return;
+        }
+        trackCount = 0;
+        BAERmfEditorDocument_GetTrackCount(m_document, &trackCount);
+
+        /* Determine scope: all tracks or selected track only */
+        applyAll = true;
+        if (trackCount > 1 && HasTrack()) {
+            wxMessageDialog dlg(this,
+                                "Apply the new duration to all tracks, or only the selected track?",
+                                "Resize Timeline",
+                                wxYES_NO | wxCANCEL | wxICON_QUESTION);
+            dlg.SetYesNoCancelLabels("All Tracks", "Selected Track", "Cancel");
+            int choice = dlg.ShowModal();
+            if (choice == wxID_CANCEL) {
+                return;
+            }
+            applyAll = (choice == wxID_YES);
+        }
+
+        /* Shrink confirmation and trim for affected tracks */
+        if (applyAll) {
+            uint32_t contentEnd;
+
+            contentEnd = GetContentEndTick();
+            if (newEndTick < contentEnd) {
+                int confirm;
+
+                confirm = wxMessageBox(
+                    "Shortening the timeline will delete or truncate notes and events "
+                    "beyond the new end point.\n\nContinue?",
+                    "Resize Timeline",
+                    wxYES_NO | wxICON_WARNING);
+                if (confirm != wxYES) {
+                    return;
+                }
+                TrimContentToTick(newEndTick);
+            }
+            for (uint16_t i = 0; i < trackCount; ++i) {
+                BAERmfEditorDocument_SetTrackEndOfTrackTick(m_document, i, newEndTick);
+            }
+        } else {
+            uint32_t selectedTrackContentEnd;
+
+            selectedTrackContentEnd = GetSelectedTrackContentEndTick();
+            if (newEndTick < selectedTrackContentEnd) {
+                int confirm;
+
+                confirm = wxMessageBox(
+                    "Shortening the timeline will delete or truncate notes and events "
+                    "on the selected track beyond the new end point.\n\nContinue?",
+                    "Resize Timeline",
+                    wxYES_NO | wxICON_WARNING);
+                if (confirm != wxYES) {
+                    return;
+                }
+                TrimSingleTrackToTick(static_cast<uint16_t>(m_selectedTrack), newEndTick);
+            }
+            BAERmfEditorDocument_SetTrackEndOfTrackTick(m_document,
+                                                        static_cast<uint16_t>(m_selectedTrack),
+                                                        newEndTick);
+        }
+        m_userEndTick = newEndTick;
+    }
+
+    uint32_t GetSelectedTrackContentEndTick() const {
+        uint32_t lastTick;
+        uint32_t noteCount;
+        uint32_t noteIndex;
+
+        lastTick = 0;
+        if (!HasTrack()) {
+            return lastTick;
+        }
+        noteCount = 0;
+        if (BAERmfEditorDocument_GetNoteCount(m_document, static_cast<uint16_t>(m_selectedTrack), &noteCount) == BAE_NO_ERROR) {
+            for (noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
+                BAERmfEditorNoteInfo noteInfo;
+
+                if (GetNoteInfo(noteIndex, &noteInfo)) {
+                    lastTick = std::max(lastTick, noteInfo.startTick + noteInfo.durationTicks);
+                }
+            }
+        }
+        return lastTick;
+    }
+
+    void TrimSingleTrackToTick(uint16_t trackIndex, uint32_t boundary) {
+        if (!m_document) {
+            return;
+        }
+        BeginUndoAction("Resize Timeline");
+        TrimTrackNotesToTick(trackIndex, boundary);
+        TrimTrackCCEventsToBoundary(trackIndex, boundary);
+        TrimTrackPitchBendEventsToBoundary(trackIndex, boundary);
+        CommitUndoAction("Resize Timeline");
+    }
+
+    void TrimContentToTick(uint32_t boundary) {
+        uint16_t trackCount;
+        uint16_t trackIndex;
+
+        if (!m_document) {
+            return;
+        }
+        BeginUndoAction("Resize Timeline");
+        trackCount = 0;
+        BAERmfEditorDocument_GetTrackCount(m_document, &trackCount);
+        for (trackIndex = 0; trackIndex < trackCount; ++trackIndex) {
+            TrimTrackNotesToTick(trackIndex, boundary);
+            TrimTrackCCEventsToBoundary(trackIndex, boundary);
+            TrimTrackPitchBendEventsToBoundary(trackIndex, boundary);
+        }
+        TrimTempoEventsToBoundary(boundary);
+        CommitUndoAction("Resize Timeline");
+    }
+
+    void TrimTrackNotesToTick(uint16_t trackIndex, uint32_t boundary) {
+        uint32_t noteCount;
+        uint32_t noteIndex;
+        std::vector<uint32_t> toDelete;
+
+        noteCount = 0;
+        if (BAERmfEditorDocument_GetNoteCount(m_document, trackIndex, &noteCount) != BAE_NO_ERROR) {
+            return;
+        }
+        for (noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
+            BAERmfEditorNoteInfo noteInfo;
+
+            if (BAERmfEditorDocument_GetNoteInfo(m_document, trackIndex, noteIndex, &noteInfo) != BAE_NO_ERROR) {
+                continue;
+            }
+            if (noteInfo.startTick >= boundary) {
+                /* Entirely past boundary: mark for deletion */
+                toDelete.push_back(noteIndex);
+            } else if (noteInfo.startTick + noteInfo.durationTicks > boundary) {
+                /* Clips boundary: truncate */
+                noteInfo.durationTicks = boundary - noteInfo.startTick;
+                if (noteInfo.durationTicks == 0) {
+                    toDelete.push_back(noteIndex);
+                } else {
+                    BAERmfEditorDocument_SetNoteInfo(m_document, trackIndex, noteIndex, &noteInfo);
+                }
+            }
+        }
+        /* Delete in reverse order to preserve indices */
+        for (auto it = toDelete.rbegin(); it != toDelete.rend(); ++it) {
+            BAERmfEditorDocument_DeleteNote(m_document, trackIndex, *it);
+        }
+    }
+
+    void TrimTrackCCEventsToBoundary(uint16_t trackIndex, uint32_t boundary) {
+        std::vector<AutomationLaneDescriptor> const &lanes = GetAutomationLanes();
+
+        for (AutomationLaneDescriptor const &lane : lanes) {
+            uint32_t eventCount;
+            std::vector<uint32_t> toDelete;
+
+            if (lane.kind != AutomationLaneKind::Controller) {
+                continue;
+            }
+            eventCount = 0;
+            if (BAERmfEditorDocument_GetTrackCCEventCount(m_document, trackIndex, lane.controller, &eventCount) != BAE_NO_ERROR) {
+                continue;
+            }
+            for (uint32_t i = 0; i < eventCount; ++i) {
+                uint32_t tick;
+                unsigned char value;
+
+                if (BAERmfEditorDocument_GetTrackCCEvent(m_document, trackIndex, lane.controller, i, &tick, &value) == BAE_NO_ERROR) {
+                    if (tick >= boundary) {
+                        toDelete.push_back(i);
+                    }
+                }
+            }
+            for (auto it = toDelete.rbegin(); it != toDelete.rend(); ++it) {
+                BAERmfEditorDocument_DeleteTrackCCEvent(m_document, trackIndex, lane.controller, *it);
+            }
+        }
+    }
+
+    void TrimTrackPitchBendEventsToBoundary(uint16_t trackIndex, uint32_t boundary) {
+        uint32_t eventCount;
+        std::vector<uint32_t> toDelete;
+
+        eventCount = 0;
+        if (BAERmfEditorDocument_GetTrackPitchBendEventCount(m_document, trackIndex, &eventCount) != BAE_NO_ERROR) {
+            return;
+        }
+        for (uint32_t i = 0; i < eventCount; ++i) {
+            uint32_t tick;
+            uint16_t value;
+
+            if (BAERmfEditorDocument_GetTrackPitchBendEvent(m_document, trackIndex, i, &tick, &value) == BAE_NO_ERROR) {
+                if (tick >= boundary) {
+                    toDelete.push_back(i);
+                }
+            }
+        }
+        for (auto it = toDelete.rbegin(); it != toDelete.rend(); ++it) {
+            BAERmfEditorDocument_DeleteTrackPitchBendEvent(m_document, trackIndex, *it);
+        }
+    }
+
+    void TrimTempoEventsToBoundary(uint32_t boundary) {
+        uint32_t tempoCount;
+        std::vector<uint32_t> toDelete;
+
+        tempoCount = 0;
+        if (BAERmfEditorDocument_GetTempoEventCount(m_document, &tempoCount) != BAE_NO_ERROR) {
+            return;
+        }
+        for (uint32_t i = 0; i < tempoCount; ++i) {
+            uint32_t tick;
+            uint32_t microsecondsPerQuarter;
+
+            if (BAERmfEditorDocument_GetTempoEvent(m_document, i, &tick, &microsecondsPerQuarter) == BAE_NO_ERROR) {
+                if (tick >= boundary) {
+                    toDelete.push_back(i);
+                }
+            }
+        }
+        for (auto it = toDelete.rbegin(); it != toDelete.rend(); ++it) {
+            BAERmfEditorDocument_DeleteTempoEvent(m_document, *it);
+        }
     }
 
     double TickToSeconds(uint32_t tick) const {
@@ -2196,6 +2466,9 @@ private:
         }
         height = GetAutomationAreaTop() + (laneCount * kAutomationLaneHeight) + ((std::max(0, laneCount - 1)) * kAutomationLaneGap) + kPianoRollTopGutter;
         lastTick = GetDocumentEndTick();
+        if (m_draggingTimelineEnd && m_timelineEndDragTick > lastTick) {
+            lastTick = m_timelineEndDragTick;
+        }
         width = TickToX(lastTick) + 200;
         SetVirtualSize(width, height);
     }
@@ -2309,6 +2582,26 @@ private:
         dc.SetPen(wxPen(wxColour(100, 105, 110)));
         dc.DrawLine(scrollX + kPianoRollLeftGutter, rulerTop, scrollX + kPianoRollLeftGutter, rulerBot);
 
+        // Timeline end handle in ruler
+        {
+            uint32_t endTick;
+            int endX;
+
+            endTick = m_draggingTimelineEnd ? m_timelineEndDragTick : GetDocumentEndTick();
+            endX = TickToX(endTick);
+            if (endX >= scrollX && endX <= scrollX + screenW) {
+                dc.SetPen(wxPen(wxColour(180, 130, 50), 2));
+                dc.DrawLine(endX, rulerTop, endX, rulerBot);
+                /* Small triangular tab at bottom of ruler */
+                wxPoint triangle[3];
+                triangle[0] = wxPoint(endX, rulerBot - 2);
+                triangle[1] = wxPoint(endX - 5, rulerBot - 10);
+                triangle[2] = wxPoint(endX + 5, rulerBot - 10);
+                dc.SetPen(wxPen(wxColour(140, 100, 35)));
+                dc.SetBrush(wxBrush(wxColour(200, 155, 60)));
+                dc.DrawPolygon(3, triangle);
+            }
+        }
     }
 
     bool IsPointInStickyRuler(wxPoint logicalPoint) const {
@@ -2325,6 +2618,16 @@ private:
         GetViewStart(&viewUnitsX, &viewUnitsY);
         scrollY = viewUnitsY * scrollPixelsY;
         return logicalPoint.y >= scrollY && logicalPoint.y < (scrollY + kPianoRollTopGutter);
+    }
+
+    bool HitTestTimelineEndHandle(wxPoint point) const {
+        int endX;
+
+        if (!IsPointInStickyRuler(point) || point.x < kPianoRollLeftGutter) {
+            return false;
+        }
+        endX = TickToX(GetDocumentEndTick());
+        return std::abs(point.x - endX) <= kResizeHandlePixels;
     }
 
     bool HitTestMidiLoopHandle(wxPoint point, MidiLoopDragMode *outMode = nullptr) const {
@@ -2623,6 +2926,28 @@ private:
             dc.SetPen(wxPen(wxColour(45, 98, 168), 1));
             dc.DrawRectangle(selectionRect);
         }
+        /* Draw timeline end marker */
+        {
+            uint32_t endTick;
+            int endX;
+
+            endTick = m_draggingTimelineEnd ? m_timelineEndDragTick : GetDocumentEndTick();
+            endX = TickToX(endTick);
+            if (endX >= visibleRect.GetLeft() - 2 && endX <= visibleRect.GetRight() + 2) {
+                /* Shaded region beyond end */
+                if (endX < visibleRect.GetRight()) {
+                    dc.SetPen(*wxTRANSPARENT_PEN);
+                    dc.SetBrush(wxBrush(wxColour(0, 0, 0, 28)));
+                    dc.DrawRectangle(endX + 1,
+                                     kPianoRollTopGutter,
+                                     visibleRect.GetRight() - endX,
+                                     std::max(1, clientSize.GetHeight() - kPianoRollTopGutter));
+                }
+                /* End marker line */
+                dc.SetPen(wxPen(wxColour(180, 130, 50), 2));
+                dc.DrawLine(endX, kPianoRollTopGutter, endX, clientSize.GetHeight());
+            }
+        }
         DrawStickyRuler(dc);
         DrawMidiLoopOverlay(dc, visibleRect, clientSize);
     }
@@ -2636,6 +2961,14 @@ private:
         SetFocus();
         logicalPoint = CalcUnscrolledPosition(event.GetPosition());
         if (IsPointInStickyRuler(logicalPoint) && logicalPoint.x >= kPianoRollLeftGutter) {
+            if (HitTestTimelineEndHandle(logicalPoint)) {
+                m_draggingTimelineEnd = true;
+                m_timelineEndDragTick = GetDocumentEndTick();
+                if (!HasCapture()) {
+                    CaptureMouse();
+                }
+                return;
+            }
             MidiLoopDragMode loopDragMode;
 
             loopDragMode = MidiLoopDragMode::None;
@@ -2777,6 +3110,17 @@ private:
             }
             m_draggingMidiLoop = false;
             m_midiLoopDragMode = MidiLoopDragMode::None;
+            Refresh();
+            return;
+        }
+
+        if (m_draggingTimelineEnd) {
+            if (HasCapture()) {
+                ReleaseMouse();
+            }
+            ApplyTimelineResize(m_timelineEndDragTick);
+            m_draggingTimelineEnd = false;
+            UpdateVirtualSize();
             Refresh();
             return;
         }
@@ -2959,6 +3303,24 @@ private:
                 }
                 m_midiLoopEndTick = snappedTick;
             }
+            Refresh();
+            return;
+        }
+        if (m_draggingTimelineEnd) {
+            uint32_t snappedTick;
+            uint32_t minTick;
+
+            if (!event.Dragging() || !event.LeftIsDown()) {
+                return;
+            }
+            logicalPoint = CalcUnscrolledPosition(event.GetPosition());
+            snappedTick = SnapTick(XToTick(logicalPoint.x));
+            minTick = GetTicksPerQuarter() * 4;
+            if (snappedTick < minTick) {
+                snappedTick = minTick;
+            }
+            m_timelineEndDragTick = snappedTick;
+            UpdateVirtualSize();
             Refresh();
             return;
         }
@@ -3316,6 +3678,19 @@ uint32_t PianoRollPanel_GetDocumentEndTick(PianoRollPanel *panel) {
         return 0;
     }
     return panel->GetVisibleDocumentEndTick();
+}
+
+void PianoRollPanel_SetUserEndTick(PianoRollPanel *panel, uint32_t tick) {
+    if (panel) {
+        panel->SetUserEndTick(tick);
+    }
+}
+
+uint32_t PianoRollPanel_GetUserEndTick(PianoRollPanel *panel) {
+    if (!panel) {
+        return 0;
+    }
+    return panel->GetUserEndTick();
 }
 
 void PianoRollPanel_ClearPlayhead(PianoRollPanel *panel) {
