@@ -3209,6 +3209,8 @@ BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *docum
                                                      uint32_t sampleIndex,
                                                      BAEPathName filePath,
                                                      BAESampleInfo *outSampleInfo);
+BAEResult BAERmfEditorDocument_PropagateReplacementToAsset(BAERmfEditorDocument *document,
+                                                           uint32_t sourceSampleIndex);
 BAEResult BAERmfEditorDocument_GetSampleWaveformData(BAERmfEditorDocument const *document,
                                                      uint32_t sampleIndex,
                                                      void const **outWaveData,

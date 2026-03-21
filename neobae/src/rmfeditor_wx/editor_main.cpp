@@ -3485,10 +3485,45 @@ private:
         BAEResult result;
         BAESampleInfo sampleInfo;
         wxScopedCharBuffer utf8Path;
+        uint32_t assetID;
+        uint32_t usageCount;
+        bool cloneFirst = false;
 
         if (!m_document) {
             return false;
         }
+
+        /* Check if this sample's asset is shared across multiple instruments. */
+        assetID = 0;
+        usageCount = 0;
+        if (BAERmfEditorDocument_GetSampleAssetIDForSample(m_document, sampleIndex, &assetID) == BAE_NO_ERROR &&
+            BAERmfEditorDocument_GetSampleAssetUsageCount(m_document, assetID, &usageCount) == BAE_NO_ERROR &&
+            usageCount > 1) {
+            wxMessageDialog choiceDialog(
+                this,
+                wxString::Format("This sample is shared by %u instrument(s).\n\n"
+                                 "\"Replace Sample\" will replace the audio for all instruments sharing this sample.\n"
+                                 "\"New Sample\" will create a new sample for this instrument only.",
+                                 static_cast<unsigned>(usageCount)),
+                "Shared Sample",
+                wxYES_NO | wxCANCEL | wxICON_QUESTION | wxYES_DEFAULT);
+            choiceDialog.SetYesNoCancelLabels("Replace Sample", "New Sample", "Cancel");
+            int choice = choiceDialog.ShowModal();
+            if (choice == wxID_CANCEL) {
+                return false;
+            }
+            cloneFirst = (choice == wxID_NO);
+        }
+
+        /* If the user chose to create a new sample for this instrument only,
+         * clone the asset first so it gets its own independent copy. */
+        if (cloneFirst) {
+            if (BAERmfEditorDocument_CloneSampleAssetForSample(m_document, sampleIndex, NULL) != BAE_NO_ERROR) {
+                wxMessageBox("Failed to create new sample asset.", "Embedded Instruments", wxOK | wxICON_ERROR, this);
+                return false;
+            }
+        }
+
         utf8Path = path.utf8_str();
         result = BAERmfEditorDocument_ReplaceSampleFromFile(m_document,
                                                             sampleIndex,
@@ -3505,6 +3540,17 @@ private:
             wxMessageBox("Failed to replace sample.", "Embedded Instruments", wxOK | wxICON_ERROR, this);
             return false;
         }
+
+        /* If replacing for all shared uses, propagate the new waveform data
+         * to every other sample sharing this asset. */
+        if (!cloneFirst && usageCount > 1) {
+            result = BAERmfEditorDocument_PropagateReplacementToAsset(m_document, sampleIndex);
+            if (result != BAE_NO_ERROR) {
+                wxMessageBox("Replaced this sample but failed to update all shared uses.",
+                             "Embedded Instruments", wxOK | wxICON_WARNING, this);
+            }
+        }
+
         return true;
     }
 

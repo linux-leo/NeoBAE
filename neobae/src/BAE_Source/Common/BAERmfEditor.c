@@ -11814,6 +11814,110 @@ BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *docum
     return BAE_NO_ERROR;
 }
 
+BAEResult BAERmfEditorDocument_PropagateReplacementToAsset(BAERmfEditorDocument *document,
+                                                           uint32_t sourceSampleIndex)
+{
+    BAERmfEditorSample *source;
+    uint32_t assetID;
+    uint32_t i;
+
+    if (!document || sourceSampleIndex >= document->sampleCount)
+    {
+        return BAE_PARAM_ERR;
+    }
+    source = &document->samples[sourceSampleIndex];
+    assetID = source->sampleAssetID;
+    if (assetID == 0)
+    {
+        return BAE_NO_ERROR;
+    }
+
+    for (i = 0; i < document->sampleCount; ++i)
+    {
+        BAERmfEditorSample *dest;
+        GM_Waveform *dupWaveform;
+        XPTR waveData;
+
+        if (i == sourceSampleIndex)
+        {
+            continue;
+        }
+        dest = &document->samples[i];
+        if (dest->sampleAssetID != assetID)
+        {
+            continue;
+        }
+
+        /* Duplicate the waveform data */
+        dupWaveform = GM_NewWaveform();
+        if (!dupWaveform)
+        {
+            return BAE_MEMORY_ERR;
+        }
+        *dupWaveform = *source->waveform;
+        /* Preserve the destination sample's own root key */
+        dupWaveform->baseMidiPitch = dest->rootKey;
+        if (source->waveform->theWaveform && source->waveform->waveSize > 0)
+        {
+            waveData = XNewPtr(source->waveform->waveSize);
+            if (!waveData)
+            {
+                XDisposePtr((XPTR)dupWaveform);
+                return BAE_MEMORY_ERR;
+            }
+            XBlockMove(source->waveform->theWaveform, waveData, source->waveform->waveSize);
+            dupWaveform->theWaveform = (XSWORD *)waveData;
+        }
+        else
+        {
+            dupWaveform->theWaveform = NULL;
+        }
+
+        /* Free old waveform and assign new */
+        if (dest->waveform)
+        {
+            GM_FreeWaveform(dest->waveform);
+        }
+        dest->waveform = dupWaveform;
+
+        /* Update source path */
+        PV_FreeString(&dest->sourcePath);
+        dest->sourcePath = PV_DuplicateString(source->sourcePath);
+
+        /* Update audio properties (preserve per-split root/key/volume) */
+        dest->sampleInfo.bitSize = source->sampleInfo.bitSize;
+        dest->sampleInfo.channels = source->sampleInfo.channels;
+        dest->sampleInfo.waveSize = source->sampleInfo.waveSize;
+        dest->sampleInfo.waveFrames = source->sampleInfo.waveFrames;
+        dest->sampleInfo.startLoop = source->sampleInfo.startLoop;
+        dest->sampleInfo.endLoop = source->sampleInfo.endLoop;
+        dest->sampleInfo.sampledRate = source->sampleInfo.sampledRate;
+
+        /* Clear old SND data and copy compression settings */
+        if (dest->originalSndData)
+        {
+            XDisposePtr(dest->originalSndData);
+            dest->originalSndData = NULL;
+            dest->originalSndSize = 0;
+        }
+        if (source->originalSndData && source->originalSndSize > 0)
+        {
+            dest->originalSndData = XNewPtr(source->originalSndSize);
+            if (dest->originalSndData)
+            {
+                XBlockMove(source->originalSndData, dest->originalSndData, source->originalSndSize);
+                dest->originalSndSize = source->originalSndSize;
+            }
+        }
+        dest->targetCompressionType = source->targetCompressionType;
+        dest->targetOpusMode = source->targetOpusMode;
+        dest->sourceCompressionType = source->sourceCompressionType;
+        dest->sourceCompressionSubType = source->sourceCompressionSubType;
+    }
+    PV_MarkDocumentDirty(document);
+    return BAE_NO_ERROR;
+}
+
 BAEResult BAERmfEditorDocument_GetSampleWaveformData(BAERmfEditorDocument const *document,
                                                      uint32_t sampleIndex,
                                                      void const **outWaveData,
