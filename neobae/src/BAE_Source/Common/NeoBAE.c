@@ -8688,11 +8688,21 @@ static void PV_PatchInstrumentEnvelopes(GM_Instrument *theI,
 
     /* LFOs */
     theI->LFORecordCount = 0;
+#if DEBUG
+    BAE_PRINTF("PV_PatchInstrumentEnvelopes: info->lfoCount=%u\n", (unsigned)info->lfoCount);
+#endif
     for (i = 0; i < (int32_t)info->lfoCount && i < MAX_LFOS; i++)
     {
         GM_LFO *pLFO = &theI->LFORecords[i];
         pLFO->where_to_feed = PV_TranslateFromFileToMemoryID(
             (XDWORD)info->lfos[i].destination);
+#if DEBUG
+        BAE_PRINTF("  lfo[%d] dest=0x%x->%d period=%d shape=0x%x dc=%d level=%d adsr.stages=%u\n",
+                   (int)i, (unsigned)info->lfos[i].destination, (int)pLFO->where_to_feed,
+                   (int)info->lfos[i].period, (unsigned)info->lfos[i].waveShape,
+                   (int)info->lfos[i].DC_feed, (int)info->lfos[i].level,
+                   (unsigned)info->lfos[i].adsr.stageCount);
+#endif
         pLFO->period = info->lfos[i].period;
         if (pLFO->period != 0 && pLFO->period <= 512)
             pLFO->period = 0; // disable invalid LFO period

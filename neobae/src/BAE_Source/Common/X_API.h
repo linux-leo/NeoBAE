@@ -991,13 +991,20 @@ uint32_t       XSwapShortInLong(uint32_t value);
 
 
 // Type 0 - Delta encoded LZSS
+// Type 0x80+ - Delta encoded LZMA (ZMF containers)
 
 typedef enum
 {   X_RAW           = 0xFF,
     X_MONO_8        = 0,
     X_STEREO_8      = 1,
     X_MONO_16       = 2,
-    X_STEREO_16     = 3
+    X_STEREO_16     = 3,
+    // LZMA variants (used in ZMF containers instead of LZSS)
+    X_LZMA_RAW          = 0xFE,
+    X_LZMA_MONO_8       = 0x80,
+    X_LZMA_STEREO_8     = 0x81,
+    X_LZMA_MONO_16      = 0x82,
+    X_LZMA_STEREO_16    = 0x83
 } XCOMPRESSION_TYPE;
 
 // First byte is a compression type.
@@ -1014,6 +1021,21 @@ void    LZSSUncompressDeltaMono16(unsigned char* src, uint32_t srcBytes,
                                     int16_t* dst, uint32_t dstBytes);
 void    LZSSUncompressDeltaStereo16(unsigned char* src, uint32_t srcBytes,
                                     int16_t* dst, uint32_t dstBytes);
+
+// LZMA decompression (used in ZMF containers)
+#if USE_LZMA_COMPRESSION == TRUE
+void    LZMAUncompress(unsigned char* src, uint32_t srcBytes,
+                        unsigned char* dst, uint32_t dstBytes);
+void    LZMAUncompressDeltaMono8(unsigned char* src, uint32_t srcBytes,
+                                    unsigned char* dst, uint32_t dstBytes);
+void    LZMAUncompressDeltaStereo8(unsigned char* src, uint32_t srcBytes,
+                                    unsigned char* dst, uint32_t dstBytes);
+void    LZMAUncompressDeltaMono16(unsigned char* src, uint32_t srcBytes,
+                                    int16_t* dst, uint32_t dstBytes);
+void    LZMAUncompressDeltaStereo16(unsigned char* src, uint32_t srcBytes,
+                                    int16_t* dst, uint32_t dstBytes);
+uint32_t LZMACompressBound(uint32_t srcBytes);
+#endif
 
 // return TRUE to stop
 typedef XBOOL   (*XCompressStatusProc)(void* data,
@@ -1045,6 +1067,19 @@ int32_t    LZSSCompressDeltaMono16(int16_t* src, uint32_t srcBytes, XBYTE* dst,
                                 XCompressStatusProc proc, void* procData);
 int32_t    LZSSCompressDeltaStereo16(int16_t* src, uint32_t srcBytes, XBYTE* dst,
                                     XCompressStatusProc proc, void* procData);
+
+#if USE_LZMA_COMPRESSION == TRUE
+int32_t    LZMACompress(XBYTE* src, uint32_t srcBytes, XBYTE* dst,
+                        XCompressStatusProc proc, void* procData);
+int32_t    LZMACompressDeltaMono8(XBYTE* src, uint32_t srcBytes, XBYTE* dst,
+                                XCompressStatusProc proc, void* procData);
+int32_t    LZMACompressDeltaStereo8(XBYTE* src, uint32_t srcBytes, XBYTE* dst,
+                                    XCompressStatusProc proc, void* procData);
+int32_t    LZMACompressDeltaMono16(int16_t* src, uint32_t srcBytes, XBYTE* dst,
+                                XCompressStatusProc proc, void* procData);
+int32_t    LZMACompressDeltaStereo16(int16_t* src, uint32_t srcBytes, XBYTE* dst,
+                                    XCompressStatusProc proc, void* procData);
+#endif
 #endif
 
 void    XSwapShorts(int16_t* int16_tArray, int32_t count);

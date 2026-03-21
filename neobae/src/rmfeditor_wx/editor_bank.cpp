@@ -321,6 +321,13 @@ static void ApplyDirtyParams(BankEditorPanel *bp)
     if (bp->dirtyParamsCallback) {
         bp->dirtyParamsCallback(&bp->dirtyExtInfo);
     }
+
+    /* Tear down the preview song so the next note forces a full
+     * instrument reload + patch cycle (matching instrument dialog
+     * behaviour where the entire RMF/ZMF is regenerated). */
+    if (bp->invalidateCallback) {
+        bp->invalidateCallback();
+    }
 }
 
 /* Stop all currently-playing preview notes (keyboard + mouse).

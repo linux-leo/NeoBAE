@@ -10,6 +10,7 @@
 #include <iostream>
 
 #include <zlib.h>
+#include <lzma.h>
 
 #include <wx/dcbuffer.h>
 #include <wx/button.h>
@@ -139,7 +140,8 @@ enum {
 };
 
 static constexpr uint8_t  kNbsMagic[4] = {'N', 'B', 'S', '\0'};
-static constexpr uint16_t kNbsVersion = 1;
+static constexpr uint16_t kNbsVersion = 2;       /* v2: LZMA compression (v1 used zlib) */
+static constexpr uint16_t kNbsVersionZlib = 1;   /* for reading old sessions */
 static constexpr uint16_t kNbsFieldRmfBlob      = 0x0001;
 static constexpr uint16_t kNbsFieldSettings     = 0x0002;
 static constexpr uint16_t kNbsFieldOriginalPath = 0x0003;
@@ -5698,8 +5700,8 @@ private:
         std::vector<unsigned char> rmfBlob;
         std::vector<unsigned char> payload;
         NbsSessionSettings settings;
-        uLongf compBound;
-        uLongf compLen;
+        size_t compBound;
+        size_t compPos;
         std::vector<unsigned char> compressed;
         std::vector<unsigned char> header;
         wxFile file;
@@ -5757,15 +5759,17 @@ private:
             }
         }
 
-        /* Compress */
-        compBound = compressBound(static_cast<uLong>(payload.size()));
-        compressed.resize(static_cast<size_t>(compBound));
-        compLen = compBound;
-        if (compress(compressed.data(), &compLen, payload.data(), static_cast<uLong>(payload.size())) != Z_OK) {
+        /* Compress with LZMA */
+        compBound = lzma_stream_buffer_bound(payload.size());
+        compressed.resize(compBound);
+        compPos = 0;
+        if (lzma_easy_buffer_encode(LZMA_PRESET_DEFAULT, LZMA_CHECK_CRC64, NULL,
+                                    payload.data(), payload.size(),
+                                    compressed.data(), &compPos, compBound) != LZMA_OK) {
             wxMessageBox("Compression failed.", "Save Session", wxOK | wxICON_ERROR, this);
             return false;
         }
-        compressed.resize(static_cast<size_t>(compLen));
+        compressed.resize(compPos);
 
         /* Write file: 10-byte header + compressed data */
         if (!file.Open(path, wxFile::write)) {
@@ -5843,12 +5847,12 @@ private:
         std::vector<unsigned char> fileData;
         uint32_t uncompressedSize;
         std::vector<unsigned char> payload;
-        uLongf destLen;
         std::vector<unsigned char> rmfBlob;
         NbsSessionSettings settings;
         bool haveSettings;
         size_t offset;
         uint32_t userEndTick;
+        uint16_t fileVersion;
 
         memset(&settings, 0, sizeof(settings));
         settings.selectedTrack = -1;
@@ -5878,22 +5882,32 @@ private:
             wxMessageBox("Not a valid NeoBAE session file.", "Open Session", wxOK | wxICON_ERROR, this);
             return false;
         }
-        {
-            uint16_t fileVersion = ReadLE16(fileData.data() + 4);
-            if (fileVersion > kNbsVersion) {
-                wxMessageBox("Session file version is newer than this editor supports.", "Open Session", wxOK | wxICON_ERROR, this);
-                return false;
-            }
+        fileVersion = ReadLE16(fileData.data() + 4);
+        if (fileVersion > kNbsVersion) {
+            wxMessageBox("Session file version is newer than this editor supports.", "Open Session", wxOK | wxICON_ERROR, this);
+            return false;
         }
         uncompressedSize = ReadLE32(fileData.data() + 6);
 
-        /* Decompress */
+        /* Decompress (v2 = LZMA, v1 = zlib) */
         payload.resize(uncompressedSize);
-        destLen = static_cast<uLongf>(uncompressedSize);
-        if (uncompress(payload.data(), &destLen, fileData.data() + 10,
-                       static_cast<uLong>(fileData.size() - 10)) != Z_OK) {
-            wxMessageBox("Failed to decompress session data.", "Open Session", wxOK | wxICON_ERROR, this);
-            return false;
+        if (fileVersion >= 2) {
+            uint64_t memlimit = UINT64_MAX;
+            size_t inPos = 0;
+            size_t outPos = 0;
+            if (lzma_stream_buffer_decode(&memlimit, 0, NULL,
+                                          fileData.data() + 10, &inPos, fileData.size() - 10,
+                                          payload.data(), &outPos, uncompressedSize) != LZMA_OK) {
+                wxMessageBox("Failed to decompress session data (LZMA).", "Open Session", wxOK | wxICON_ERROR, this);
+                return false;
+            }
+        } else {
+            uLongf destLen = static_cast<uLongf>(uncompressedSize);
+            if (uncompress(payload.data(), &destLen, fileData.data() + 10,
+                           static_cast<uLong>(fileData.size() - 10)) != Z_OK) {
+                wxMessageBox("Failed to decompress session data (zlib).", "Open Session", wxOK | wxICON_ERROR, this);
+                return false;
+            }
         }
 
         /* Parse TLV fields */

@@ -13,15 +13,15 @@
 - ~~Fix pitch issues with bank compressor (MP3 low pitch, Opus high pitch, Opus RT only some detuned)~~
 
 # 0.09a
-- bankrecomp: wtv.hsb recomp prog 100 weirdness
-- LFO issue
+- ~~LZMA support for ZMF/NBS/C_SND~~
+- ~~LFO issue (instrument dialog)~~
 - ~~Settings menu not working on windows? Why?~~
 - ~~Dark mode!~~
 
 # Future
-- Grpahics for pitch envelope
+- bankrecomp: wtv.hsb recomp prog 100 weirdness
+- Graphics for pitch envelope
 - Interpolation configuration (none, linear, cubic, etc, current is just on/off)
-- LZMA support for ZMF/NBS/C_SND
 - Neo Reverb for preview player
   - Custom .neoreverb support
   - means we need the reverb edit dialog from zefidi
@@ -35,6 +35,7 @@
   - lots of bugs with sample editor
   - needs context menus still
   - musicial keyboard vs form fields
+  - LFO broken
 
 - Allow for automation like Volume to be able have a slide on it
   - for example, to easily make a fadein or fadeout

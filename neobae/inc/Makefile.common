@@ -15,6 +15,7 @@ BAE_FLAGS	  :=
 BAE_LD_FLAGS  :=
 BAE_LIBS      :=
 .DEFAULT_GOAL := all
+LZMA_VERS := 5.8.2
 
 # Default build options (override with NOAUTO=1)
 ifneq ($(WASM),1)
@@ -56,6 +57,7 @@ ifeq ($(ZMF_SUPPORT),1)
 	VORBIS_ENC := 1
 	OPUS_DEC := 1
 	OPUS_ENC := 1
+	LZMA_SUPPORT := 1
 endif
 
 # Disable SDL2 if using SDL3
@@ -430,6 +432,28 @@ ifeq ($(OGG_SUPPORT),1)
 		BAE_LIBS 	+= -logg.dll
 	else
 		BAE_LIBS 	+= -logg
+	endif
+endif
+
+ifeq ($(LZMA_SUPPORT),1)
+	BAE_FLAGS += -DUSE_LZMA_COMPRESSION=1
+	SRC += src/BAE_Source/Common/X_LZMA.c
+	ifeq ($(XPHACK),1)
+		BAE_LIBS += -llzma.dll
+	else
+		ifeq ($(WINDOWS),1)
+			ifeq ($(BITS),32)
+				INC_PATH += -I../deps/win/LZMA-$(LZMA_VERS)/i686-w64-mingw32/include
+				BAE_LD_FLAGS := -L../deps/win/LZMA-$(LZMA_VERS)/i686-w64-mingw32/lib/
+				BAE_LIBS += ../deps/win/LZMA-$(LZMA_VERS)/i686-w64-mingw32/lib/liblzma-5.dll.a -Wl,-rpath,'$$ORIGIN'
+			else
+				INC_PATH += -I../deps/win/LZMA-$(LZMA_VERS)/x86_64-w64-mingw32/include
+				BAE_LD_FLAGS := -L../deps/win/LZMA-$(LZMA_VERS)/x86_64-w64-mingw32/lib/
+				BAE_LIBS += ../deps/win/LZMA-$(LZMA_VERS)/x86_64-w64-mingw32/lib/liblzma-5.dll.a -Wl,-rpath,'$$ORIGIN'
+			endif	
+		else
+			BAE_LIBS += -llzma
+		endif
 	endif
 endif
 

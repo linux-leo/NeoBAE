@@ -6428,9 +6428,11 @@ static BAEResult PV_WriteOriginalResources(BAERmfEditorDocument const *document,
 static BAEResult PV_EncodeMidiForResourceType(XResourceType resourceType,
                                               ByteBuffer const *plainMidi,
                                               XPTR *outData,
-                                              int32_t *outSize)
+                                              int32_t *outSize,
+                                              XBOOL isZmf)
 {
     XPTR encoded;
+    XCOMPRESSION_TYPE compType;
 
     if (!plainMidi || !outData || !outSize)
     {
@@ -6457,10 +6459,16 @@ static BAEResult PV_EncodeMidiForResourceType(XResourceType resourceType,
         int32_t compressedSize;
 
         encoded = NULL;
+#if USE_LZMA_COMPRESSION == TRUE
+        compType = isZmf ? X_LZMA_RAW : X_RAW;
+#else
+        (void)isZmf;
+        compType = X_RAW;
+#endif
         compressedSize = XCompressPtr(&encoded,
                                       (XPTR)plainMidi->data,
                                       plainMidi->size,
-                                      X_RAW,
+                                      compType,
                                       NULL,
                                       NULL);
         if (compressedSize <= 0 || !encoded)
@@ -6498,12 +6506,13 @@ static BAEResult PV_EncodeMidiForResourceType(XResourceType resourceType,
 }
 
 /* Like PV_EncodeMidiForResourceType(ID_ECMI, ...) but falls back to EMID
- * (encrypted, uncompressed) when LZSS compression fails on small or
+ * (encrypted, uncompressed) when compression fails on small or
  * incompressible MIDI.  Returns the resource type actually used. */
 static BAEResult PV_EncodeMidiBestEffort(ByteBuffer const *plainMidi,
                                          XPTR *outData,
                                          int32_t *outSize,
-                                         XResourceType *outUsedType)
+                                         XResourceType *outUsedType,
+                                         XBOOL isZmf)
 {
     BAEResult result;
 
@@ -6511,14 +6520,14 @@ static BAEResult PV_EncodeMidiBestEffort(ByteBuffer const *plainMidi,
     {
         return BAE_PARAM_ERR;
     }
-    result = PV_EncodeMidiForResourceType(ID_ECMI, plainMidi, outData, outSize);
+    result = PV_EncodeMidiForResourceType(ID_ECMI, plainMidi, outData, outSize, isZmf);
     if (result == BAE_NO_ERROR)
     {
         *outUsedType = ID_ECMI;
         return BAE_NO_ERROR;
     }
-    /* ECMI failed (LZSS couldn't compress): fall back to EMID */
-    result = PV_EncodeMidiForResourceType(ID_EMID, plainMidi, outData, outSize);
+    /* ECMI failed (compression couldn't compress): fall back to EMID */
+    result = PV_EncodeMidiForResourceType(ID_EMID, plainMidi, outData, outSize, isZmf);
     if (result == BAE_NO_ERROR)
     {
         BAE_STDERR("[RMF Save] ECMI compression failed; using EMID (encrypted uncompressed) fallback\n");
@@ -6542,7 +6551,8 @@ static BAEResult PV_EncodeMidiForStorageType(BAERmfEditorMidiStorageType storage
                                              ByteBuffer const *plainMidi,
                                              XPTR *outData,
                                              int32_t *outSize,
-                                             XResourceType *outUsedType)
+                                             XResourceType *outUsedType,
+                                             XBOOL isZmf)
 {
     storageType = PV_NormalizeMidiStorageType(storageType);
     if (!outUsedType)
@@ -6556,13 +6566,13 @@ static BAEResult PV_EncodeMidiForStorageType(BAERmfEditorMidiStorageType storage
         {
             BAEResult result;
 
-            result = PV_EncodeMidiForResourceType(ID_CMID, plainMidi, outData, outSize);
+            result = PV_EncodeMidiForResourceType(ID_CMID, plainMidi, outData, outSize, isZmf);
             if (result == BAE_NO_ERROR)
             {
                 *outUsedType = ID_CMID;
                 return BAE_NO_ERROR;
             }
-            result = PV_EncodeMidiForResourceType(ID_MIDI, plainMidi, outData, outSize);
+            result = PV_EncodeMidiForResourceType(ID_MIDI, plainMidi, outData, outSize, isZmf);
             if (result == BAE_NO_ERROR)
             {
                 BAE_STDERR("[RMF Save] CMID compression failed; using MIDI fallback\n");
@@ -6573,13 +6583,13 @@ static BAEResult PV_EncodeMidiForStorageType(BAERmfEditorMidiStorageType storage
         }
 
         case BAE_EDITOR_MIDI_STORAGE_ECMI:
-            return PV_EncodeMidiBestEffort(plainMidi, outData, outSize, outUsedType);
+            return PV_EncodeMidiBestEffort(plainMidi, outData, outSize, outUsedType, isZmf);
 
         case BAE_EDITOR_MIDI_STORAGE_EMID:
         {
             BAEResult result;
 
-            result = PV_EncodeMidiForResourceType(ID_EMID, plainMidi, outData, outSize);
+            result = PV_EncodeMidiForResourceType(ID_EMID, plainMidi, outData, outSize, isZmf);
             if (result == BAE_NO_ERROR)
             {
                 *outUsedType = ID_EMID;
@@ -6591,7 +6601,7 @@ static BAEResult PV_EncodeMidiForStorageType(BAERmfEditorMidiStorageType storage
         {
             BAEResult result;
 
-            result = PV_EncodeMidiForResourceType(ID_MIDI, plainMidi, outData, outSize);
+            result = PV_EncodeMidiForResourceType(ID_MIDI, plainMidi, outData, outSize, isZmf);
             if (result == BAE_NO_ERROR)
             {
                 *outUsedType = ID_MIDI;
@@ -7516,7 +7526,7 @@ static BAEResult PV_BuildMidiFile(BAERmfEditorDocument *document, ByteBuffer *ou
     return BAE_NO_ERROR;
 }
 
-static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fileRef)
+static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fileRef, XBOOL isZmf)
 {
     uint32_t index;
     XShortResourceID *sampleSndIDs;
@@ -8416,12 +8426,19 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 {
                     XPTR compressedSnd;
                     int32_t compressedSize;
+                    XCOMPRESSION_TYPE csndCompType;
 
+#if USE_LZMA_COMPRESSION == TRUE
+                    csndCompType = isZmf ? X_LZMA_RAW : X_RAW;
+#else
+                    (void)isZmf;
+                    csndCompType = X_RAW;
+#endif
                     compressedSnd = NULL;
                     compressedSize = XCompressPtr(&compressedSnd,
                                                   sndResource,
                                                   (uint32_t)XGetPtrSize(sndResource),
-                                                  X_RAW,
+                                                  csndCompType,
                                                   NULL,
                                                   NULL);
                     if (compressedSize <= 0 || !compressedSnd)
@@ -14106,11 +14123,14 @@ static BAEResult PV_WriteRmfDocumentToResourceFile(BAERmfEditorDocument *documen
     ByteBuffer midiData;
     char midiName[256];
     BAEResult result;
+    XBOOL isZmf;
 
     if (!document || !fileRef)
     {
         return BAE_PARAM_ERR;
     }
+
+    isZmf = (resourceID == XFILERESOURCE_ZMF_ID) ? TRUE : FALSE;
 
     result = BAERmfEditorDocument_Validate(document);
     BAE_STDERR("[RMF Save] Validate result=%d, trackCount=%u\n", (int)result, document->trackCount);
@@ -14194,7 +14214,8 @@ static BAEResult PV_WriteRmfDocumentToResourceFile(BAERmfEditorDocument *documen
                                                      &midiData,
                                                      &encodedMidi,
                                                      &encodedMidiSize,
-                                                     &usedMidiType);
+                                                     &usedMidiType,
+                                                     isZmf);
                 if (result != BAE_NO_ERROR)
                 {
                     PV_ByteBufferDispose(&midiData);
@@ -14224,7 +14245,7 @@ static BAEResult PV_WriteRmfDocumentToResourceFile(BAERmfEditorDocument *documen
             PV_ByteBufferDispose(&midiData);
             return result;
         }
-        result = PV_AddSampleResources(document, fileRef);
+        result = PV_AddSampleResources(document, fileRef, isZmf);
         BAE_STDERR("[RMF Save] loadedFromRmf AddSampleResources result=%d, sampleCount=%u\n",
                    (int)result, document->sampleCount);
         if (result != BAE_NO_ERROR)
@@ -14251,7 +14272,8 @@ static BAEResult PV_WriteRmfDocumentToResourceFile(BAERmfEditorDocument *documen
                                              &midiData,
                                              &encodedMidi,
                                              &encodedMidiSize,
-                                             &usedMidiType);
+                                             &usedMidiType,
+                                             isZmf);
         if (result != BAE_NO_ERROR)
         {
             BAE_STDERR("[RMF Save] MIDI encode failed result=%d\n", (int)result);
@@ -14274,7 +14296,7 @@ static BAEResult PV_WriteRmfDocumentToResourceFile(BAERmfEditorDocument *documen
         }
         XDisposePtr(encodedMidi);
     }
-    result = PV_AddSampleResources(document, fileRef);
+    result = PV_AddSampleResources(document, fileRef, isZmf);
     BAE_STDERR("[RMF Save] AddSampleResources result=%d, sampleCount=%u\n", (int)result, document->sampleCount);
     if (result == BAE_NO_ERROR)
     {

@@ -850,6 +850,7 @@ typedef enum SndCompressionType
                                                         // SndCompressionSubType is not used.
 // Compression Types
     C_LZSS              = FOUR_CHAR('L','Z','S','S'),   // 'LZSS'   csnd compressed snd resource. not inside of snd resource
+    C_LZMA              = FOUR_CHAR('L','Z','M','A'),   // 'LZMA'   LZMA compressed snd resource (ZMF containers)
 
     // these are used in the snd formatted resource
     C_NONE              = FOUR_CHAR('n','o','n','e'),   // 'none'

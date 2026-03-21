@@ -123,6 +123,12 @@ $(TARGET_LIB).dll: ${OBJ}
 		cp ../deps/win/SDL3_ttf/x86_64-w64-mingw32/bin/SDL3_ttf.dll $(TARGET_OUT) 2>/dev/null || true; \
 	fi
 
+	@if [ "$(BITS)" = "32" ]; then \
+		cp ../deps/win/LZMA-$(LZMA_VERS)/i686-w64-mingw32/bin/liblzma-5.dll $(TARGET_OUT) 2>/dev/null || true; \
+	else \
+		cp ../deps/win/LZMA-$(LZMA_VERS)/x86_64-w64-mingw32/bin/liblzma-5.dll $(TARGET_OUT) 2>/dev/null || true; \
+	fi
+
 $(TARGET_BIN): ${OBJ_BIN} $(TARGET_LIB).dll
 	@mkdir -p $(TARGET_OUT)Banks
 	$(SHELL) src/banks/copy.sh $(TARGET_OUT)Banks

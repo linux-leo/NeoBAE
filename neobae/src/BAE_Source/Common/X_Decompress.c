@@ -114,6 +114,9 @@ void XGetShortCompressionName(int32_t compressionType, void *cName)
         case C_LZSS:
             XStrCpy((char *)cName, "lossless");
             break;
+        case C_LZMA:
+            XStrCpy((char *)cName, "lossless (LZMA)");
+            break;
         case C_IMA4:
         case C_IMA4_WAV:
             XStrCpy((char *)cName, "IMA 4:1");
@@ -199,6 +202,9 @@ void XGetCompressionName(int32_t compressionType, void *cName)
             break;
         case C_LZSS:
             XStrCpy((char *)cName, "Beatnik lossless");
+            break;
+        case C_LZMA:
+            XStrCpy((char *)cName, "LZMA lossless");
             break;
         case C_IMA4:
 //          XStrCpy((char *)cName, "CCITT G.721 ADPCM compression (IMA 4 to 1)");

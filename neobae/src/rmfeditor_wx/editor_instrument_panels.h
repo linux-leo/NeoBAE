@@ -1177,6 +1177,16 @@ public:
             extInfo.lfos[i] = m_extInfo.lfos[i];
         }
 
+#if _DEBUG
+        fprintf(stderr, "[SaveToExtInfo] lfoCount=%u lfoSel=%d\n", extInfo.lfoCount, lfoSel);
+        for (uint32_t dbg = 0; dbg < extInfo.lfoCount && dbg < BAE_EDITOR_MAX_LFOS; dbg++) {
+            fprintf(stderr, "  lfo[%u] dest=0x%x period=%d shape=0x%x dc=%d level=%d adsr.stages=%u\n",
+                    dbg, extInfo.lfos[dbg].destination, extInfo.lfos[dbg].period,
+                    extInfo.lfos[dbg].waveShape, extInfo.lfos[dbg].DC_feed,
+                    extInfo.lfos[dbg].level, extInfo.lfos[dbg].adsr.stageCount);
+        }
+#endif
+
         extInfo.hasExtendedData = TRUE;
     }
 
@@ -1336,12 +1346,15 @@ private:
     }
 
     void LoadLFOIntoUI(int idx) {
+        bool wasLoading = m_loading;
+        m_loading = true;
         if (idx < 0 || idx >= (int)m_extInfo.lfoCount) {
             m_lfoDest->SetSelection(0);
             m_lfoShape->SetSelection(0);
             m_lfoPeriod->SetValue(0);
             m_lfoDCFeed->SetValue(0);
             m_lfoLevel->SetValue(0);
+            m_loading = wasLoading;
             RefreshLFOGraph();
             RefreshLFOEnvelopeGraph();
             return;
@@ -1352,6 +1365,7 @@ private:
         m_lfoPeriod->SetValue(lfo.period);
         m_lfoDCFeed->SetValue(lfo.DC_feed);
         m_lfoLevel->SetValue(lfo.level);
+        m_loading = wasLoading;
         RefreshLFOGraph();
         RefreshLFOEnvelopeGraph();
     }
@@ -2143,7 +2157,7 @@ private:
             row->Add(new wxStaticText(this, wxID_ANY, "Storage"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
             m_sndStorageChoice = new wxChoice(this, wxID_ANY);
             m_sndStorageChoice->Append("ESND (encrypted)");
-            m_sndStorageChoice->Append("CSND (LZSS compressed)");
+            m_sndStorageChoice->Append("CSND (compressed)");
             m_sndStorageChoice->Append("SND (plain)");
             m_sndStorageChoice->SetSelection(0);
             row->Add(m_sndStorageChoice, 0);

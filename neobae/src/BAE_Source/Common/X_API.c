@@ -4013,6 +4013,15 @@ void XFileUseThisResourceFile(XFILE fileRef)
 // First byte is a type.
 // Next three bytes are a length.
 // Type 0 is Delta LZSS compression
+// Type 0x80+ is Delta LZMA compression (ZMF containers)
+#if USE_LZMA_COMPRESSION == TRUE
+static XBOOL PV_IsLZMACompressionType(XCOMPRESSION_TYPE t)
+{
+    return (t == X_LZMA_RAW ||
+            (t >= X_LZMA_MONO_8 && t <= X_LZMA_STEREO_16)) ? TRUE : FALSE;
+}
+#endif
+
 void * XDecompressPtr(void* pData, uint32_t dataSize, XBOOL ignoreType)
 {
     uint32_t       theTotalSize;
@@ -4023,8 +4032,21 @@ void * XDecompressPtr(void* pData, uint32_t dataSize, XBOOL ignoreType)
     if (pData && dataSize)
     {
         theTotalSize = XGetLong(pData);
-        theType = ignoreType ? X_RAW
-                             : (XCOMPRESSION_TYPE)(theTotalSize >> 24L);
+        if (ignoreType)
+        {
+#if USE_LZMA_COMPRESSION == TRUE
+            /* When ignoring the delta sub-type (MIDI data), we still need
+             * to detect whether the data was compressed with LZMA vs LZSS. */
+            XCOMPRESSION_TYPE rawType = (XCOMPRESSION_TYPE)((uint8_t)(theTotalSize >> 24L));
+            theType = PV_IsLZMACompressionType(rawType) ? X_LZMA_RAW : X_RAW;
+#else
+            theType = X_RAW;
+#endif
+        }
+        else
+        {
+            theType = (XCOMPRESSION_TYPE)(theTotalSize >> 24L);
+        }
         theTotalSize &= 0x00FFFFFFL;
         theNewData = XNewPtr(theTotalSize);
         if (theNewData)
@@ -4061,6 +4083,38 @@ void * XDecompressPtr(void* pData, uint32_t dataSize, XBOOL ignoreType)
                                                 (int16_t*)theNewData, 
                                                 theTotalSize);
                     break;
+#if USE_LZMA_COMPRESSION == TRUE
+                case X_LZMA_RAW:
+                    LZMAUncompress((unsigned char*)pData + sizeof(int32_t),
+                                    dataSize - sizeof(int32_t),
+                                    (unsigned char*)theNewData,
+                                    theTotalSize);
+                    break;
+                case X_LZMA_MONO_8:
+                    LZMAUncompressDeltaMono8((unsigned char*)pData + sizeof(int32_t),
+                                                dataSize - sizeof(int32_t),
+                                                (unsigned char*)theNewData,
+                                                theTotalSize);
+                    break;
+                case X_LZMA_STEREO_8:
+                    LZMAUncompressDeltaStereo8((unsigned char*)pData + sizeof(int32_t),
+                                                dataSize - sizeof(int32_t),
+                                                (unsigned char*)theNewData,
+                                                theTotalSize);
+                    break;
+                case X_LZMA_MONO_16:
+                    LZMAUncompressDeltaMono16((unsigned char*)pData + sizeof(int32_t),
+                                                dataSize - sizeof(int32_t),
+                                                (int16_t*)theNewData,
+                                                theTotalSize);
+                    break;
+                case X_LZMA_STEREO_16:
+                    LZMAUncompressDeltaStereo16((unsigned char*)pData + sizeof(int32_t),
+                                                dataSize - sizeof(int32_t),
+                                                (int16_t*)theNewData,
+                                                theTotalSize);
+                    break;
+#endif
                 default:
                     XDisposePtr(theNewData);
                     theNewData = NULL;
@@ -4090,6 +4144,7 @@ int32_t XCompressPtr(XPTR* compressedDataTarget,
 XPTR            compressedData;
 int32_t            compressedSize = 0;
 XBYTE           *realData;
+uint32_t        allocSize;
 
     if (!compressedDataTarget)
     {
@@ -4105,7 +4160,18 @@ XBYTE           *realData;
         return -1;  // too big
     }
 
-    compressedData = XNewPtr(dataSize);
+#if USE_LZMA_COMPRESSION == TRUE
+    if (PV_IsLZMACompressionType(type))
+    {
+        allocSize = LZMACompressBound(dataSize);
+    }
+    else
+#endif
+    {
+        allocSize = dataSize;
+    }
+
+    compressedData = XNewPtr(allocSize);
     if (!compressedData)
     {
         return -1;  // out of memory
@@ -4138,6 +4204,33 @@ XBYTE           *realData;
                                                     (XBYTE*)compressedData,
                                                     proc, procData);
         break;
+#if USE_LZMA_COMPRESSION == TRUE
+    case X_LZMA_RAW:
+        compressedSize = LZMACompress((XBYTE*)pData, dataSize,
+                                        (XBYTE*)compressedData,
+                                        proc, procData);
+        break;
+    case X_LZMA_MONO_8:
+        compressedSize = LZMACompressDeltaMono8((XBYTE*)pData, dataSize,
+                                                (XBYTE*)compressedData,
+                                                proc, procData);
+        break;
+    case X_LZMA_STEREO_8:
+        compressedSize = LZMACompressDeltaStereo8((XBYTE*)pData, dataSize,
+                                                    (XBYTE*)compressedData,
+                                                    proc, procData);
+        break;
+    case X_LZMA_MONO_16:
+        compressedSize = LZMACompressDeltaMono16((int16_t*)pData, dataSize,
+                                                    (XBYTE*)compressedData,
+                                                    proc, procData);
+        break;
+    case X_LZMA_STEREO_16:
+        compressedSize = LZMACompressDeltaStereo16((int16_t*)pData, dataSize,
+                                                    (XBYTE*)compressedData,
+                                                    proc, procData);
+        break;
+#endif
     }
     
     if (compressedSize > 0)
