@@ -737,6 +737,11 @@ public:
         }
     }
 
+    /* Scroll so that 'note' appears in the centre of the visible keyboard. */
+    void CenterOnNote(int note) {
+        SetBaseNote(note - (m_octaves * 12 / 2));
+    }
+
     void SetExternalPressedNote(int note) {
         int clamped = std::clamp(note, 0, 127);
         m_externalPressedKeys = {clamped};

@@ -453,20 +453,13 @@ static XPTR recompressSnd(XPTR sndData, int32_t sndSize,
     waveform.compressionType = C_NONE;
     waveform.waveSize = sampleInfo.frames * sampleInfo.channels * (sampleInfo.bitSize / 8);
 
-    /* For Opus target: save the source rate so we can restore correct pitch.
-     * The Opus encoder always resamples to 48kHz and stores 48kHz in the SND
-     * header.  Without the round-trip flag the engine would use 48kHz for pitch
-     * calculation, which is wrong when the original was at a different rate.
-     * We set the round-trip flag for BOTH standard and round-trip Opus modes
-     * so the engine restores the correct pitch. */
-    if (targetComp == C_OPUS)
+    /* For Opus round-trip: spoof the rate to 48kHz so the encoder skips
+     * resampling and preserves the original sample values.  For standard
+     * Opus the encoder genuinely resamples to 48kHz, so leave the rate
+     * as-is. */
+    if (targetComp == C_OPUS && opusRoundTrip)
     {
-        if (opusRoundTrip)
-        {
-            /* Round-trip: spoof rate to 48kHz so encoder skips resampling */
-            waveform.sampledRate = (XFIXED)(48000U << 16);
-        }
-        /* Standard: leave waveform.sampledRate as-is; encoder will resample */
+        waveform.sampledRate = (XFIXED)(48000U << 16);
     }
 
     /* For Opus, pack sub-type into the index format that
@@ -497,21 +490,160 @@ static XPTR recompressSnd(XPTR sndData, int32_t sndSize,
         return NULL;
     }
 
-    /* For Opus: restore the original sample rate and set round-trip flag so
-     * the engine uses the correct rate for pitch calculation instead of 48kHz. */
-    if (targetComp == C_OPUS && sourceRate != 0)
-    {
-        XSetSoundSampleRate(newSndData, sourceRate);
-        XSetSoundOpusRoundTripFlag(newSndData, TRUE);
-    }
-
     /* Store compression sub-type tag so bitrate can be read back (Vorbis/Opus) */
     storeCompressionSubType(newSndData, XGetPtrSize(newSndData),
                             targetComp, targetSub);
 
-    /* Restore original loop points */
-    XSetSoundLoopPoints(newSndData, (int32_t)sampleInfo.loopStart,
-                        (int32_t)sampleInfo.loopEnd);
+    /* ── Post-encode fixup (mirrors BAERmfEditor.c save path) ──────────
+     * Re-decode the freshly encoded SND to discover the actual decoded
+     * frame count and sample rate.  Lossy codecs can change both (e.g.
+     * Opus resamples to 48kHz, MPEG snaps to closest valid rate, and
+     * all codecs may add/remove frames due to padding). */
+    {
+        uint32_t    encodedFrames;
+        SampleDataInfo decodedInfo;
+        XPTR        decodedOwner;
+        XFIXED      sndSampleRate;
+        int32_t     loopStart;
+        int32_t     loopEnd;
+        XBOOL       isMpeg;
+
+        XSetMemory(&decodedInfo, (int32_t)sizeof(decodedInfo), 0);
+        decodedOwner = NULL;
+        (void)XGetSamplePtrFromSnd(newSndData, &decodedInfo);
+
+        encodedFrames = decodedInfo.frames;
+        if (encodedFrames == 0)
+        {
+            encodedFrames = sampleInfo.frames;
+        }
+
+        loopStart = (int32_t)sampleInfo.loopStart;
+        loopEnd   = (int32_t)sampleInfo.loopEnd;
+
+        isMpeg = (((uint32_t)targetComp & 0xFFFFFF00U) == FOUR_CHAR('m','p','g','\0'))
+                 || (targetComp == (SndCompressionType)C_VORBIS);
+
+        if (targetComp == C_OPUS && opusRoundTrip)
+        {
+            /* RT mode: PCM was fed to the encoder at its native rate with no
+             * resampling.  Force frameCount back to source frame count (Opus
+             * pre-skip can make the probed decode slightly shorter).  Clamp
+             * loopEnd to actual Opus decode capacity. */
+            XSndHeader3 *snd = (XSndHeader3 *)newSndData;
+            if (XGetShort(&snd->type) == XThirdSoundFormat)
+            {
+                uint32_t bpf = (uint32_t)snd->sndBuffer.channels *
+                               ((uint32_t)snd->sndBuffer.bitSize / 8U);
+                XPutLong(&snd->sndBuffer.frameCount, sampleInfo.frames);
+                if (bpf > 0)
+                {
+                    XPutLong(&snd->sndBuffer.decodedBytes,
+                             sampleInfo.frames * bpf);
+                }
+            }
+            if (encodedFrames > 0 && loopEnd > (int32_t)encodedFrames)
+            {
+                loopEnd = (int32_t)encodedFrames;
+                if (loopStart >= loopEnd)
+                {
+                    loopStart = 0;
+                    loopEnd   = 0;
+                }
+            }
+
+            /* Restore the real source rate (was spoofed to 48kHz for the
+             * encoder) and set the round-trip flag. */
+            sndSampleRate = sourceRate;
+            XSetSoundSampleRate(newSndData, sndSampleRate);
+            XSetSoundOpusRoundTripFlag(newSndData, TRUE);
+        }
+        else
+        {
+            /* Non-RT lossy codecs (MPEG, Vorbis, standard Opus):
+             * Update SND frameCount/decodedBytes to actual decoded frames
+             * and remap loop points into the new frame domain. */
+            XSndHeader3 *snd = (XSndHeader3 *)newSndData;
+            if (XGetShort(&snd->type) == XThirdSoundFormat)
+            {
+                uint32_t bpf = (uint32_t)snd->sndBuffer.channels *
+                               ((uint32_t)snd->sndBuffer.bitSize / 8U);
+                XPutLong(&snd->sndBuffer.frameCount, encodedFrames);
+                if (bpf > 0)
+                {
+                    XPutLong(&snd->sndBuffer.decodedBytes,
+                             encodedFrames * bpf);
+                }
+            }
+
+            /* Remap loop points from source frame domain to encoded frame
+             * domain (inline PV_RemapLoopPointsToFrameCount logic). */
+            if (sampleInfo.frames > 0 && encodedFrames > 0 &&
+                loopStart >= 0 && loopEnd > loopStart &&
+                (uint32_t)loopStart < sampleInfo.frames)
+            {
+                if ((uint32_t)loopEnd > sampleInfo.frames)
+                {
+                    loopEnd = (int32_t)sampleInfo.frames;
+                }
+                if (loopEnd > loopStart && sampleInfo.frames != encodedFrames)
+                {
+                    uint32_t mappedStart, mappedEnd;
+
+                    mappedStart = (uint32_t)(((uint64_t)(uint32_t)loopStart *
+                                              (uint64_t)encodedFrames) /
+                                             (uint64_t)sampleInfo.frames);
+                    mappedEnd   = (uint32_t)((((uint64_t)(uint32_t)loopEnd *
+                                               (uint64_t)encodedFrames) +
+                                              ((uint64_t)sampleInfo.frames - 1ULL)) /
+                                             (uint64_t)sampleInfo.frames);
+                    if (mappedEnd > encodedFrames)
+                    {
+                        mappedEnd = encodedFrames;
+                    }
+                    if (mappedStart >= mappedEnd)
+                    {
+                        mappedStart = 0;
+                        mappedEnd   = 0;
+                    }
+                    loopStart = (int32_t)mappedStart;
+                    loopEnd   = (int32_t)mappedEnd;
+                }
+            }
+            else
+            {
+                loopStart = 0;
+                loopEnd   = 0;
+            }
+
+            /* Set sample rate:
+             * MPEG/Vorbis: use the decoded stream rate (encoder may have
+             *   snapped to nearest valid MPEG rate).
+             * Standard Opus: use the original source rate (the SND currently
+             *   says 48kHz from XCreateSoundObjectFromData, but the engine
+             *   overwrites info->rate with the decoded rate during playback;
+             *   storing the original rate lets the engine compute correct
+             *   pitch). */
+            sndSampleRate = sourceRate;
+            if (isMpeg && decodedInfo.rate != 0)
+            {
+                sndSampleRate = decodedInfo.rate;
+            }
+            XSetSoundSampleRate(newSndData, sndSampleRate);
+        }
+
+        XSetSoundLoopPoints(newSndData, loopStart, loopEnd);
+
+        /* Free decoded buffer if XGetSamplePtrFromSnd allocated one */
+        if (decodedInfo.pMasterPtr && decodedInfo.pMasterPtr != newSndData)
+        {
+            decodedOwner = decodedInfo.pMasterPtr;
+        }
+        if (decodedOwner)
+        {
+            XDisposePtr(decodedOwner);
+        }
+    }
 
     *outSize = XGetPtrSize(newSndData);
     return newSndData;

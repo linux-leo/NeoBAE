@@ -624,7 +624,7 @@ public:
         }
 
         CreateStatusBar(2);
-        SetStatusText("Open an RMF or MIDI file to begin.");
+        SetStatusText("Welcome to NeoBAE Studio!");
         UpdateLoadedBankStatus();
 
         Bind(wxEVT_MENU, &MainFrame::OnNew, this, wxID_NEW);
@@ -714,7 +714,7 @@ public:
         DoNewDocument(false);
         /* Defer the initial C5 scroll until after the window is laid out */
         CallAfter([this]() {
-            PianoRollPanel_ScrollToC5Center(m_pianoRoll);
+            PianoRollPanel_ScrollToC4Center(m_pianoRoll);
         });
     }
 

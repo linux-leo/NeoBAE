@@ -840,7 +840,7 @@ private:
         m_currentLocalIndex = localIndex;
         EditedSample const &s = m_samples[(size_t)localIndex];
         if (m_pianoPanel) {
-            m_pianoPanel->SetBaseNote(std::max(0, (int)s.rootKey - 12));
+            m_pianoPanel->CenterOnNote((int)s.rootKey);
         }
         SampleParamsPanelData data;
         data.displayName = s.displayName;
@@ -872,7 +872,7 @@ private:
 
     void RefreshPianoRangeFromRootUI() {
         if (!m_pianoPanel || !m_sampleParamsPanel) return;
-        m_pianoPanel->SetBaseNote(std::max(0, m_sampleParamsPanel->GetRootKey() - 12));
+        m_pianoPanel->CenterOnNote(m_sampleParamsPanel->GetRootKey());
     }
 
     void CommitLoopChangeToUndo() {
