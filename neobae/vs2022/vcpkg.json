@@ -7,6 +7,7 @@
 	"opusfile",
     "mp3lame",
     "wxwidgets",
-	"zlib"
+	"zlib",
+	"liblzma"
   ]
 }

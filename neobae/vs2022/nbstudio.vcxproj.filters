@@ -189,6 +189,9 @@
     <ClCompile Include="..\src\rmfeditor_wx\editor_bank.cpp">
       <Filter>Source Files\RMF Editor</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\BAE_Source\Common\X_LZMA.c">
+      <Filter>Source Files\BAE Common</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\BAE_Source\Common\NeoBAE.h">
