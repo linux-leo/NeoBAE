@@ -1320,6 +1320,10 @@ typedef int32_t UNIT_TYPE;
         LastControlEntry lastThreeControl[MAX_CHANNELS][4];
 #endif
 #endif
+
+        // Per-song engine config flags from SongResource_RMF.unused[0] (SONG_CONFIG_* bits).
+        // Zero means no per-song overrides.
+        XDWORD engineConfigFlags;
     };
     typedef struct GM_Song GM_Song;
 

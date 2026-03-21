@@ -611,10 +611,10 @@ static void PV_SF2_ResyncSongStateToSynth(GM_Song* pSong)
         int expr = (int)pSong->channelExpression[ch];
         int pan = (int)pSong->channelStereoPosition[ch];
         int mod = (int)pSong->channelModWheel[ch];
-        if (vol < 0) vol = 0; if (vol > 127) vol = 127;
-        if (expr < 0) expr = 0; if (expr > 127) expr = 127;
-        if (pan < 0) pan = 0; if (pan > 127) pan = 127;
-        if (mod < 0) mod = 0; if (mod > 127) mod = 127;
+        if (vol < 0) { vol = 0; } if (vol > 127) { vol = 127; }
+        if (expr < 0) { expr = 0; } if (expr > 127) { expr = 127; }
+        if (pan < 0) { pan = 0; } if (pan > 127) { pan = 127; }
+        if (mod < 0) { mod = 0; } if (mod > 127) { mod = 127; }
 
         if (expr == 0)
         {
@@ -633,14 +633,14 @@ static void PV_SF2_ResyncSongStateToSynth(GM_Song* pSong)
         fluid_synth_cc(g_fluidsynth_synth, ch, 101, 0); // RPN MSB
         fluid_synth_cc(g_fluidsynth_synth, ch, 100, 0); // RPN LSB
         int pbr = (int)pSong->channelPitchBendRange[ch];
-        if (pbr < 0) pbr = 0; if (pbr > 127) pbr = 127;
+        if (pbr < 0) { pbr = 0; } if (pbr > 127) { pbr = 127; }
         fluid_synth_cc(g_fluidsynth_synth, ch, 6, pbr); // Data Entry MSB
         fluid_synth_cc(g_fluidsynth_synth, ch, 38, 0); // Data Entry LSB
         fluid_synth_cc(g_fluidsynth_synth, ch, 101, 127); // RPN MSB reset
         fluid_synth_cc(g_fluidsynth_synth, ch, 100, 127); // RPN LSB reset
 
         int bend = (int)pSong->channelBend[ch] + 8192;
-        if (bend < 0) bend = 0; if (bend > 16383) bend = 16383;
+        if (bend < 0) { bend = 0; } if (bend > 16383) { bend = 16383; }
         fluid_synth_pitch_bend(g_fluidsynth_synth, ch, bend);
     }
 

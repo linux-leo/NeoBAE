@@ -370,6 +370,17 @@ typedef struct X_PACKBY1
 //  int16_t           velocityCurve[128];
 } SongResource_RMF;
 
+// Engine config flags stored in SongResource_RMF.unused[0].
+// When unused[0] is zero (all legacy files), no per-song overrides are applied.
+// Index into unused[] array:
+#define SONG_CONFIG_UNUSED_INDEX        0
+// Presence bits (song defines this setting):
+#define SONG_CONFIG_HAS_CLASSIC_CHORUS  0x01
+#define SONG_CONFIG_HAS_PANFIX          0x04
+// Value bits (meaningful only when corresponding presence bit is set):
+#define SONG_CONFIG_CLASSIC_CHORUS_ON   0x02
+#define SONG_CONFIG_PANFIX_ON           0x08
+
 // bits for SongResource_RMF_Linear flags
 #define XBFL_disableLoops               0x80
 #define XBFL_embedded                   0x40
@@ -480,6 +491,8 @@ typedef struct X_PACKBY1
     int16_t           *remaps;
 
     int16_t           *velocityCurve;
+
+    int32_t                engineConfigFlags;          // per-song engine config (SONG_CONFIG_*)
 } SongResource_Info;
 
 

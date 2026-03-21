@@ -702,6 +702,7 @@ void BAEScript_FreeNode(BAEScript_Node *node)
         case NODE_IDENT:
         case NODE_MIDI_PROP:
         case NODE_MIDI_STOP:
+        case NODE_HELP:
             /* leaf nodes — nothing to free */
             break;
     }

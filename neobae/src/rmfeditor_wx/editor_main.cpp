@@ -35,6 +35,7 @@
 extern "C" {
 #include "NeoBAE.h"
 #include "GenSnd.h"
+#include "X_Formats.h"
 }
 
 #include "editor_bank.h"
@@ -129,6 +130,8 @@ enum {
     ID_BankSave,
     ID_BankSaveAs,
     ID_BankLoadBuiltin,
+    ID_SettingsPanFix,
+    ID_SettingsClassicChorus,
 };
 
 static constexpr uint8_t  kNbsMagic[4] = {'N', 'B', 'S', '\0'};
@@ -312,6 +315,8 @@ public:
                     m_bankLoaded(false),
                     m_currentBankMenuItem(nullptr),
                     m_reloadInternalBankMenuItem(nullptr),
+                    m_settingsMenu(nullptr),
+                    m_savePreviewToSongCheck(nullptr),
                     m_pendingLoopHotReload(false),
                     m_pendingLoopHotReloadPosUsec(0),
                     m_pendingLoopHotReloadPaused(false),
@@ -381,9 +386,15 @@ public:
         editMenu = new wxMenu();
         editMenu->Append(wxID_UNDO, "&Undo\tCtrl+Z");
         editMenu->Append(wxID_REDO, "&Redo\tCtrl+Y");
+        m_settingsMenu = new wxMenu();
+        m_settingsMenu->AppendCheckItem(ID_SettingsPanFix, "STEREO_PAN LFO DC &Fix");
+        m_settingsMenu->AppendCheckItem(ID_SettingsClassicChorus, "&Classic Chorus Order");
+        m_settingsMenu->Check(ID_SettingsPanFix, true);
+        m_settingsMenu->Check(ID_SettingsClassicChorus, false);
         menuBar = new wxMenuBar();
         menuBar->Append(m_midiFileMenu, "&File");
         menuBar->Append(editMenu, "&Edit");
+        menuBar->Append(m_settingsMenu, "&Settings");
         SetMenuBar(menuBar);
 
         m_editorNotebook = new wxNotebook(this, wxID_ANY);
@@ -507,6 +518,10 @@ public:
             midiStorageRow->Add(new wxStaticText(editorPanel, wxID_ANY, "MIDI Type"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
             midiStorageRow->Add(m_midiStorageChoice, 0, wxALIGN_CENTER_VERTICAL, 0);
             extraControlsSizer->Add(midiStorageRow, 0, wxALIGN_LEFT | wxBOTTOM, 8);
+            m_savePreviewToSongCheck = new wxCheckBox(editorPanel, wxID_ANY, "Save Settings to Song (ZMF)");
+            m_savePreviewToSongCheck->SetValue(false);
+            m_savePreviewToSongCheck->SetToolTip("When checked, the current Pan Fix and Classic Chorus\nsettings will be saved into the song resource.\nRequires ZMF format.");
+            extraControlsSizer->Add(m_savePreviewToSongCheck, 0, wxALIGN_LEFT | wxBOTTOM, 8);
             midiLoopRow = new wxBoxSizer(wxHORIZONTAL);
             midiLoopRow->Add(m_midiLoopEnableCheck, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
             midiLoopRow->Add(new wxStaticText(editorPanel, wxID_ANY, "Start Time"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
@@ -608,6 +623,16 @@ public:
         Bind(wxEVT_MENU, &MainFrame::OnSaveSessionAs, this, ID_SaveSessionAs);
         Bind(wxEVT_MENU, &MainFrame::OnUndo, this, wxID_UNDO);
         Bind(wxEVT_MENU, &MainFrame::OnRedo, this, wxID_REDO);
+        Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+            bool checked = m_settingsMenu->IsChecked(ID_SettingsPanFix);
+            BAE_SetSpanDCFix(checked ? TRUE : FALSE);
+            ApplyEngineConfigToDocument();
+        }, ID_SettingsPanFix);
+        Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+            bool checked = m_settingsMenu->IsChecked(ID_SettingsClassicChorus);
+            BAE_SetClassicChorus(checked ? TRUE : FALSE);
+            ApplyEngineConfigToDocument();
+        }, ID_SettingsClassicChorus);
         Bind(wxEVT_MENU, [this](wxCommandEvent &) { Close(); }, wxID_EXIT);
         Bind(wxEVT_CLOSE_WINDOW, &MainFrame::OnCloseWindow, this);
         m_trackList->Bind(wxEVT_LISTBOX, &MainFrame::OnTrackSelected, this);
@@ -665,6 +690,9 @@ public:
         Bind(wxEVT_MENU, &MainFrame::OnBankSave, this, ID_BankSave);
         Bind(wxEVT_MENU, &MainFrame::OnBankSaveAs, this, ID_BankSaveAs);
         Bind(wxEVT_MENU, &MainFrame::OnBankLoadBuiltin, this, ID_BankLoadBuiltin);
+        m_savePreviewToSongCheck->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &) {
+            ApplyEngineConfigToDocument();
+        });
         LoadIniSettings();
         EnsurePlaybackEngine();
         UpdateLoadedBankStatus();
@@ -789,6 +817,8 @@ private:
     wxString m_loadedBankPath;
     wxMenuItem *m_currentBankMenuItem;
     wxMenuItem *m_reloadInternalBankMenuItem;
+    wxMenu *m_settingsMenu;
+    wxCheckBox *m_savePreviewToSongCheck;
     bool m_pendingLoopHotReload;
     uint32_t m_pendingLoopHotReloadPosUsec;
     bool m_pendingLoopHotReloadPaused;
@@ -826,6 +856,39 @@ private:
     void ApplyPreviewReverbToMixer() {
         if (m_playbackMixer) {
             BAEMixer_SetDefaultReverb(m_playbackMixer, GetSelectedPreviewReverbType());
+        }
+    }
+
+    // Apply Settings menu state to the global engine mixer flags.
+    void ApplyMixerEngineSettings() {
+        bool panFix = m_settingsMenu && m_settingsMenu->IsChecked(ID_SettingsPanFix);
+        bool classicChorus = m_settingsMenu && m_settingsMenu->IsChecked(ID_SettingsClassicChorus);
+        BAE_SetSpanDCFix(panFix ? TRUE : FALSE);
+        BAE_SetClassicChorus(classicChorus ? TRUE : FALSE);
+    }
+
+    // If "Save Settings to Song" is checked, build and write engineConfigFlags
+    // to the current document.
+    void ApplyEngineConfigToDocument() {
+        if (!m_document || !m_savePreviewToSongCheck) {
+            return;
+        }
+        if (m_savePreviewToSongCheck->GetValue()) {
+            bool panFix = m_settingsMenu && m_settingsMenu->IsChecked(ID_SettingsPanFix);
+            bool classicChorus = m_settingsMenu && m_settingsMenu->IsChecked(ID_SettingsClassicChorus);
+            int32_t flags = 0;
+            flags |= SONG_CONFIG_HAS_PANFIX;
+            if (panFix) {
+                flags |= SONG_CONFIG_PANFIX_ON;
+            }
+            flags |= SONG_CONFIG_HAS_CLASSIC_CHORUS;
+            if (classicChorus) {
+                flags |= SONG_CONFIG_CLASSIC_CHORUS_ON;
+            }
+            BAERmfEditorDocument_SetEngineConfig(m_document, flags);
+        } else {
+            // Clear per-song engine config so it uses global defaults.
+            BAERmfEditorDocument_SetEngineConfig(m_document, 0);
         }
     }
 
@@ -1019,6 +1082,22 @@ private:
         if (config.Read("rmf/midi_storage_mode", &midiStorage) && m_midiStorageChoice) {
             m_midiStorageChoice->SetSelection(std::clamp<long>(midiStorage, 0, 3));
         }
+        {
+            bool panFix = true;
+            bool classicChorus = false;
+            bool saveToSong = false;
+            config.Read("settings/pan_fix", &panFix, true);
+            config.Read("settings/classic_chorus", &classicChorus, false);
+            config.Read("settings/save_preview_to_song", &saveToSong, false);
+            if (m_settingsMenu) {
+                m_settingsMenu->Check(ID_SettingsPanFix, panFix);
+                m_settingsMenu->Check(ID_SettingsClassicChorus, classicChorus);
+            }
+            if (m_savePreviewToSongCheck) {
+                m_savePreviewToSongCheck->SetValue(saveToSong);
+            }
+            ApplyMixerEngineSettings();
+        }
     }
 
     void SaveIniSettings() {
@@ -1032,6 +1111,9 @@ private:
         config.Write("audio/preview_reverb", static_cast<long>(GetSelectedPreviewReverbType()));
         config.Write("audio/preview_loop", IsPreviewLoopEnabled());
         config.Write("rmf/midi_storage_mode", static_cast<long>(m_midiStorageChoice ? m_midiStorageChoice->GetSelection() : 1));
+        config.Write("settings/pan_fix", m_settingsMenu ? m_settingsMenu->IsChecked(ID_SettingsPanFix) : true);
+        config.Write("settings/classic_chorus", m_settingsMenu ? m_settingsMenu->IsChecked(ID_SettingsClassicChorus) : false);
+        config.Write("settings/save_preview_to_song", m_savePreviewToSongCheck ? m_savePreviewToSongCheck->GetValue() : false);
         config.Flush();
     }
 
@@ -1562,6 +1644,7 @@ private:
             return false;
         }
         ApplyPreviewReverbToMixer();
+        ApplyMixerEngineSettings();
         {
             BAERate actualRate;
             if (BAEMixer_GetRate(m_playbackMixer, &actualRate) == BAE_NO_ERROR) {
@@ -5037,6 +5120,28 @@ private:
                 SetSelectedMidiStorageType(storageType);
             }
         }
+        {
+            // If the document has per-song engine config, load it into the settings UI.
+            int32_t engineFlags = 0;
+            if (BAERmfEditorDocument_GetEngineConfig(m_document, &engineFlags) == BAE_NO_ERROR && engineFlags != 0) {
+                bool docHasPanFix    = (engineFlags & SONG_CONFIG_HAS_PANFIX) != 0;
+                bool docHasChorus    = (engineFlags & SONG_CONFIG_HAS_CLASSIC_CHORUS) != 0;
+                bool docPanFix       = (engineFlags & SONG_CONFIG_PANFIX_ON) != 0;
+                bool docClassicChorus= (engineFlags & SONG_CONFIG_CLASSIC_CHORUS_ON) != 0;
+                if (m_savePreviewToSongCheck) {
+                    m_savePreviewToSongCheck->SetValue(true);
+                }
+                if (m_settingsMenu) {
+                    if (docHasPanFix) {
+                        m_settingsMenu->Check(ID_SettingsPanFix, docPanFix);
+                    }
+                    if (docHasChorus) {
+                        m_settingsMenu->Check(ID_SettingsClassicChorus, docClassicChorus);
+                    }
+                }
+                ApplyMixerEngineSettings();
+            }
+        }
         InvalidatePianoRollPreviewSong();
         ClearUndoHistory();
         m_currentPath = path;
@@ -5219,6 +5324,7 @@ private:
             wxMessageBox("Nothing is loaded.", "Save As RMF", wxOK | wxICON_INFORMATION, this);
             return;
         }
+        ApplyEngineConfigToDocument();
         saveDoc = m_document;
         saveCurrentTrack = (m_playScopeChoice && m_playScopeChoice->GetSelection() == 1);
         saveChannels = (m_playScopeChoice && m_playScopeChoice->GetSelection() == 2);
@@ -5429,6 +5535,7 @@ private:
         std::vector<unsigned char> header;
         wxFile file;
 
+        ApplyEngineConfigToDocument();
         if (!CaptureSerializedDocument(&rmfBlob)) {
             wxMessageBox("Failed to serialize document.", "Save Session", wxOK | wxICON_ERROR, this);
             return false;

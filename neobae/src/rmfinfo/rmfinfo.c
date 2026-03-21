@@ -726,6 +726,14 @@ static void print_song_section(OutputFormat output_format, const RmfInspectionRe
         printf("song,Max Effects,%d\n", (int)report->song_info->maxEffects);
         printf("song,Mix Level,%d\n", (int)report->song_info->mixLevel);
         printf("song,Song Volume,%d\n", (int)report->song_info->songVolume);
+        if (report->song_info->engineConfigFlags)
+        {
+            int32_t f = report->song_info->engineConfigFlags;
+            if (f & SONG_CONFIG_HAS_CLASSIC_CHORUS)
+                printf("song,Classic Chorus,%s\n", (f & SONG_CONFIG_CLASSIC_CHORUS_ON) ? "On" : "Off");
+            if (f & SONG_CONFIG_HAS_PANFIX)
+                printf("song,Pan Fix,%s\n", (f & SONG_CONFIG_PANFIX_ON) ? "On" : "Off");
+        }
         return;
     }
 
@@ -741,8 +749,16 @@ static void print_song_section(OutputFormat output_format, const RmfInspectionRe
         printf("    \"maxMidiNotes\": %d,\n", (int)report->song_info->maxMidiNotes);
         printf("    \"maxEffects\": %d,\n", (int)report->song_info->maxEffects);
         printf("    \"mixLevel\": %d,\n", (int)report->song_info->mixLevel);
-        printf("    \"songVolume\": %d\n", (int)report->song_info->songVolume);
-        printf("  },\n");
+        printf("    \"songVolume\": %d", (int)report->song_info->songVolume);
+        if (report->song_info->engineConfigFlags)
+        {
+            int32_t f = report->song_info->engineConfigFlags;
+            if (f & SONG_CONFIG_HAS_CLASSIC_CHORUS)
+                printf(",\n    \"classicChorus\": %s", (f & SONG_CONFIG_CLASSIC_CHORUS_ON) ? "true" : "false");
+            if (f & SONG_CONFIG_HAS_PANFIX)
+                printf(",\n    \"panFix\": %s", (f & SONG_CONFIG_PANFIX_ON) ? "true" : "false");
+        }
+        printf("\n  },\n");
         return;
     }
 
@@ -757,6 +773,14 @@ static void print_song_section(OutputFormat output_format, const RmfInspectionRe
     printf("  %-16s: %d\n", "Max Effects", (int)report->song_info->maxEffects);
     printf("  %-16s: %d\n", "Mix Level", (int)report->song_info->mixLevel);
     printf("  %-16s: %d\n", "Song Volume", (int)report->song_info->songVolume);
+    if (report->song_info->engineConfigFlags)
+    {
+        int32_t f = report->song_info->engineConfigFlags;
+        if (f & SONG_CONFIG_HAS_CLASSIC_CHORUS)
+            printf("  %-16s: %s\n", "Classic Chorus", (f & SONG_CONFIG_CLASSIC_CHORUS_ON) ? "On" : "Off");
+        if (f & SONG_CONFIG_HAS_PANFIX)
+            printf("  %-16s: %s\n", "Pan Fix", (f & SONG_CONFIG_PANFIX_ON) ? "On" : "Off");
+    }
 }
 
 static void print_summary_section(OutputFormat output_format, const RmfInspectionReport *report)

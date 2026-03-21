@@ -1779,6 +1779,7 @@ SongResource_Info * XGetSongResourceInfo(SongResource *pSong, int32_t songSize)
                     pInfo->objectResourceID = (XShortResourceID)XGetShort(&songRMF->rmfResourceID);
                     pInfo->songTempo = (uint16_t)XGetShort(&songRMF->songTempo);
                     pInfo->songPitchShift = (int16_t)XGetShort(&songRMF->songPitchShift);
+                    pInfo->engineConfigFlags = (int32_t)XGetLong(&songRMF->unused[SONG_CONFIG_UNUSED_INDEX]);
                     break;
 
                 case SONG_TYPE_RMF_LINEAR:
@@ -1853,6 +1854,7 @@ SongResource * XNewSongFromSongResourceInfo(SongResource_Info *pSongInfo)
                     songRMF = (SongResource_RMF *)newSong;
                     XPutShort(&songRMF->songTempo, (uint16_t)pSongInfo->songTempo);
                     XPutShort(&songRMF->songPitchShift, (uint16_t)pSongInfo->songPitchShift);
+                    XPutLong(&songRMF->unused[SONG_CONFIG_UNUSED_INDEX], (uint32_t)pSongInfo->engineConfigFlags);
                     pProcess = rmf_processTypes;
                     max = sizeof(rmf_processTypes) / sizeof(SongResourceType);
                     XSetSongVolume(newSong, pSongInfo->songVolume);

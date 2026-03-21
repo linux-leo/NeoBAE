@@ -669,6 +669,16 @@ struct sBAESong
     BAE_BOOL mAutoFlash;
     BAE_BOOL mHasEmbeddedBank;
     char *mTitle;
+
+    // Saved mixer state for per-song engine config override/restore
+#if BAE_CLASSIC_CHORUS
+    XBOOL mSavedClassicChorus;
+    XBOOL mHasSavedClassicChorus;
+#endif
+#if BAE_FIX_SPAN_DC
+    XBOOL mSavedFixSpanDC;
+    XBOOL mHasSavedFixSpanDC;
+#endif
 };
 
 struct sBAESound
@@ -881,6 +891,8 @@ static BAEResult PV_BAESong_InitLiveSong(BAESong song, BAE_BOOL addToMixer);
 
 static void PV_BAESong_Stop(BAESong song, BAE_BOOL startFade);
 static void PV_BAESong_Unload(BAESong song);
+static void PV_ApplySongEngineConfig(BAESong song);
+static void PV_RestoreSongEngineConfig(BAESong song);
 static void PV_BAESong_SetCallback(BAESong song, BAE_SongCallbackPtr pCallback,
                                    void *callbackReference);
 
@@ -1226,6 +1238,17 @@ BAEResult BAE_GetClassicChorus(BAE_BOOL *outEnable)
     return BAE_NOT_SETUP;
 #endif
 }
+
+BAEResult BAESong_GetEngineConfig(BAESong song, uint32_t *outFlags)
+{
+    if (!outFlags)
+        return BAE_PARAM_ERR;
+    if (!song || song->mID != OBJECT_ID || !song->pSong)
+        return BAE_NULL_OBJECT;
+    *outFlags = song->pSong->engineConfigFlags;
+    return BAE_NO_ERROR;
+}
+
 #if 0
 #pragma mark -
 #pragma mark##### BAEMixer #####
@@ -9529,6 +9552,7 @@ static void PV_DefaultSongDoneCallback(void *threadContext, GM_Song *pSong, void
                     callback = song->mCallback;
                     callbackReference = song->mCallbackReference;
                     song->mInMixer = FALSE;
+                    PV_RestoreSongEngineConfig(song);
                 }
                 else
                 {
@@ -9800,6 +9824,71 @@ BAEResult BAESong_GetControllerCallback(BAESong song, BAE_SongControllerCallback
 
 // BAESong_Start()
 // --------------------------------------
+// Apply per-song engine config overrides from the song resource (SONG_CONFIG_* flags
+// stored in SongResource_RMF.unused[0]).  Saves the current mixer values so they
+// can be restored when the song ends.
+static void PV_ApplySongEngineConfig(BAESong song)
+{
+    GM_Mixer *pMixer;
+    XDWORD flags;
+
+    if (!song || !song->pSong)
+        return;
+
+    pMixer = MusicGlobals;
+    if (!pMixer)
+        return;
+
+    flags = song->pSong->engineConfigFlags;
+    if (flags == 0)
+        return;  // no per-song overrides
+
+#if BAE_CLASSIC_CHORUS
+    if (flags & SONG_CONFIG_HAS_CLASSIC_CHORUS)
+    {
+        song->mSavedClassicChorus = pMixer->classicChorus;
+        song->mHasSavedClassicChorus = TRUE;
+        pMixer->classicChorus = (flags & SONG_CONFIG_CLASSIC_CHORUS_ON) ? TRUE : FALSE;
+    }
+#endif
+#if BAE_FIX_SPAN_DC
+    if (flags & SONG_CONFIG_HAS_PANFIX)
+    {
+        song->mSavedFixSpanDC = pMixer->fixSpanDC;
+        song->mHasSavedFixSpanDC = TRUE;
+        pMixer->fixSpanDC = (flags & SONG_CONFIG_PANFIX_ON) ? TRUE : FALSE;
+    }
+#endif
+}
+
+// Restore mixer values that were overridden by PV_ApplySongEngineConfig.
+static void PV_RestoreSongEngineConfig(BAESong song)
+{
+    GM_Mixer *pMixer;
+
+    if (!song)
+        return;
+
+    pMixer = MusicGlobals;
+    if (!pMixer)
+        return;
+
+#if BAE_CLASSIC_CHORUS
+    if (song->mHasSavedClassicChorus)
+    {
+        pMixer->classicChorus = song->mSavedClassicChorus;
+        song->mHasSavedClassicChorus = FALSE;
+    }
+#endif
+#if BAE_FIX_SPAN_DC
+    if (song->mHasSavedFixSpanDC)
+    {
+        pMixer->fixSpanDC = song->mSavedFixSpanDC;
+        song->mHasSavedFixSpanDC = FALSE;
+    }
+#endif
+}
+
 //
 //
 BAEResult BAESong_Start(BAESong song, int16_t priority)
@@ -9822,6 +9911,7 @@ BAEResult BAESong_Start(BAESong song, int16_t priority)
             {
                 song->mInMixer = TRUE;
                 GM_SetSongCallback(song->pSong, PV_DefaultSongDoneCallback, (void *)song);
+                PV_ApplySongEngineConfig(song);
             }
         }
         else
@@ -9858,6 +9948,7 @@ static void PV_BAESong_Stop(BAESong song, BAE_BOOL startFade)
         // End the song, and remove it from the mixer
         GM_EndSong(NULL, song->pSong);
         song->mInMixer = FALSE;
+        PV_RestoreSongEngineConfig(song);
     }
 }
 

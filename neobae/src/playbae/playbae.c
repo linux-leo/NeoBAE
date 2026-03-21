@@ -38,6 +38,7 @@
 #include <string.h>
 #include <NeoBAE.h>
 #include <X_Assert.h>
+#include <X_Formats.h>
 #include <BAE_API.h>
 #include <GenSnd.h>
 #include <signal.h>
@@ -395,6 +396,20 @@ void playbae_printf(const char *fmt, ...)
       va_start(args, fmt);
       vfprintf(stdout, fmt, args);
       va_end(args);
+   }
+}
+
+static void print_song_engine_config(BAESong song)
+{
+   uint32_t flags = 0;
+   if (BAESong_GetEngineConfig(song, &flags) == BAE_NO_ERROR && flags != 0)
+   {
+      if (flags & SONG_CONFIG_HAS_CLASSIC_CHORUS)
+         playbae_printf("  Song override: Classic Chorus %s\n",
+                        (flags & SONG_CONFIG_CLASSIC_CHORUS_ON) ? "On" : "Off");
+      if (flags & SONG_CONFIG_HAS_PANFIX)
+         playbae_printf("  Song override: Pan Fix %s\n",
+                        (flags & SONG_CONFIG_PANFIX_ON) ? "On" : "Off");
    }
 }
 
@@ -841,6 +856,7 @@ static BAEResult PlayMidi(BAEMixer theMixer, char *fileName, BAE_UNSIGNED_FIXED 
          err = BAESong_Start(theSong, 0);
          if (err == BAE_NO_ERROR)
          {
+            print_song_engine_config(theSong);
             BAESong_SetVolume(theSong, calculateVolume(volume, TRUE));
 #ifdef SUPPORT_BAESCRIPT
             uint32_t midiScriptSongLength = 0;
@@ -1096,6 +1112,7 @@ static BAEResult PlayRMF(BAEMixer theMixer, char *fileName, BAE_UNSIGNED_FIXED v
          err = BAESong_Start(theSong, 0);
          if (err == BAE_NO_ERROR)
          {
+            print_song_engine_config(theSong);
             if (verboseMode)
             {
                BAESong_DisplayInfo(theSong);
@@ -1287,6 +1304,7 @@ static BAEResult PlayXMF(BAEMixer theMixer, char *fileName, BAE_UNSIGNED_FIXED v
       return err;
    }
 
+   print_song_engine_config(theSong);
    BAESong_SetVolume(theSong, calculateVolume(volume, TRUE));
    BAEMixer_SetDefaultReverb(theMixer, (BAEReverbType)reverbType);
    playbae_printf("Reverb Type set to %d\n", reverbType);
@@ -1420,6 +1438,7 @@ static BAEResult PlayLoadedSong(BAEMixer theMixer, BAESong theSong, char *fileNa
       return err;
    }
 
+   print_song_engine_config(theSong);
    BAESong_SetVolume(theSong, calculateVolume(volume, TRUE));
 
 #ifdef SUPPORT_BAESCRIPT

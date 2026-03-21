@@ -581,6 +581,7 @@ struct BAERmfEditorDocument
     BAERmfEditorInstrumentExt *instrumentExts;
     uint32_t instrumentExtCount;
     uint32_t instrumentExtCapacity;
+    int32_t engineConfigFlags;  // per-song engine config (SONG_CONFIG_* bits)
 };
 
 static uint32_t PV_AllocateSampleAssetID(BAERmfEditorDocument *document)
@@ -3403,6 +3404,7 @@ static BAEResult PV_PopulateSongResourceInfoFromDocument(BAERmfEditorDocument co
     songInfo->songPitchShift = document->songPitchShift;
     songInfo->songLocked = document->songLocked;
     songInfo->songEmbedded = document->songEmbedded;
+    songInfo->engineConfigFlags = document->engineConfigFlags;
 
     for (infoIndex = 0; infoIndex < INFO_TYPE_COUNT; ++infoIndex)
     {
@@ -3892,14 +3894,17 @@ static int PV_CompareChannelStateEvents(void const *left, void const *right)
 }
 
 /* Reconcile imported note bank/program against a merged (format-1 style)
-   channel-state timeline across all tracks. This preserves compatibility with
-   MIDI files that put channel setup on one track and notes on another. */
+   channel-state timeline across all tracks. Each track's notes are assigned
+   bank/program from that track's OWN PC/bank-select events only, so that
+   cross-track state from a conductor track does not contaminate other tracks
+   and break round-trip fidelity. */
 static BAEResult PV_ReconcileImportedMidiNotePrograms(BAERmfEditorDocument *document)
 {
     uint32_t eventCount;
     uint32_t trackIndex;
-    uint16_t currentBank[BAE_MAX_MIDI_CHANNELS];
-    unsigned char currentProgram[BAE_MAX_MIDI_CHANNELS];
+    uint32_t trackCount;
+    uint16_t *perTrackBank;     /* [trackCount * BAE_MAX_MIDI_CHANNELS] */
+    unsigned char *perTrackProgram; /* [trackCount * BAE_MAX_MIDI_CHANNELS] */
     PV_ChannelStateEvent *events;
 
     if (!document)
@@ -3907,8 +3912,9 @@ static BAEResult PV_ReconcileImportedMidiNotePrograms(BAERmfEditorDocument *docu
         return BAE_PARAM_ERR;
     }
 
+    trackCount = document->trackCount;
     eventCount = 0;
-    for (trackIndex = 0; trackIndex < document->trackCount; ++trackIndex)
+    for (trackIndex = 0; trackIndex < trackCount; ++trackIndex)
     {
         BAERmfEditorTrack const *track;
         uint32_t i;
@@ -3945,11 +3951,24 @@ static BAEResult PV_ReconcileImportedMidiNotePrograms(BAERmfEditorDocument *docu
         return BAE_MEMORY_ERR;
     }
 
+    /* Allocate per-track channel state arrays. */
+    perTrackBank    = (uint16_t *)XNewPtr((int32_t)(trackCount * BAE_MAX_MIDI_CHANNELS * (int32_t)sizeof(uint16_t)));
+    perTrackProgram = (unsigned char *)XNewPtr((int32_t)(trackCount * BAE_MAX_MIDI_CHANNELS));
+    if (!perTrackBank || !perTrackProgram)
+    {
+        XDisposePtr(events);
+        if (perTrackBank)    XDisposePtr(perTrackBank);
+        if (perTrackProgram) XDisposePtr(perTrackProgram);
+        return BAE_MEMORY_ERR;
+    }
+    XSetMemory(perTrackBank,    (int32_t)(trackCount * BAE_MAX_MIDI_CHANNELS * (int32_t)sizeof(uint16_t)), 0);
+    XSetMemory(perTrackProgram, (int32_t)(trackCount * BAE_MAX_MIDI_CHANNELS), 0);
+
     {
         uint32_t writeIndex;
 
         writeIndex = 0;
-        for (trackIndex = 0; trackIndex < document->trackCount; ++trackIndex)
+        for (trackIndex = 0; trackIndex < trackCount; ++trackIndex)
         {
             BAERmfEditorTrack const *track;
             uint32_t i;
@@ -4010,11 +4029,8 @@ static BAEResult PV_ReconcileImportedMidiNotePrograms(BAERmfEditorDocument *docu
 
     qsort(events, eventCount, sizeof(PV_ChannelStateEvent), PV_CompareChannelStateEvents);
 
-    for (trackIndex = 0; trackIndex < BAE_MAX_MIDI_CHANNELS; ++trackIndex)
-    {
-        currentBank[trackIndex] = 0;
-        currentProgram[trackIndex] = 0;
-    }
+#define PV_PTB(t, ch)  perTrackBank[(t) * BAE_MAX_MIDI_CHANNELS + (ch)]
+#define PV_PTP(t, ch)  perTrackProgram[(t) * BAE_MAX_MIDI_CHANNELS + (ch)]
 
     {
         uint32_t i;
@@ -4023,21 +4039,23 @@ static BAEResult PV_ReconcileImportedMidiNotePrograms(BAERmfEditorDocument *docu
         {
             PV_ChannelStateEvent const *ev;
             unsigned char ch;
+            uint16_t ti;
 
             ev = &events[i];
             ch = ev->channel;
+            ti = ev->trackIndex;
 
             if (ev->kind == 0)
             {
-                currentBank[ch] = (uint16_t)((((uint16_t)ev->value) << 7) | (currentBank[ch] & 0x7F));
+                PV_PTB(ti, ch) = (uint16_t)((((uint16_t)ev->value) << 7) | (PV_PTB(ti, ch) & 0x7F));
             }
             else if (ev->kind == 1)
             {
-                currentBank[ch] = (uint16_t)((currentBank[ch] & 0x3F80) | ((uint16_t)ev->value & 0x7F));
+                PV_PTB(ti, ch) = (uint16_t)((PV_PTB(ti, ch) & 0x3F80) | ((uint16_t)ev->value & 0x7F));
             }
             else if (ev->kind == 2)
             {
-                currentProgram[ch] = ev->value;
+                PV_PTP(ti, ch) = ev->value;
             }
             else if (ev->kind == 3)
             {
@@ -4047,14 +4065,14 @@ static BAEResult PV_ReconcileImportedMidiNotePrograms(BAERmfEditorDocument *docu
                 unsigned char noteProgram;
                 uint32_t j;
 
-                track = &document->tracks[ev->trackIndex];
+                track = &document->tracks[ti];
                 if (ev->noteIndex >= track->noteCount)
                 {
                     continue;
                 }
                 note = &track->notes[ev->noteIndex];
-                noteBank = currentBank[ch];
-                noteProgram = currentProgram[ch];
+                noteBank    = PV_PTB(ti, ch);
+                noteProgram = PV_PTP(ti, ch);
 
                 /* Keep compatibility with same-tick setup that appears after the
                    note-on in the same track by scanning forward at the same tick. */
@@ -4063,7 +4081,7 @@ static BAEResult PV_ReconcileImportedMidiNotePrograms(BAERmfEditorDocument *docu
                     PV_ChannelStateEvent const *next;
 
                     next = &events[j];
-                    if (next->tick != ev->tick || next->trackIndex != ev->trackIndex)
+                    if (next->tick != ev->tick || next->trackIndex != ti)
                     {
                         break;
                     }
@@ -4085,12 +4103,17 @@ static BAEResult PV_ReconcileImportedMidiNotePrograms(BAERmfEditorDocument *docu
                     }
                 }
 
-                note->bank = noteBank;
+                note->bank    = noteBank;
                 note->program = noteProgram;
             }
         }
     }
 
+#undef PV_PTB
+#undef PV_PTP
+
+    XDisposePtr(perTrackBank);
+    XDisposePtr(perTrackProgram);
     XDisposePtr(events);
     return BAE_NO_ERROR;
 }
@@ -5894,6 +5917,7 @@ static BAEResult PV_LoadRmfResourceIntoDocument(BAERmfEditorDocument *document, 
     document->mixLevel = songInfo->mixLevel;
     document->songVolume = songInfo->songVolume;
     document->reverbType = (BAEReverbType)songInfo->reverbType;
+    document->engineConfigFlags = songInfo->engineConfigFlags;
     if (songInfo->title)
     {
         BAERmfEditorDocument_SetInfo(document, TITLE_INFO, songInfo->title);
@@ -7015,10 +7039,10 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track,
                 result = PV_ByteBufferAppendByte(trackData, track->program);
             if (result != BAE_NO_ERROR)
                 return result;
+            currentProgram[channel] = track->program;
         }
 
         currentBank[channel] = track->bank;
-        currentProgram[channel] = track->program;
     }
 
     if (eventCount)
@@ -9962,6 +9986,23 @@ char const *BAERmfEditorDocument_GetInfo(BAERmfEditorDocument const *document, B
     return document->info[infoType];
 }
 
+BAEResult BAERmfEditorDocument_SetEngineConfig(BAERmfEditorDocument *document, int32_t flags)
+{
+    if (!document)
+        return BAE_PARAM_ERR;
+    document->engineConfigFlags = flags;
+    document->isPristine = FALSE;
+    return BAE_NO_ERROR;
+}
+
+BAEResult BAERmfEditorDocument_GetEngineConfig(BAERmfEditorDocument const *document, int32_t *outFlags)
+{
+    if (!document || !outFlags)
+        return BAE_PARAM_ERR;
+    *outFlags = document->engineConfigFlags;
+    return BAE_NO_ERROR;
+}
+
 BAEResult BAERmfEditorDocument_AddTrack(BAERmfEditorDocument *document,
                                         BAERmfEditorTrackSetup const *setup,
                                         uint16_t *outTrackIndex)
@@ -12454,6 +12495,10 @@ BAE_BOOL BAERmfEditorDocument_RequiresZmf(BAERmfEditorDocument const *document)
             default:
                 break;
         }
+    }
+    if (document->engineConfigFlags != 0)
+    {
+        return TRUE;
     }
     return FALSE;
 }

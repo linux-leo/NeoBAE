@@ -41,6 +41,8 @@ ifeq ($(NBSTUDIO),1)
 	# and the creation API
 	ZMF_SUPPORT := 1
 	CREATION_API := 1
+	FIX_SPAN_DC := 1
+	CLASSIC_CHORUS := 1
 endif
 
 ifeq ($(ZMF_SUPPORT),1)

@@ -1859,6 +1859,12 @@ extern "C"
     BAEResult BAE_SetClassicChorus(BAE_BOOL enable);
     BAEResult BAE_GetClassicChorus(BAE_BOOL *outEnable);
 
+    // Per-song engine config flags (SONG_CONFIG_* bits from X_Formats.h).
+    // Returns the raw engine config bitmask embedded in the song resource.
+    // Zero means no per-song overrides.  Non-zero means the song specifies
+    // one or more engine settings that override user preferences at playback start.
+    BAEResult BAESong_GetEngineConfig(BAESong song, uint32_t *outFlags);
+
     // BAESong_GetVolume()
     // --------------------------------------
     // Upon return, the BAE_UNSIGNED_FIXED pointed to by parameter outVolume will hold
@@ -3101,6 +3107,8 @@ BAEResult BAERmfEditorDocument_SetTicksPerQuarter(BAERmfEditorDocument *document
 BAEResult BAERmfEditorDocument_GetTicksPerQuarter(BAERmfEditorDocument const *document, uint16_t *outTicksPerQuarter);
 BAEResult BAERmfEditorDocument_SetInfo(BAERmfEditorDocument *document, BAEInfoType infoType, char const *value);
 char const *BAERmfEditorDocument_GetInfo(BAERmfEditorDocument const *document, BAEInfoType infoType);
+BAEResult BAERmfEditorDocument_SetEngineConfig(BAERmfEditorDocument *document, int32_t flags);
+BAEResult BAERmfEditorDocument_GetEngineConfig(BAERmfEditorDocument const *document, int32_t *outFlags);
 BAEResult BAERmfEditorDocument_AddTrack(BAERmfEditorDocument *document,
                                         BAERmfEditorTrackSetup const *setup,
                                         uint16_t *outTrackIndex);

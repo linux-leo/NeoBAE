@@ -341,6 +341,8 @@ void GM_MergeExternalSong(void *theExternalSong, XShortResourceID theSongID, GM_
             theSong->ignoreBadInstruments = TRUE;
             PV_SetTempo(theSong, XGetShort(&songRMF->songTempo));
             theSong->songVolume = XGetSongVolume((SongResource *)theExternalSong);
+            // Read per-song engine config flags from unused[0]
+            theSong->engineConfigFlags = (XDWORD)XGetLong(&songRMF->unused[SONG_CONFIG_UNUSED_INDEX]);
             break;
         }
     }
