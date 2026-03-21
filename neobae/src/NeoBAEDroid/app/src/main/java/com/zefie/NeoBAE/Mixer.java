@@ -131,6 +131,8 @@ public class Mixer
 	private static native String _getFeatureString();
 	private static native int _setSpanDCFix(boolean enable);
 	private static native boolean _getSpanDCFix();
+	private static native int _setClassicChorus(boolean enable);
+	private static native boolean _getClassicChorus();
 	private static native int _determineFileTypeByData(byte[] data, int length);
 	private static native int _loadFromMemory(long mixerReference, byte[] data, LoadResult result);
 	
@@ -197,6 +199,8 @@ public class Mixer
 	public static String getFeatureString(){ return _getFeatureString(); }
 	public static int setSpanDCFix(boolean enable){ return _setSpanDCFix(enable); }
 	public static boolean getSpanDCFix(){ return _getSpanDCFix(); }
+	public static int setClassicChorus(boolean enable){ return _setClassicChorus(enable); }
+	public static boolean getClassicChorus(){ return _getClassicChorus(); }
 	
 	// Determine file type from raw data (returns BAEFileType constant)
 	public static int determineFileTypeByData(byte[] data, int length) {

@@ -78,6 +78,12 @@ JNIEXPORT jint JNICALL Java_com_zefie_NeoBAE_Mixer__1setSpanDCFix
 JNIEXPORT jboolean JNICALL Java_com_zefie_NeoBAE_Mixer__1getSpanDCFix
   (JNIEnv *, jclass);
 
+JNIEXPORT jint JNICALL Java_com_zefie_NeoBAE_Mixer__1setClassicChorus
+  (JNIEnv *, jclass, jboolean);
+
+JNIEXPORT jboolean JNICALL Java_com_zefie_NeoBAE_Mixer__1getClassicChorus
+  (JNIEnv *, jclass);
+
 #ifdef __cplusplus
 }
 #endif

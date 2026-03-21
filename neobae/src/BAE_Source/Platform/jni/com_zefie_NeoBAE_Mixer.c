@@ -743,3 +743,17 @@ JNIEXPORT jboolean JNICALL Java_com_zefie_NeoBAE_Mixer__1getSpanDCFix
 	return (jboolean)(enabled ? JNI_TRUE : JNI_FALSE);
 }
 
+JNIEXPORT jint JNICALL Java_com_zefie_NeoBAE_Mixer__1setClassicChorus
+	(JNIEnv* env, jclass clazz, jboolean enable)
+{
+	return (jint)BAE_SetClassicChorus(enable ? TRUE : FALSE);
+}
+
+JNIEXPORT jboolean JNICALL Java_com_zefie_NeoBAE_Mixer__1getClassicChorus
+	(JNIEnv* env, jclass clazz)
+{
+	BAE_BOOL enabled = FALSE;
+	BAE_GetClassicChorus(&enabled);
+	return (jboolean)(enabled ? JNI_TRUE : JNI_FALSE);
+}
+

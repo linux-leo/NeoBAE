@@ -1196,6 +1196,36 @@ BAEResult BAE_GetSpanDCFix(BAE_BOOL *outEnable)
     return BAE_NOT_SETUP;
 #endif
 }
+
+BAEResult BAE_SetClassicChorus(BAE_BOOL enable)
+{
+#if BAE_CLASSIC_CHORUS
+    GM_Mixer *pMixer = MusicGlobals;
+    if (!pMixer)
+        return BAE_NOT_SETUP;
+    pMixer->classicChorus = (XBOOL)enable;
+    return BAE_NO_ERROR;
+#else
+    (void)enable;
+    return BAE_NOT_SETUP;
+#endif
+}
+
+BAEResult BAE_GetClassicChorus(BAE_BOOL *outEnable)
+{
+    if (!outEnable)
+        return BAE_PARAM_ERR;
+#if BAE_CLASSIC_CHORUS
+    GM_Mixer *pMixer = MusicGlobals;
+    if (!pMixer)
+        return BAE_NOT_SETUP;
+    *outEnable = (BAE_BOOL)pMixer->classicChorus;
+    return BAE_NO_ERROR;
+#else
+    *outEnable = FALSE;
+    return BAE_NOT_SETUP;
+#endif
+}
 #if 0
 #pragma mark -
 #pragma mark##### BAEMixer #####

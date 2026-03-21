@@ -31,6 +31,7 @@ ifneq ($(WASM),1)
 		DISABLE_NOKIA := 0			    
 		DISABLE_BEATNIK_SF2_NRPN := 0
 		FIX_SPAN_DC := 1
+		CLASSIC_CHORUS := 1
 		CREATION_API := 0
 	endif
 endif
@@ -138,6 +139,10 @@ endif
 
 ifeq ($(FIX_SPAN_DC),1)
 	BAE_FLAGS += -DBAE_FIX_SPAN_DC=1
+endif
+
+ifeq ($(CLASSIC_CHORUS),1)
+	BAE_FLAGS += -DBAE_CLASSIC_CHORUS=1
 endif
 
 ifeq ($(ZMF_SUPPORT),1)

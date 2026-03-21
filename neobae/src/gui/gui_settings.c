@@ -31,6 +31,9 @@ bool g_sampleRateDropdownOpen = false;
 #if BAE_FIX_SPAN_DC
 bool g_panfix_enabled = true;
 #endif
+#if BAE_CLASSIC_CHORUS
+bool g_classic_chorus_enabled = false;
+#endif
 
 // External globals we need access to
 extern bool g_show_virtual_keyboard;
@@ -170,6 +173,13 @@ Settings load_settings(void)
             settings.has_panfix = true;
         }
 #endif
+#if BAE_CLASSIC_CHORUS
+        else if (strncmp(line, "classic_chorus_enabled=", 22) == 0)
+        {
+            settings.classic_chorus_enabled = (atoi(line + 22) != 0);
+            settings.has_classic_chorus = true;
+        }
+#endif
     }
     fclose(f);
 
@@ -247,6 +257,9 @@ void save_settings(const char *last_bank_path, int reverb_type, bool loop_enable
         fprintf(f, "export_codec_index=%d\n", g_exportCodecIndex);
 #if BAE_FIX_SPAN_DC
         fprintf(f, "panfix_enabled=%d\n", g_panfix_enabled ? 1 : 0);
+#endif
+#if BAE_CLASSIC_CHORUS
+        fprintf(f, "classic_chorus_enabled=%d\n", g_classic_chorus_enabled ? 1 : 0);
 #endif
 #if SUPPORT_PLAYLIST == TRUE
         fprintf(f, "shuffle_enabled=%d\n", g_playlist.shuffle_enabled ? 1 : 0);
@@ -416,6 +429,12 @@ void save_full_settings(const Settings *settings)
             fprintf(f, "panfix_enabled=%d\n", settings->panfix_enabled ? 1 : 0);
         }
 #endif
+#if BAE_CLASSIC_CHORUS
+        if (settings->has_classic_chorus)
+        {
+            fprintf(f, "classic_chorus_enabled=%d\n", settings->classic_chorus_enabled ? 1 : 0);
+        }
+#endif
         
 #if USE_NEO_EFFECTS
         // Preserve existing custom reverb preset data
@@ -548,6 +567,12 @@ void apply_settings_to_ui(const Settings *settings, int *transpose, int *tempo, 
         g_panfix_enabled = settings->panfix_enabled;
     }
 #endif
+#if BAE_CLASSIC_CHORUS
+    if (settings->has_classic_chorus)
+    {
+        g_classic_chorus_enabled = settings->classic_chorus_enabled;
+    }
+#endif
 }
 
 #if SUPPORT_PLAYLIST == TRUE
@@ -575,7 +600,7 @@ void render_settings_dialog(SDL_Renderer *R, int mx, int my, bool mclick, bool m
     SDL_Color dim = g_is_dark_mode ? (SDL_Color){0, 0, 0, 120} : (SDL_Color){0, 0, 0, 90};
     draw_rect(R, (Rect){0, 0, WINDOW_W, g_window_h}, dim);
     int dlgW = 560;
-    int dlgH = 280;
+    int dlgH = 316;
     int pad = 10; // dialog size (wider two-column)
     Rect dlg = {(WINDOW_W - dlgW) / 2, (g_window_h - dlgH) / 2, dlgW, dlgH};
     SDL_Color dlgBg = g_panel_bg;
@@ -615,9 +640,9 @@ void render_settings_dialog(SDL_Renderer *R, int mx, int my, bool mclick, bool m
     Rect expRect = {controlRightX, dlg.y + 104, controlW, 24};
 #endif
 #if SUPPORT_MIDI_HW == TRUE
-    Rect midiDevRect = {controlRightX, dlg.y + 172, controlW + 200, 24};
-    Rect midiOutDevRect = {controlRightX, dlg.y + 200, controlW + 200, 24};
-    Rect recordCodecRect = {controlRightX, dlg.y + 228, controlW + 200, 24};
+    Rect midiDevRect = {controlRightX, dlg.y + 208, controlW + 200, 24};
+    Rect midiOutDevRect = {controlRightX, dlg.y + 236, controlW + 200, 24};
+    Rect recordCodecRect = {controlRightX, dlg.y + 264, controlW + 200, 24};
 #endif
 
     // Left column controls (stacked)
@@ -755,7 +780,7 @@ void render_settings_dialog(SDL_Renderer *R, int mx, int my, bool mclick, bool m
 #endif
 #if SUPPORT_MIDI_HW == TRUE
     // MIDI input enable checkbox and device selector (left column, below Export)
-    Rect midiEnRect = {leftX, dlg.y + 176, 18, 18};
+    Rect midiEnRect = {leftX, dlg.y + 212, 18, 18};
     if (ui_toggle(R, midiEnRect, &g_midi_input_enabled, "MIDI Input", mx, my, mclick))
     {
         // initialize or shutdown midi input as requested
@@ -1049,7 +1074,7 @@ void render_settings_dialog(SDL_Renderer *R, int mx, int my, bool mclick, bool m
     }
 
     // MIDI output checkbox and device selector (placed next to input)
-    Rect midiOutEnRect = {leftX, dlg.y + 204, 18, 18};
+    Rect midiOutEnRect = {leftX, dlg.y + 240, 18, 18};
     // Disable MIDI Output toggle while exporting or when export dropdown is open
     bool midiOut_toggle_allowed = !g_exporting && !g_exportDropdownOpen && !g_midiRecordFormatDropdownOpen;
     if (!midiOut_toggle_allowed)
@@ -1151,7 +1176,7 @@ void render_settings_dialog(SDL_Renderer *R, int mx, int my, bool mclick, bool m
     }
 
     // Record Codec selector (left column, below MIDI Output)
-    draw_text(R, leftX, dlg.y + 232, "MIDI In Record:", g_text_color);
+    draw_text(R, leftX, dlg.y + 268, "MIDI In Record:", g_text_color);
     bool recordCodecEnabled = !(g_volumeCurveDropdownOpen || g_sampleRateDropdownOpen || g_exportDropdownOpen || g_midi_input_device_dd_open || g_midi_output_device_dd_open);
     SDL_Color rc_bg = g_button_base;
     SDL_Color rc_txt = g_button_text;
@@ -1206,6 +1231,15 @@ void render_settings_dialog(SDL_Renderer *R, int mx, int my, bool mclick, bool m
     if (ui_toggle(R, panfixRect, &g_panfix_enabled, "Fix Pan LFO Bias", mx, my, mclick))
     {
         BAE_SetSpanDCFix(g_panfix_enabled ? TRUE : FALSE);
+        save_settings(g_current_bank_path[0] ? g_current_bank_path : NULL, *reverbType, *loopPlay);
+    }
+#endif
+
+#if BAE_CLASSIC_CHORUS
+    Rect chorusRect = {rightX, dlg.y + 180, 18, 18};
+    if (ui_toggle(R, chorusRect, &g_classic_chorus_enabled, "Classic Chorus Order", mx, my, mclick))
+    {
+        BAE_SetClassicChorus(g_classic_chorus_enabled ? TRUE : FALSE);
         save_settings(g_current_bank_path[0] ? g_current_bank_path : NULL, *reverbType, *loopPlay);
     }
 #endif
@@ -1527,6 +1561,9 @@ void settings_init(void)
     g_sample_rate_hz = 44100;
 #if BAE_FIX_SPAN_DC
     g_panfix_enabled = true;
+#endif
+#if BAE_CLASSIC_CHORUS
+    g_classic_chorus_enabled = false;
 #endif
 }
 

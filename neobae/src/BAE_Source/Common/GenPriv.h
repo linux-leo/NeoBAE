@@ -708,6 +708,9 @@ struct GM_Mixer
 #if BAE_FIX_SPAN_DC
     XBOOL       /*8*/   fixSpanDC;                      // if TRUE, skip DC_feed for STEREO_PAN LFOs
 #endif
+#if BAE_CLASSIC_CHORUS
+    XBOOL       /*9*/   classicChorus;                  // if TRUE, use pre-DLS chorus ordering (reverb before chorus, no chorus in fixed reverb)
+#endif
     XBYTE       /*0*/   processExternalMidiQueue;       // counter flag to lock processing of queue. 0 means process
     GM_SampleCacheEntry *sampleCaches[MAX_SAMPLES];     // cache of samples loaded
 

@@ -2293,10 +2293,22 @@ INLINE static void PV_ServeInstruments(void)
             }
         }
 #endif
-#if USE_NEW_EFFECTS
-        RunChorus(pMixer->songBufferChorus, pMixer->songBufferDry, pMixer->One_Loop);
+#if BAE_CLASSIC_CHORUS && USE_NEW_EFFECTS
+        // Classic mode: reverb before chorus (pre-4/19/2000 Beatnik ordering)
+        if (pMixer->classicChorus)
+        {
+            GM_ProcessReverb();
+            RunChorus(pMixer->songBufferChorus, pMixer->songBufferDry, pMixer->One_Loop);
+        }
+        else
 #endif
-        GM_ProcessReverb();
+        {
+#if USE_NEW_EFFECTS
+            // DLS-spec ordering: chorus before reverb (4/19/2000 change)
+            RunChorus(pMixer->songBufferChorus, pMixer->songBufferDry, pMixer->One_Loop);
+#endif
+            GM_ProcessReverb();
+        }
     }
     else
 #endif
@@ -2331,10 +2343,20 @@ INLINE static void PV_ServeInstruments(void)
             }
         }
 #endif
-#if USE_NEW_EFFECTS
-        RunChorus(pMixer->songBufferChorus, pMixer->songBufferDry, pMixer->One_Loop);
+#if BAE_CLASSIC_CHORUS && USE_NEW_EFFECTS
+        // Classic mode: no chorus in fixed reverb path (pre-4/19/2000 behavior)
+        if (pMixer->classicChorus)
+        {
+            GM_ProcessReverb();
+        }
+        else
 #endif
-        GM_ProcessReverb();
+        {
+#if USE_NEW_EFFECTS
+            RunChorus(pMixer->songBufferChorus, pMixer->songBufferDry, pMixer->One_Loop);
+#endif
+            GM_ProcessReverb();
+        }
 
         for (count = 0; count < (pMixer->MaxNotes + pMixer->MaxEffects); count++)
         {

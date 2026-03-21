@@ -46,6 +46,10 @@ typedef struct
     bool has_panfix;
     bool panfix_enabled;
 #endif
+#if BAE_CLASSIC_CHORUS
+    bool has_classic_chorus;
+    bool classic_chorus_enabled;
+#endif
 } Settings;
 
 // Custom reverb preset structure
@@ -93,6 +97,9 @@ extern int g_sample_rate_hz;
 extern bool g_sampleRateDropdownOpen;
 #if BAE_FIX_SPAN_DC
 extern bool g_panfix_enabled;
+#endif
+#if BAE_CLASSIC_CHORUS
+extern bool g_classic_chorus_enabled;
 #endif
 
 // Settings persistence functions

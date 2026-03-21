@@ -701,6 +701,9 @@ OPErr GM_InitGeneralSound(void *threadContext, Rate theRate, TerpMode theTerp, A
 #if BAE_FIX_SPAN_DC
         pMixer->fixSpanDC = TRUE;           // fix STEREO_PAN LFO DC bias by default
 #endif
+#if BAE_CLASSIC_CHORUS
+        pMixer->classicChorus = FALSE;      // use DLS-spec chorus ordering by default
+#endif
         pMixer->syncCount = XMicroseconds();
         pMixer->samplesPlayed = 0;
         pMixer->samplesWritten = 0;

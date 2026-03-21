@@ -1853,6 +1853,12 @@ extern "C"
     BAEResult BAE_SetSpanDCFix(BAE_BOOL enable);
     BAEResult BAE_GetSpanDCFix(BAE_BOOL *outEnable);
 
+    // Classic chorus ordering control (runtime toggle for BAE_CLASSIC_CHORUS)
+    // When enabled, reverts to pre-DLS chorus behavior: reverb before chorus,
+    // and no chorus processing in the fixed reverb path.
+    BAEResult BAE_SetClassicChorus(BAE_BOOL enable);
+    BAEResult BAE_GetClassicChorus(BAE_BOOL *outEnable);
+
     // BAESong_GetVolume()
     // --------------------------------------
     // Upon return, the BAE_UNSIGNED_FIXED pointed to by parameter outVolume will hold

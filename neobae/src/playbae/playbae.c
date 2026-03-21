@@ -454,6 +454,9 @@ char const usageStringFmt[] =
 #if BAE_FIX_SPAN_DC
     "                 --panfix=off {disable STEREO_PAN LFO DC fix (on by default)}\n"
 #endif
+#if BAE_CLASSIC_CHORUS
+    "                 --classicchorus {enable pre-DLS classic chorus ordering (off by default)}\n"
+#endif
     "                 -x  {displays additional lesser-used options}\n";
 
 char const usageStringExtra[] =
@@ -1992,6 +1995,19 @@ int main(int argc, char *argv[])
             {
                BAE_SetSpanDCFix(FALSE);
                playbae_dprintf("STEREO_PAN LFO DC fix disabled\n");
+               break;
+            }
+         }
+#endif
+
+#if BAE_CLASSIC_CHORUS
+         // Parse --classicchorus or --classicchorus=on (enable classic chorus; off by default)
+         for (int i = 1; i < argc; i++)
+         {
+            if (strcmp(argv[i], "--classicchorus") == 0 || strcmp(argv[i], "--classicchorus=on") == 0)
+            {
+               BAE_SetClassicChorus(TRUE);
+               playbae_dprintf("Classic chorus ordering enabled (pre-DLS Beatnik behavior)\n");
                break;
             }
          }

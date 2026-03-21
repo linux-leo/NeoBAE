@@ -944,6 +944,11 @@ int main(int argc, char *argv[])
     BAE_SetSpanDCFix(g_panfix_enabled ? TRUE : FALSE);
 #endif
 
+#if BAE_CLASSIC_CHORUS
+    // Apply classic chorus ordering (default is on; user can disable in settings)
+    BAE_SetClassicChorus(g_classic_chorus_enabled ? TRUE : FALSE);
+#endif
+
 #if SUPPORT_BAESCRIPT == TRUE
     // Restore script editor state from settings
     if (settings.has_script_path || settings.has_script_text || settings.has_script_enabled)

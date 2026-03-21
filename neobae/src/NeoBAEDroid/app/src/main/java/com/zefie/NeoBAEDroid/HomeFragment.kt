@@ -80,6 +80,8 @@ class HomeFragment : Fragment() {
         var velocityCurve = mutableStateOf(1)
         // Fix Pan LFO DC bias (on by default)
         var fixPanLfoBias = mutableStateOf(true)
+        // Classic chorus ordering (off by default)
+        var classicChorus = mutableStateOf(false)
 
         private const val PREF_NAME = "NeoBAE_prefs"
         private const val KEY_ENABLE_AUDIO_FILES = "enable_audio_files"
@@ -619,6 +621,7 @@ class HomeFragment : Fragment() {
                     reverbType.value = prefs.getInt("default_reverb", 1)
                     velocityCurve.value = prefs.getInt("velocity_curve", 1) // Default to 2nd option
                     fixPanLfoBias.value = prefs.getBoolean("fix_pan_lfo_bias", true)
+                    classicChorus.value = prefs.getBoolean("classic_chorus", false)
                     exportCodec.value = prefs.getInt("export_codec", 2) // Default to OGG
                     enabledExtensions.value = getMusicExtensions(requireContext())
                     
@@ -899,6 +902,7 @@ class HomeFragment : Fragment() {
                         reverbType = reverbType.value,
                         velocityCurve = velocityCurve.value,
                         fixPanLfoBias = fixPanLfoBias.value,
+                        classicChorus = classicChorus.value,
                         exportCodec = exportCodec.value,
                         searchResultLimit = searchResultLimit.value,
                         enabledExtensions = enabledExtensions.value,
@@ -948,6 +952,12 @@ class HomeFragment : Fragment() {
                             Mixer.setSpanDCFix(enabled)
                             val prefs = requireContext().getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
                             prefs.edit().putBoolean("fix_pan_lfo_bias", enabled).apply()
+                        },
+                        onClassicChorusChange = { enabled ->
+                            classicChorus.value = enabled
+                            Mixer.setClassicChorus(enabled)
+                            val prefs = requireContext().getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
+                            prefs.edit().putBoolean("classic_chorus", enabled).apply()
                         },
                         onExportCodecChange = { value ->
                             exportCodec.value = value
@@ -1278,6 +1288,7 @@ class HomeFragment : Fragment() {
                                     try {
                                         Mixer.setDefaultReverb(reverbType.value)
                                         Mixer.setSpanDCFix(fixPanLfoBias.value)
+                                        Mixer.setClassicChorus(classicChorus.value)
                                         // Re-apply Neo Reverb custom parameters after mixer recreation.
                                         val prefs = ctx.getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
                                         val currentReverb = prefs.getInt("default_reverb", reverbType.value)
@@ -1830,6 +1841,10 @@ class HomeFragment : Fragment() {
                 val panFixPref = prefs.getBoolean("fix_pan_lfo_bias", true)
                 HomeFragment.fixPanLfoBias.value = panFixPref
                 Mixer.setSpanDCFix(panFixPref)
+                // Restore classic chorus setting
+                val classicChorusPref = prefs.getBoolean("classic_chorus", false)
+                HomeFragment.classicChorus.value = classicChorusPref
+                Mixer.setClassicChorus(classicChorusPref)
                 // If we have an active song, apply the curve immediately.
                 try {
                     currentSong?.let { song ->
@@ -2466,6 +2481,7 @@ class HomeFragment : Fragment() {
                                 try {
                                     Mixer.setDefaultReverb(reverbType.value)
                                     Mixer.setSpanDCFix(fixPanLfoBias.value)
+                                    Mixer.setClassicChorus(classicChorus.value)
                                     val prefs = requireContext().getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
                                     val currentReverb = prefs.getInt("default_reverb", reverbType.value)
                                     if (currentReverb == 18) {
@@ -2634,6 +2650,7 @@ class HomeFragment : Fragment() {
                             try {
                                 Mixer.setDefaultReverb(reverbType.value)
                                 Mixer.setSpanDCFix(fixPanLfoBias.value)
+                                Mixer.setClassicChorus(classicChorus.value)
                                 val prefs = requireContext().getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
                                 val currentReverb = prefs.getInt("default_reverb", reverbType.value)
                                 if (currentReverb == 18) {
@@ -3092,6 +3109,7 @@ fun NewMusicPlayerScreen(
     reverbType: Int,
     velocityCurve: Int,
     fixPanLfoBias: Boolean,
+    classicChorus: Boolean,
     exportCodec: Int,
     searchResultLimit: Int,
     enabledExtensions: Set<String>,
@@ -3099,6 +3117,7 @@ fun NewMusicPlayerScreen(
     onReverbChange: (Int) -> Unit,
     onCurveChange: (Int) -> Unit,
     onFixPanLfoChange: (Boolean) -> Unit,
+    onClassicChorusChange: (Boolean) -> Unit,
     onExportCodecChange: (Int) -> Unit,
     onSearchLimitChange: (Int) -> Unit,
     onExtensionEnabledChange: (String, Boolean) -> Unit,
@@ -3567,12 +3586,14 @@ fun NewMusicPlayerScreen(
                     reverbType = reverbType,
                     velocityCurve = velocityCurve,
                     fixPanLfoBias = fixPanLfoBias,
+                    classicChorus = classicChorus,
                     exportCodec = exportCodec,
                     searchResultLimit = searchResultLimit,
                     onLoadBuiltin = onLoadBuiltin,
                     onReverbChange = onReverbChange,
                     onCurveChange = onCurveChange,
                     onFixPanLfoChange = onFixPanLfoChange,
+                    onClassicChorusChange = onClassicChorusChange,
                     onVolumeChange = onVolumeChange,
                     onExportCodecChange = onExportCodecChange,
                     onSearchLimitChange = onSearchLimitChange,
@@ -5770,12 +5791,14 @@ fun SettingsScreenContent(
     reverbType: Int,
     velocityCurve: Int,
     fixPanLfoBias: Boolean,
+    classicChorus: Boolean,
     exportCodec: Int,
     searchResultLimit: Int,
     onLoadBuiltin: () -> Unit,
     onReverbChange: (Int) -> Unit,
     onCurveChange: (Int) -> Unit,
     onFixPanLfoChange: (Boolean) -> Unit,
+    onClassicChorusChange: (Boolean) -> Unit,
     onVolumeChange: (Int) -> Unit,
     onExportCodecChange: (Int) -> Unit,
     onSearchLimitChange: (Int) -> Unit,
@@ -6911,6 +6934,49 @@ fun SettingsScreenContent(
                 }
                 Text(
                     text = "Corrects extreme panning caused by stereo pan LFO DC offset accumulation in HSB instruments.",
+                    style = MaterialTheme.typography.caption,
+                    color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Classic Chorus Order Section (same for both orientations)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = 4.dp,
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onClassicChorusChange(!classicChorus) },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Filled.Tune,
+                        contentDescription = null,
+                        tint = MaterialTheme.colors.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Classic Chorus Order",
+                        style = MaterialTheme.typography.h6,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colors.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Checkbox(
+                        checked = classicChorus,
+                        onCheckedChange = { onClassicChorusChange(it) }
+                    )
+                }
+                Text(
+                    text = "Uses pre-DLS Beatnik chorus ordering (reverb before chorus). Disable for DLS-spec compliant ordering.",
                     style = MaterialTheme.typography.caption,
                     color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
                     modifier = Modifier.padding(top = 4.dp)
