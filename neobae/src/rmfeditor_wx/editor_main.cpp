@@ -141,6 +141,10 @@ static constexpr uint16_t kNbsFieldSettings     = 0x0002;
 static constexpr uint16_t kNbsFieldOriginalPath = 0x0003;
 static constexpr uint16_t kNbsFieldUserEndTick  = 0x0004;
 
+/* Default timeline length for a new document: 30 s at 120 BPM / 480 TPQ
+ * 30 s * 2 beats/s * 480 ticks/beat = 28 800 ticks */
+static constexpr uint32_t kDefaultNewDocumentEndTicks = 28800;
+
 #pragma pack(push, 1)
 struct NbsSessionSettings {
     uint8_t  settingsVersion;
@@ -149,6 +153,10 @@ struct NbsSessionSettings {
     uint8_t  previewLoopEnabled;
     int32_t  midiStorageMode;
     int32_t  selectedTrack;
+    /* v2 fields */
+    uint8_t  panFix;
+    uint8_t  classicChorus;
+    uint8_t  savePreviewToSong;
 };
 #pragma pack(pop)
 
@@ -344,6 +352,7 @@ public:
 
         /* MIDI Editor File menu */
         fileMenu = new wxMenu();
+        fileMenu->Append(wxID_NEW, "&New\tCtrl+N");
         fileMenu->Append(wxID_OPEN, "&Open\tCtrl+O");
         fileMenu->Append(wxID_SAVEAS, "&Export as...\tCtrl+Shift+S");
         fileMenu->AppendSeparator();
@@ -617,6 +626,7 @@ public:
         SetStatusText("Open an RMF or MIDI file to begin.");
         UpdateLoadedBankStatus();
 
+        Bind(wxEVT_MENU, &MainFrame::OnNew, this, wxID_NEW);
         Bind(wxEVT_MENU, &MainFrame::OnOpen, this, wxID_OPEN);
         Bind(wxEVT_MENU, &MainFrame::OnSaveAs, this, wxID_SAVEAS);
         Bind(wxEVT_MENU, &MainFrame::OnSaveSession, this, ID_SaveSession);
@@ -699,7 +709,8 @@ public:
         RefreshMidiLoopControlsFromDocument();
         UpdateUndoMenuState();
         UpdateChannelsConfigButtonState();
-
+        /* Start with a blank document so the UI is immediately interactive */
+        DoNewDocument(false);
     }
 
     ~MainFrame() override {
@@ -1083,18 +1094,12 @@ private:
             m_midiStorageChoice->SetSelection(std::clamp<long>(midiStorage, 0, 3));
         }
         {
-            bool panFix = true;
-            bool classicChorus = false;
-            bool saveToSong = false;
-            config.Read("settings/pan_fix", &panFix, true);
-            config.Read("settings/classic_chorus", &classicChorus, false);
-            config.Read("settings/save_preview_to_song", &saveToSong, false);
             if (m_settingsMenu) {
-                m_settingsMenu->Check(ID_SettingsPanFix, panFix);
-                m_settingsMenu->Check(ID_SettingsClassicChorus, classicChorus);
+                m_settingsMenu->Check(ID_SettingsPanFix, true);
+                m_settingsMenu->Check(ID_SettingsClassicChorus, false);
             }
             if (m_savePreviewToSongCheck) {
-                m_savePreviewToSongCheck->SetValue(saveToSong);
+                m_savePreviewToSongCheck->SetValue(false);
             }
             ApplyMixerEngineSettings();
         }
@@ -1111,9 +1116,6 @@ private:
         config.Write("audio/preview_reverb", static_cast<long>(GetSelectedPreviewReverbType()));
         config.Write("audio/preview_loop", IsPreviewLoopEnabled());
         config.Write("rmf/midi_storage_mode", static_cast<long>(m_midiStorageChoice ? m_midiStorageChoice->GetSelection() : 1));
-        config.Write("settings/pan_fix", m_settingsMenu ? m_settingsMenu->IsChecked(ID_SettingsPanFix) : true);
-        config.Write("settings/classic_chorus", m_settingsMenu ? m_settingsMenu->IsChecked(ID_SettingsClassicChorus) : false);
-        config.Write("settings/save_preview_to_song", m_savePreviewToSongCheck ? m_savePreviewToSongCheck->GetValue() : false);
         config.Flush();
     }
 
@@ -5282,6 +5284,69 @@ private:
         }
     }
 
+    /* Create a fresh empty document and reset the UI to match.
+     * resetSettings: when true (File->New), also reset the Settings menu
+     * toggles to their defaults.  Pass false on first startup so the INI
+     * settings that were just loaded are not overwritten. */
+    void DoNewDocument(bool resetSettings = true) {
+        StopPlayback(true);
+        if (!m_previewSampleTempPath.empty() && wxFileExists(m_previewSampleTempPath)) {
+            wxRemoveFile(m_previewSampleTempPath);
+            m_previewSampleTempPath.clear();
+        }
+        if (m_document) {
+            BAERmfEditorDocument_Delete(m_document);
+        }
+        m_document = BAERmfEditorDocument_New();
+        if (m_document) {
+            BAERmfEditorTrackSetup setup;
+            uint16_t trackIndex;
+            char trackName[] = "Track 1";
+
+            memset(&setup, 0, sizeof(setup));
+            setup.channel = 0;
+            setup.bank    = 0;
+            setup.program = 0;
+            setup.name    = trackName;
+            BAERmfEditorDocument_AddTrack(m_document, &setup, &trackIndex);
+        }
+        m_currentPath.clear();
+        m_sessionPath.clear();
+        if (resetSettings) {
+            if (m_settingsMenu) {
+                m_settingsMenu->Check(ID_SettingsPanFix, true);
+                m_settingsMenu->Check(ID_SettingsClassicChorus, false);
+            }
+            if (m_savePreviewToSongCheck) {
+                m_savePreviewToSongCheck->SetValue(false);
+            }
+            ApplyMixerEngineSettings();
+        }
+        InvalidatePianoRollPreviewSong();
+        ClearUndoHistory();
+        MarkDocumentClean();
+        PianoRollPanel_SetDocument(m_pianoRoll, m_document);
+        PianoRollPanel_SetUserEndTick(m_pianoRoll, kDefaultNewDocumentEndTicks);
+        PianoRollPanel_ClearPlayhead(m_pianoRoll);
+        m_ignoreSeekEvent = true;
+        m_positionSlider->SetValue(0);
+        m_ignoreSeekEvent = false;
+        UpdatePositionLabelFromDocumentTick(0);
+        PopulateTrackList();
+        PopulateSampleList();
+        RefreshMidiLoopControlsFromDocument();
+        UpdateFrameTitle();
+        SetStatusText(wxEmptyString, 1);
+        SwitchToEditorTab(kEditorModeMidi);
+    }
+
+    void OnNew(wxCommandEvent &) {
+        if (!ConfirmDiscardUnsavedChanges("Create a new document")) {
+            return;
+        }
+        DoNewDocument();
+    }
+
     void OnOpen(wxCommandEvent &) {
         if (!ConfirmDiscardUnsavedChanges("Open a new file")) {
             return;
@@ -5542,12 +5607,15 @@ private:
         }
 
         memset(&settings, 0, sizeof(settings));
-        settings.settingsVersion = 1;
+        settings.settingsVersion = 2;
         settings.previewVolume = m_previewVolumeSlider ? m_previewVolumeSlider->GetValue() : 100;
         settings.previewReverbType = static_cast<int32_t>(GetSelectedPreviewReverbType());
         settings.previewLoopEnabled = IsPreviewLoopEnabled() ? 1 : 0;
         settings.midiStorageMode = m_midiStorageChoice ? m_midiStorageChoice->GetSelection() : 1;
         settings.selectedTrack = GetSelectedTrack();
+        settings.panFix          = (m_settingsMenu && m_settingsMenu->IsChecked(ID_SettingsPanFix)) ? 1 : 0;
+        settings.classicChorus   = (m_settingsMenu && m_settingsMenu->IsChecked(ID_SettingsClassicChorus)) ? 1 : 0;
+        settings.savePreviewToSong = (m_savePreviewToSongCheck && m_savePreviewToSongCheck->GetValue()) ? 1 : 0;
 
         /* Build TLV payload: RMF blob */
         AppendLE16(payload, kNbsFieldRmfBlob);
@@ -5737,8 +5805,9 @@ private:
             if (fieldId == kNbsFieldRmfBlob) {
                 rmfBlob.assign(payload.data() + offset, payload.data() + offset + fieldLen);
             } else if (fieldId == kNbsFieldSettings) {
-                if (fieldLen >= sizeof(NbsSessionSettings)) {
-                    memcpy(&settings, payload.data() + offset, sizeof(NbsSessionSettings));
+                if (fieldLen >= 1) {
+                    size_t copyLen = std::min(static_cast<size_t>(fieldLen), sizeof(NbsSessionSettings));
+                    memcpy(&settings, payload.data() + offset, copyLen);
                     haveSettings = true;
                 }
             } else if (fieldId == kNbsFieldUserEndTick) {
@@ -5773,6 +5842,24 @@ private:
             if (m_midiStorageChoice) {
                 m_midiStorageChoice->SetSelection(std::clamp(settings.midiStorageMode, 0, 3));
             }
+            if (settings.settingsVersion >= 2) {
+                if (m_settingsMenu) {
+                    m_settingsMenu->Check(ID_SettingsPanFix, settings.panFix != 0);
+                    m_settingsMenu->Check(ID_SettingsClassicChorus, settings.classicChorus != 0);
+                }
+                if (m_savePreviewToSongCheck) {
+                    m_savePreviewToSongCheck->SetValue(settings.savePreviewToSong != 0);
+                }
+            } else {
+                if (m_settingsMenu) {
+                    m_settingsMenu->Check(ID_SettingsPanFix, true);
+                    m_settingsMenu->Check(ID_SettingsClassicChorus, false);
+                }
+                if (m_savePreviewToSongCheck) {
+                    m_savePreviewToSongCheck->SetValue(false);
+                }
+            }
+            ApplyMixerEngineSettings();
         }
 
         /* Post-load UI refresh (mirrors LoadDocument) */

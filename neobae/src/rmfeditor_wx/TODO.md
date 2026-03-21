@@ -49,29 +49,36 @@
 
 # 0.08a
 - ~~Resizable tracks (allow user to expand or shrink the track by click/dragging the far right end of the ruler)~~
+- ~~Make piano in bank editor and instrument editor scrollable for full range~~
+- ~~Start from nothing (currently the editor requires you to load a file)~~
+- ~~Implement ZSB (Zefie Sound Bank), same deal as RMF/ZMF, used for newer codecs. Uses ZREZ.~~
+- Cannot play 1:0 or 2:0 in MIDI Editor (also affects exports, but works on re-import)
+- Hide bank editor behind warning that it is incomplete and broken
 - Replacing a sample does not update the original sample node in the tree.
   - Creates a new duplicate sample entry, and only the currently edited instrument is updated to use it, leaving other instruments still pointing to the old sample.
-- Bank editor
-  - need killswitch for bad ADSR
-  - need apply button
-  - make sure we load the edited bank (not original) into memory when switching to midi tab
 - Fix pitch issues with bank compressor
 
 # Future
-- ~~Implement ZSB (Zefie Sound Bank), same deal as RMF/ZMF, used for newer codecs. Uses ZREZ.~~
 - Interpolation configuration (none, linear, cubic, etc, current is just on/off)
-- Make piano in bank editor and instrument editor scrollable for full range
-- Allow for automation like Volume to be able have a slide on it so its easy to make a fadeout/fadein for example, the edit dialog could have "start (item)" "end (item)"
 - Neo Reverb for preview player
   - Custom .neoreverb support
   - means we need the reverb edit dialog from zefidi
 
 # Harder stuff
+- Sound Bank Editor
+  - ~~need killswitch for bad ADSR~~
+  - ~~need apply button~~
+  - make sure we load the edited bank (not original) into memory when switching to midi tab
+  - lots of bugs with sample editor
+  - needs context menus still
+  - musicial keyboard vs form fields
+
+- Allow for automation like Volume to be able have a slide on it
+  - for example, to easily make a fadein or fadeout
+  - the edit dialog could have "start (item)" "end (item)"
+
 - Externally imported MP3 samples (not encoded by us) may have a gap
   - How to address without breaking backwards compatiblity with the decoder?
-
-- Start from nothing (currently the editor requires you to load a file)
-  - Requires resizable tracks, probably more
 
 - Allow configuration of SysEx and 'non-standard' CC commands
   - Where do we even put this stuff?  
@@ -82,10 +89,6 @@
   - Allow MIDI in for instrument dialog preview
   - Need to find my MIDI keyboard
 
-- Sound Bank Editor
-  - Allow editing of soundbanks (HSB, ZSB) directly
-  - Add ZSB format (like ZMF, it would mimic HSB but use a ZREZ header and be used mostly for the new codecs)
-  
 # Maybe (really hard stuff)
 - SF2/DLS support
   - How? FluidSynth handles all of that.
