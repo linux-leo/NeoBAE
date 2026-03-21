@@ -1655,7 +1655,21 @@ static void PV_ServeThisInstrument(GM_Voice *pVoice)
                 {
                     value = 0;
                 }
-                value += (adsrLevel * rec->DC_feed) >> 16;
+#if BAE_FIX_SPAN_DC
+                // BAE_FIX_SPAN_DC: For STEREO_PAN LFOs, skip the DC_feed component.
+                // The DC offset causes extreme one-sided pan bias when multiple SPAN LFOs
+                // accumulate (e.g. two LFOs with dc=-63 produce a combined DC of ~-90,
+                // overwhelming the ±60 oscillation and pinning pan to one side).
+                // The pan center is already set by panPlacement; SPAN LFOs should only
+                // provide oscillating modulation.
+                if (MusicGlobals->fixSpanDC &&
+                    (rec->where_to_feed == STEREO_PAN_LFO || rec->where_to_feed == STEREO_PAN_NAME2))
+                {
+                    // skip DC_feed for pan LFOs
+                }
+                else
+#endif
+                    value += (adsrLevel * rec->DC_feed) >> 16;
                 switch (rec->where_to_feed)
                 {
                 case PITCH_LFO:

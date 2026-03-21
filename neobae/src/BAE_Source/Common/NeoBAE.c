@@ -1166,6 +1166,36 @@ BAEResult BAE_GetDefaultVelocityCurve(int *outCurveType)
     *outCurveType = g_defaultVelocityCurve;
     return BAE_NO_ERROR;
 }
+
+BAEResult BAE_SetSpanDCFix(BAE_BOOL enable)
+{
+#if BAE_FIX_SPAN_DC
+    GM_Mixer *pMixer = MusicGlobals;
+    if (!pMixer)
+        return BAE_NOT_SETUP;
+    pMixer->fixSpanDC = (XBOOL)enable;
+    return BAE_NO_ERROR;
+#else
+    (void)enable;
+    return BAE_NOT_SETUP;
+#endif
+}
+
+BAEResult BAE_GetSpanDCFix(BAE_BOOL *outEnable)
+{
+    if (!outEnable)
+        return BAE_PARAM_ERR;
+#if BAE_FIX_SPAN_DC
+    GM_Mixer *pMixer = MusicGlobals;
+    if (!pMixer)
+        return BAE_NOT_SETUP;
+    *outEnable = (BAE_BOOL)pMixer->fixSpanDC;
+    return BAE_NO_ERROR;
+#else
+    *outEnable = FALSE;
+    return BAE_NOT_SETUP;
+#endif
+}
 #if 0
 #pragma mark -
 #pragma mark##### BAEMixer #####
@@ -8583,9 +8613,6 @@ static void PV_PatchInstrumentEnvelopes(GM_Instrument *theI,
 {
     int32_t i, j;
 
-    /* Pan placement */
-    theI->panPlacement = (XSWORD)info->panPlacement;
-
     /* ADSR envelope */
     for (i = 0; i < (int32_t)info->volumeADSR.stageCount && i < ADSR_STAGES; i++)
     {
@@ -8642,28 +8669,6 @@ static void PV_PatchInstrumentEnvelopes(GM_Instrument *theI,
         pLFO->currentTime = 0;
         pLFO->LFOcurrentTime = 0;
         theI->LFORecordCount++;
-    }
-
-    /* Curves (tie-from/tie-to records for mod wheel depth modulation etc.) */
-    theI->curveRecordCount = 0;
-    for (i = 0; i < (int32_t)info->curveCount && i < MAX_CURVES; i++)
-    {
-        GM_TieTo *pCurve = &theI->curve[i];
-        pCurve->tieFrom = PV_TranslateFromFileToMemoryID(
-            (XDWORD)info->curves[i].tieFrom);
-        pCurve->tieTo = PV_TranslateFromFileToMemoryID(
-            (XDWORD)info->curves[i].tieTo);
-        pCurve->curveCount = info->curves[i].curveCount;
-        if (pCurve->curveCount > MAX_CURVES)
-        {
-            pCurve->curveCount = MAX_CURVES;
-        }
-        for (j = 0; j < pCurve->curveCount && j < MAX_CURVES; j++)
-        {
-            pCurve->from_Value[j] = info->curves[i].from_Value[j];
-            pCurve->to_Scalar[j] = info->curves[i].to_Scalar[j];
-        }
-        theI->curveRecordCount++;
     }
 }
 

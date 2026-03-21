@@ -729,3 +729,17 @@ JNIEXPORT jstring JNICALL Java_com_zefie_NeoBAE_Mixer__1getFeatureString
 	return (*env)->NewStringUTF(env, features); // BAE_GetFeatureString returns static string, no free needed
 }
 
+JNIEXPORT jint JNICALL Java_com_zefie_NeoBAE_Mixer__1setSpanDCFix
+	(JNIEnv* env, jclass clazz, jboolean enable)
+{
+	return (jint)BAE_SetSpanDCFix(enable ? TRUE : FALSE);
+}
+
+JNIEXPORT jboolean JNICALL Java_com_zefie_NeoBAE_Mixer__1getSpanDCFix
+	(JNIEnv* env, jclass clazz)
+{
+	BAE_BOOL enabled = FALSE;
+	BAE_GetSpanDCFix(&enabled);
+	return (jboolean)(enabled ? JNI_TRUE : JNI_FALSE);
+}
+

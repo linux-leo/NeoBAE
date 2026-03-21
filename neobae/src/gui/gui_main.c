@@ -939,6 +939,11 @@ int main(int argc, char *argv[])
     // Load bank database AFTER mixer so load_bank can succeed
     load_bankinfo();
 
+#if BAE_FIX_SPAN_DC
+    // Apply pan LFO DC fix setting (default is on; user can disable in settings)
+    BAE_SetSpanDCFix(g_panfix_enabled ? TRUE : FALSE);
+#endif
+
 #if SUPPORT_BAESCRIPT == TRUE
     // Restore script editor state from settings
     if (settings.has_script_path || settings.has_script_text || settings.has_script_enabled)

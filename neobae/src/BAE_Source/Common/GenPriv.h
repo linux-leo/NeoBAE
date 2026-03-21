@@ -705,6 +705,9 @@ struct GM_Mixer
     XBOOL       /*6*/   cacheInstruments;               // current not used
 
     XBOOL       /*7*/   stereoFilter;                   // if TRUE, then filter stereo output
+#if BAE_FIX_SPAN_DC
+    XBOOL       /*8*/   fixSpanDC;                      // if TRUE, skip DC_feed for STEREO_PAN LFOs
+#endif
     XBYTE       /*0*/   processExternalMidiQueue;       // counter flag to lock processing of queue. 0 means process
     GM_SampleCacheEntry *sampleCaches[MAX_SAMPLES];     // cache of samples loaded
 

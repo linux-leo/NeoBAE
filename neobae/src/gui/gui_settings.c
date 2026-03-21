@@ -1,6 +1,7 @@
 // gui_settings.c - Settings management and persistence
 
 #include "BAE_API.h"
+#include "NeoBAE.h"
 #include "gui_settings.h"
 #include "gui_bae.h"
 #include "gui_export.h"
@@ -26,6 +27,10 @@ bool g_volumeCurveDropdownOpen = false;
 bool g_stereo_output = true;
 int g_sample_rate_hz = 44100;
 bool g_sampleRateDropdownOpen = false;
+
+#if BAE_FIX_SPAN_DC
+bool g_panfix_enabled = true;
+#endif
 
 // External globals we need access to
 extern bool g_show_virtual_keyboard;
@@ -158,6 +163,13 @@ Settings load_settings(void)
             settings.script_path[sizeof(settings.script_path) - 1] = '\0';
             settings.has_script_path = true;
         }
+#if BAE_FIX_SPAN_DC
+        else if (strncmp(line, "panfix_enabled=", 15) == 0)
+        {
+            settings.panfix_enabled = (atoi(line + 15) != 0);
+            settings.has_panfix = true;
+        }
+#endif
     }
     fclose(f);
 
@@ -233,6 +245,9 @@ void save_settings(const char *last_bank_path, int reverb_type, bool loop_enable
         fprintf(f, "show_keyboard=%d\n", g_show_virtual_keyboard ? 1 : 0);
         fprintf(f, "disable_webtv_progress_bar=%d\n", g_disable_webtv_progress_bar ? 1 : 0);
         fprintf(f, "export_codec_index=%d\n", g_exportCodecIndex);
+#if BAE_FIX_SPAN_DC
+        fprintf(f, "panfix_enabled=%d\n", g_panfix_enabled ? 1 : 0);
+#endif
 #if SUPPORT_PLAYLIST == TRUE
         fprintf(f, "shuffle_enabled=%d\n", g_playlist.shuffle_enabled ? 1 : 0);
         fprintf(f, "repeat_mode=%d\n", g_playlist.repeat_mode);
@@ -395,6 +410,12 @@ void save_full_settings(const Settings *settings)
         {
             fprintf(f, "script_path=%s\n", settings->script_path);
         }
+#if BAE_FIX_SPAN_DC
+        if (settings->has_panfix)
+        {
+            fprintf(f, "panfix_enabled=%d\n", settings->panfix_enabled ? 1 : 0);
+        }
+#endif
         
 #if USE_NEO_EFFECTS
         // Preserve existing custom reverb preset data
@@ -519,6 +540,12 @@ void apply_settings_to_ui(const Settings *settings, int *transpose, int *tempo, 
         g_playlist.enabled = settings->playlist_enabled;
     } else {
         g_playlist.enabled = true; // Default to enabled if not specified
+    }
+#endif
+#if BAE_FIX_SPAN_DC
+    if (settings->has_panfix)
+    {
+        g_panfix_enabled = settings->panfix_enabled;
     }
 #endif
 }
@@ -1174,6 +1201,15 @@ void render_settings_dialog(SDL_Renderer *R, int mx, int my, bool mclick, bool m
         save_settings(g_current_bank_path[0] ? g_current_bank_path : NULL, *reverbType, *loopPlay);
     }
 
+#if BAE_FIX_SPAN_DC
+    Rect panfixRect = {rightX, dlg.y + 144, 18, 18};
+    if (ui_toggle(R, panfixRect, &g_panfix_enabled, "Fix Pan LFO Bias", mx, my, mclick))
+    {
+        BAE_SetSpanDCFix(g_panfix_enabled ? TRUE : FALSE);
+        save_settings(g_current_bank_path[0] ? g_current_bank_path : NULL, *reverbType, *loopPlay);
+    }
+#endif
+
     // MIDI channel selector removed from Settings dialog - channel is now controlled in the virtual keyboard dialog
 
     // Footer info removed (moved to About dialog)
@@ -1489,6 +1525,9 @@ void settings_init(void)
     g_volume_curve = 0;
     g_stereo_output = true;
     g_sample_rate_hz = 44100;
+#if BAE_FIX_SPAN_DC
+    g_panfix_enabled = true;
+#endif
 }
 
 void settings_cleanup(void)

@@ -42,6 +42,10 @@ typedef struct
     char script_path[1024];
     bool has_script_text;
     char script_text[65536];
+#if BAE_FIX_SPAN_DC
+    bool has_panfix;
+    bool panfix_enabled;
+#endif
 } Settings;
 
 // Custom reverb preset structure
@@ -87,6 +91,9 @@ extern bool g_volumeCurveDropdownOpen;
 extern bool g_stereo_output;
 extern int g_sample_rate_hz;
 extern bool g_sampleRateDropdownOpen;
+#if BAE_FIX_SPAN_DC
+extern bool g_panfix_enabled;
+#endif
 
 // Settings persistence functions
 Settings load_settings(void);

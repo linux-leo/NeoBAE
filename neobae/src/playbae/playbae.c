@@ -451,6 +451,9 @@ char const usageStringFmt[] =
 #ifdef SUPPORT_BAESCRIPT
     "                 --script {path to BAEScript file for MIDI manipulation}\n"
 #endif
+#if BAE_FIX_SPAN_DC
+    "                 --panfix=off {disable STEREO_PAN LFO DC fix (on by default)}\n"
+#endif
     "                 -x  {displays additional lesser-used options}\n";
 
 char const usageStringExtra[] =
@@ -1980,6 +1983,19 @@ int main(int argc, char *argv[])
       if (err == BAE_NO_ERROR)
       {
          BAEMixer_SetAudioTask(theMixer, PV_Task, (void *)theMixer);
+
+#if BAE_FIX_SPAN_DC
+         // Parse --panfix=off (disable STEREO_PAN LFO DC fix; on by default)
+         for (int i = 1; i < argc; i++)
+         {
+            if (strcmp(argv[i], "--panfix=off") == 0)
+            {
+               BAE_SetSpanDCFix(FALSE);
+               playbae_dprintf("STEREO_PAN LFO DC fix disabled\n");
+               break;
+            }
+         }
+#endif
 
          // turn on nice verb
          if (PV_ParseCommands(argc, argv, "-rv", TRUE, parmFile))

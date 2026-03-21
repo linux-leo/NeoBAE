@@ -72,6 +72,12 @@ JNIEXPORT jint JNICALL Java_com_zefie_NeoBAE_Mixer__1serviceOutputToFile
 JNIEXPORT jint JNICALL Java_com_zefie_NeoBAE_Mixer__1stopOutputToFile
   (JNIEnv *, jclass, jlong);
 
+JNIEXPORT jint JNICALL Java_com_zefie_NeoBAE_Mixer__1setSpanDCFix
+  (JNIEnv *, jclass, jboolean);
+
+JNIEXPORT jboolean JNICALL Java_com_zefie_NeoBAE_Mixer__1getSpanDCFix
+  (JNIEnv *, jclass);
+
 #ifdef __cplusplus
 }
 #endif

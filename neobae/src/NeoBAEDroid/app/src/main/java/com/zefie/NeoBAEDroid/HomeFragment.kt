@@ -78,6 +78,8 @@ class HomeFragment : Fragment() {
     companion object {
         // Default to the 2nd option ("Peaky S Curve" in the UI)
         var velocityCurve = mutableStateOf(1)
+        // Fix Pan LFO DC bias (on by default)
+        var fixPanLfoBias = mutableStateOf(true)
 
         private const val PREF_NAME = "NeoBAE_prefs"
         private const val KEY_ENABLE_AUDIO_FILES = "enable_audio_files"
@@ -616,6 +618,7 @@ class HomeFragment : Fragment() {
                     // Load saved settings
                     reverbType.value = prefs.getInt("default_reverb", 1)
                     velocityCurve.value = prefs.getInt("velocity_curve", 1) // Default to 2nd option
+                    fixPanLfoBias.value = prefs.getBoolean("fix_pan_lfo_bias", true)
                     exportCodec.value = prefs.getInt("export_codec", 2) // Default to OGG
                     enabledExtensions.value = getMusicExtensions(requireContext())
                     
@@ -895,6 +898,7 @@ class HomeFragment : Fragment() {
                         exportStatus = exportStatus.value,
                         reverbType = reverbType.value,
                         velocityCurve = velocityCurve.value,
+                        fixPanLfoBias = fixPanLfoBias.value,
                         exportCodec = exportCodec.value,
                         searchResultLimit = searchResultLimit.value,
                         enabledExtensions = enabledExtensions.value,
@@ -938,6 +942,12 @@ class HomeFragment : Fragment() {
                             } catch (_: Exception) {}
                             val prefs = requireContext().getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
                             prefs.edit().putInt("velocity_curve", value).apply()
+                        },
+                        onFixPanLfoChange = { enabled ->
+                            fixPanLfoBias.value = enabled
+                            Mixer.setSpanDCFix(enabled)
+                            val prefs = requireContext().getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
+                            prefs.edit().putBoolean("fix_pan_lfo_bias", enabled).apply()
                         },
                         onExportCodecChange = { value ->
                             exportCodec.value = value
@@ -1267,6 +1277,7 @@ class HomeFragment : Fragment() {
                                     Mixer.setNativeCacheDir(ctx.cacheDir.absolutePath)
                                     try {
                                         Mixer.setDefaultReverb(reverbType.value)
+                                        Mixer.setSpanDCFix(fixPanLfoBias.value)
                                         // Re-apply Neo Reverb custom parameters after mixer recreation.
                                         val prefs = ctx.getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
                                         val currentReverb = prefs.getInt("default_reverb", reverbType.value)
@@ -1815,6 +1826,10 @@ class HomeFragment : Fragment() {
                 }
 
                 HomeFragment.velocityCurve.value = velocityCurvePref
+                // Restore pan LFO bias fix setting
+                val panFixPref = prefs.getBoolean("fix_pan_lfo_bias", true)
+                HomeFragment.fixPanLfoBias.value = panFixPref
+                Mixer.setSpanDCFix(panFixPref)
                 // If we have an active song, apply the curve immediately.
                 try {
                     currentSong?.let { song ->
@@ -2450,6 +2465,7 @@ class HomeFragment : Fragment() {
                                 Mixer.setNativeCacheDir(requireContext().cacheDir.absolutePath)
                                 try {
                                     Mixer.setDefaultReverb(reverbType.value)
+                                    Mixer.setSpanDCFix(fixPanLfoBias.value)
                                     val prefs = requireContext().getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
                                     val currentReverb = prefs.getInt("default_reverb", reverbType.value)
                                     if (currentReverb == 18) {
@@ -2617,6 +2633,7 @@ class HomeFragment : Fragment() {
                             Mixer.setNativeCacheDir(requireContext().cacheDir.absolutePath)
                             try {
                                 Mixer.setDefaultReverb(reverbType.value)
+                                Mixer.setSpanDCFix(fixPanLfoBias.value)
                                 val prefs = requireContext().getSharedPreferences("NeoBAE_prefs", Context.MODE_PRIVATE)
                                 val currentReverb = prefs.getInt("default_reverb", reverbType.value)
                                 if (currentReverb == 18) {
@@ -3074,12 +3091,14 @@ fun NewMusicPlayerScreen(
     exportStatus: String,
     reverbType: Int,
     velocityCurve: Int,
+    fixPanLfoBias: Boolean,
     exportCodec: Int,
     searchResultLimit: Int,
     enabledExtensions: Set<String>,
     onLoadBuiltin: () -> Unit,
     onReverbChange: (Int) -> Unit,
     onCurveChange: (Int) -> Unit,
+    onFixPanLfoChange: (Boolean) -> Unit,
     onExportCodecChange: (Int) -> Unit,
     onSearchLimitChange: (Int) -> Unit,
     onExtensionEnabledChange: (String, Boolean) -> Unit,
@@ -3547,11 +3566,13 @@ fun NewMusicPlayerScreen(
                     isLoadingBank = isLoadingBank,
                     reverbType = reverbType,
                     velocityCurve = velocityCurve,
+                    fixPanLfoBias = fixPanLfoBias,
                     exportCodec = exportCodec,
                     searchResultLimit = searchResultLimit,
                     onLoadBuiltin = onLoadBuiltin,
                     onReverbChange = onReverbChange,
                     onCurveChange = onCurveChange,
+                    onFixPanLfoChange = onFixPanLfoChange,
                     onVolumeChange = onVolumeChange,
                     onExportCodecChange = onExportCodecChange,
                     onSearchLimitChange = onSearchLimitChange,
@@ -5748,11 +5769,13 @@ fun SettingsScreenContent(
     isLoadingBank: Boolean,
     reverbType: Int,
     velocityCurve: Int,
+    fixPanLfoBias: Boolean,
     exportCodec: Int,
     searchResultLimit: Int,
     onLoadBuiltin: () -> Unit,
     onReverbChange: (Int) -> Unit,
     onCurveChange: (Int) -> Unit,
+    onFixPanLfoChange: (Boolean) -> Unit,
     onVolumeChange: (Int) -> Unit,
     onExportCodecChange: (Int) -> Unit,
     onSearchLimitChange: (Int) -> Unit,
@@ -6850,6 +6873,49 @@ fun SettingsScreenContent(
                     }
                 }
             )
+        }
+        
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Fix Pan LFO Bias Section (same for both orientations)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = 4.dp,
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onFixPanLfoChange(!fixPanLfoBias) },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Filled.Tune,
+                        contentDescription = null,
+                        tint = MaterialTheme.colors.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Fix Pan LFO Bias",
+                        style = MaterialTheme.typography.h6,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colors.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Checkbox(
+                        checked = fixPanLfoBias,
+                        onCheckedChange = { onFixPanLfoChange(it) }
+                    )
+                }
+                Text(
+                    text = "Corrects extreme panning caused by stereo pan LFO DC offset accumulation in HSB instruments.",
+                    style = MaterialTheme.typography.caption,
+                    color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
         }
         
         Spacer(modifier = Modifier.height(16.dp))

@@ -129,6 +129,8 @@ public class Mixer
 	private static native String _getVersion();
 	private static native String _getCompileInfo();
 	private static native String _getFeatureString();
+	private static native int _setSpanDCFix(boolean enable);
+	private static native boolean _getSpanDCFix();
 	private static native int _determineFileTypeByData(byte[] data, int length);
 	private static native int _loadFromMemory(long mixerReference, byte[] data, LoadResult result);
 	
@@ -193,6 +195,8 @@ public class Mixer
 	public static String getVersion(){ return _getVersion(); }
 	public static String getCompileInfo(){ return _getCompileInfo(); }
 	public static String getFeatureString(){ return _getFeatureString(); }
+	public static int setSpanDCFix(boolean enable){ return _setSpanDCFix(enable); }
+	public static boolean getSpanDCFix(){ return _getSpanDCFix(); }
 	
 	// Determine file type from raw data (returns BAEFileType constant)
 	public static int determineFileTypeByData(byte[] data, int length) {

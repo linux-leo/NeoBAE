@@ -698,6 +698,9 @@ OPErr GM_InitGeneralSound(void *threadContext, Rate theRate, TerpMode theTerp, A
     {
         pMixer->insideAudioInterrupt = 0;
         pMixer->enableDriftFixer = TRUE;    // always fix drift for realtime vs parsed events.
+#if BAE_FIX_SPAN_DC
+        pMixer->fixSpanDC = TRUE;           // fix STEREO_PAN LFO DC bias by default
+#endif
         pMixer->syncCount = XMicroseconds();
         pMixer->samplesPlayed = 0;
         pMixer->samplesWritten = 0;

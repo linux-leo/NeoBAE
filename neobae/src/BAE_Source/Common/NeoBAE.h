@@ -1849,6 +1849,10 @@ extern "C"
     BAEResult BAE_SetDefaultVelocityCurve(int curveType); // clamps 0..4
     BAEResult BAE_GetDefaultVelocityCurve(int *outCurveType);
 
+    // STEREO_PAN LFO DC fix control (runtime toggle for BAE_FIX_SPAN_DC)
+    BAEResult BAE_SetSpanDCFix(BAE_BOOL enable);
+    BAEResult BAE_GetSpanDCFix(BAE_BOOL *outEnable);
+
     // BAESong_GetVolume()
     // --------------------------------------
     // Upon return, the BAE_UNSIGNED_FIXED pointed to by parameter outVolume will hold
