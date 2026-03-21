@@ -7206,9 +7206,11 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track,
             if (event->applyProgram)
             {
                 unsigned char eventChannel;
+                int bankChanged;
 
                 eventChannel = (unsigned char)(event->status & 0x0F);
-                if (event->bank != currentBank[eventChannel])
+                bankChanged = (event->bank != currentBank[eventChannel]);
+                if (bankChanged)
                 {
                     uint16_t bankMsb;
                     uint16_t bankLsb;
@@ -7273,7 +7275,7 @@ static BAEResult PV_BuildTrackData(BAERmfEditorTrack const *track,
                     }
                     currentBank[eventChannel] = event->bank;
                 }
-                if (event->program != currentProgram[eventChannel])
+                if (event->program != currentProgram[eventChannel] || bankChanged)
                 {
                     result = PV_ByteBufferAppendVLQ(trackData, delta);
                     if (result != BAE_NO_ERROR)

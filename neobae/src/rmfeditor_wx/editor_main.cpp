@@ -4297,7 +4297,17 @@ private:
                 return;
             }
         }
-        startResult = BAESong_NoteOnWithLoad(m_notePreviewSong, channel, note, 100, 0);
+
+        /* Load the instrument ourselves and use NoteOn (not NoteOnWithLoad)
+         * to avoid the race where NoteOnWithLoad reads stale channel state
+         * from the queued ProgramBankChange above. */
+        {
+            BAE_INSTRUMENT previewInst = TranslateBankProgramToInstrument(
+                RawMidiBankFromInternal(bank), program, channel, note);
+            BAESong_LoadInstrument(m_notePreviewSong, previewInst);
+        }
+
+        startResult = BAESong_NoteOn(m_notePreviewSong, channel, note, 100, 0);
         if (startResult != BAE_NO_ERROR) {
             return;
         }
