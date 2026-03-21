@@ -14,6 +14,9 @@
 
 # 0.09a
 - bankrecomp: wtv.hsb recomp prog 100 weirdness
+- LFO issue
+- ~~Settings menu not working on windows? Why?~~
+- ~~Dark mode!~~
 
 # Future
 - Grpahics for pitch envelope
@@ -22,7 +25,7 @@
 - Neo Reverb for preview player
   - Custom .neoreverb support
   - means we need the reverb edit dialog from zefidi
-- Dark mode!
+
 
 # Harder stuff
 - Sound Bank Editor
