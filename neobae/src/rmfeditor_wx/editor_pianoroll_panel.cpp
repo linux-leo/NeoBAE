@@ -1782,6 +1782,34 @@ private:
         Scroll(0, targetTop / scrollPixelsY);
     }
 
+public:
+    void ScrollToC5Center() {
+        // C5 = MIDI note 72; scroll so it appears vertically centred
+        int scrollPixelsX;
+        int scrollPixelsY;
+        int viewUnitsX;
+        int clientHeight;
+        int noteY;
+        int targetTop;
+        wxSize virtualSize;
+
+        GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
+        if (scrollPixelsY <= 0) {
+            return;
+        }
+        GetViewStart(&viewUnitsX, NULL);
+        clientHeight = GetClientSize().GetHeight();
+        if (clientHeight <= 0) {
+            return;
+        }
+        noteY = NoteToY(72); // C5
+        targetTop = noteY - (clientHeight / 2) + (kNoteHeight / 2);
+        virtualSize = GetVirtualSize();
+        targetTop = std::clamp(targetTop, 0, std::max(0, virtualSize.GetHeight() - clientHeight));
+        Scroll(viewUnitsX, targetTop / scrollPixelsY);
+    }
+
+private:
     void ScrollToMidiContentCenter() {
         uint32_t noteCount;
         int minNote;
@@ -1798,13 +1826,13 @@ private:
         wxSize virtualSize;
 
         if (!HasTrack()) {
-            ScrollToBottom();
+            ScrollToC5Center();
             return;
         }
 
         noteCount = 0;
         if (BAERmfEditorDocument_GetNoteCount(m_document, static_cast<uint16_t>(m_selectedTrack), &noteCount) != BAE_NO_ERROR || noteCount == 0) {
-            ScrollToBottom();
+            ScrollToC5Center();
             return;
         }
 
@@ -3696,6 +3724,12 @@ uint32_t PianoRollPanel_GetUserEndTick(PianoRollPanel *panel) {
 void PianoRollPanel_ClearPlayhead(PianoRollPanel *panel) {
     if (panel) {
         panel->ClearPlayhead();
+    }
+}
+
+void PianoRollPanel_ScrollToC5Center(PianoRollPanel *panel) {
+    if (panel) {
+        panel->ScrollToC5Center();
     }
 }
 

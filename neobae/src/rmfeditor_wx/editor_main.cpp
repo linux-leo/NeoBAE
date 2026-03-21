@@ -711,6 +711,10 @@ public:
         UpdateChannelsConfigButtonState();
         /* Start with a blank document so the UI is immediately interactive */
         DoNewDocument(false);
+        /* Defer the initial C5 scroll until after the window is laid out */
+        CallAfter([this]() {
+            PianoRollPanel_ScrollToC5Center(m_pianoRoll);
+        });
     }
 
     ~MainFrame() override {
@@ -5311,7 +5315,17 @@ private:
         if (m_document) {
             BAERmfEditorTrackSetup setup;
             uint16_t trackIndex;
+            char conductorName[] = "Conductor";
             char trackName[] = "Track 1";
+
+            /* Add an explicit conductor (tempo) track first so that MIDI export
+             * doesn't silently prepend a synthetic tempo track. */
+            memset(&setup, 0, sizeof(setup));
+            setup.channel = 0;
+            setup.bank    = 0;
+            setup.program = 0;
+            setup.name    = conductorName;
+            BAERmfEditorDocument_AddTrack(m_document, &setup, &trackIndex);
 
             memset(&setup, 0, sizeof(setup));
             setup.channel = 0;
@@ -5343,6 +5357,13 @@ private:
         m_ignoreSeekEvent = false;
         UpdatePositionLabelFromDocumentTick(0);
         PopulateTrackList();
+        /* Select the music track (index 1) rather than the conductor track so
+         * the user can start placing notes immediately. */
+        if (m_trackList->GetCount() > 1) {
+            m_trackList->SetSelection(1);
+            PianoRollPanel_SetSelectedTrack(m_pianoRoll, 1);
+            UpdateControlsFromSelection();
+        }
         PopulateSampleList();
         RefreshMidiLoopControlsFromDocument();
         UpdateFrameTitle();
