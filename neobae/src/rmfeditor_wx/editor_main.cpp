@@ -301,6 +301,7 @@ public:
                     m_editorNotebook(nullptr),
                     m_bankEditorPanel(nullptr),
                     m_editorMode(kEditorModeMidi),
+                    m_bankEditorWarningAccepted(false),
                     m_playbackMixer(nullptr),
                     m_playbackSong(nullptr),
                     m_notePreviewSong(nullptr),
@@ -758,6 +759,7 @@ private:
     wxNotebook *m_editorNotebook;
     BankEditorPanel *m_bankEditorPanel;
     EditorMode m_editorMode;
+    bool m_bankEditorWarningAccepted;
     wxMenu *m_midiFileMenu;
     wxMenu *m_bankFileMenu;
     wxListBox *m_trackList;
@@ -5275,6 +5277,27 @@ private:
             SwapFileMenu(m_midiFileMenu);
             /* TODO Phase 4: hot-reload bank if dirty */
         } else if (page == kEditorModeBank) {
+            if (!m_bankEditorWarningAccepted) {
+                int answer = wxMessageBox(
+                    "The Bank Editor is incomplete and many functions are not yet "
+                    "implemented or not yet functioning correctly.\n\n"
+                    "By continuing you agree that you understand this.",
+                    "Bank Editor — Incomplete Feature",
+                    wxOK | wxCANCEL | wxICON_WARNING,
+                    this);
+                if (answer != wxOK) {
+                    event.Veto();
+                    /* Restore the notebook selection to the previous tab without
+                     * re-triggering this handler. */
+                    m_editorNotebook->Unbind(wxEVT_NOTEBOOK_PAGE_CHANGED, &MainFrame::OnEditorTabChanged, this);
+                    m_editorNotebook->SetSelection((size_t)kEditorModeMidi);
+                    m_editorNotebook->Bind(wxEVT_NOTEBOOK_PAGE_CHANGED, &MainFrame::OnEditorTabChanged, this);
+                    m_editorMode = kEditorModeMidi;
+                    SwapFileMenu(m_midiFileMenu);
+                    return;
+                }
+                m_bankEditorWarningAccepted = true;
+            }
             m_editorMode = kEditorModeBank;
             SwapFileMenu(m_bankFileMenu);
         }

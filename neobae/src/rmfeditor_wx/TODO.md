@@ -54,7 +54,7 @@
 - ~~Implement ZSB (Zefie Sound Bank), same deal as RMF/ZMF, used for newer codecs. Uses ZREZ.~~
 - ~~Cannot play 1:0 or 2:0 in MIDI Editor (also affects exports, but works on re-import)~~
 - ~~Default piano roll scroll to C5 center when there is no midi data~~
-- Hide bank editor behind warning that it is incomplete and broken "This feature is incomplete and many functions are not yet implemented or not yet functioning correctly. By continuing into the Bank Editor you agree that you understand this." with "I Understand" button
+- ~~Hide bank editor behind warning that it is incomplete and broken "This feature is incomplete and many functions are not yet implemented or not yet functioning correctly. By continuing into the Bank Editor you agree that you understand this." with "I Understand" button~~
 - Replacing a sample does not update the original sample node in the tree.
   - Creates a new duplicate sample entry, and only the currently edited instrument is updated to use it, leaving other instruments still pointing to the old sample.
 - Fix pitch issues with bank compressor
