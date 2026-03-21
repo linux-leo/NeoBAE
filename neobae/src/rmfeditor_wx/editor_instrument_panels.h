@@ -1364,6 +1364,8 @@ private:
         int shapeSel = m_lfoShape->GetSelection();
         if (shapeSel >= 0 && shapeSel < kLFOShapeCount) lfo.waveShape = kLFOShapeLabels[shapeSel].value;
         lfo.period = m_lfoPeriod->GetValue();
+        if (lfo.period != 0 && lfo.period <= 512)
+            lfo.period = 513; // engine requires period == 0 (disabled) or > 512
         lfo.DC_feed = m_lfoDCFeed->GetValue();
         lfo.level = m_lfoLevel->GetValue();
     }

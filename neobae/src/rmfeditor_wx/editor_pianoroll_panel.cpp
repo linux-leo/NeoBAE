@@ -64,6 +64,109 @@ struct AutomationLaneDescriptor {
     bool bipolar;
 };
 
+/* ---------- Theme palette for the piano roll grid area ---------- */
+struct PianoRollTheme {
+    /* Note grid */
+    wxColour whiteKeyFill;
+    wxColour blackKeyFill;
+    wxColour noteSeparator;
+    wxColour noteLabelText;
+    wxColour majorGridLine;
+    wxColour minorGridLine;
+    wxColour gutterSeparator;
+    wxColour endRegionShade;   /* translucent overlay beyond end marker */
+
+    /* Ruler */
+    wxColour rulerBg;
+    wxColour rulerGutterBg;
+    wxColour rulerGutterBeatText;
+    wxColour rulerGutterTimeText;
+    wxColour rulerSubTick;
+    wxColour rulerBarTick;
+    wxColour rulerBeatTick;
+    wxColour rulerBarText;
+    wxColour rulerBeatText;
+    wxColour rulerTimeText;
+    wxColour rulerBorder;
+    wxColour rulerGutterBorder;
+
+    /* Automation lanes */
+    wxColour automationLaneBg;
+    wxColour automationLaneGutterBg;
+    wxColour automationLaneBorder;
+    wxColour automationLaneLabel;
+    wxColour automationLaneCenterLine;
+    wxColour automationSelectedBorder;
+};
+
+static PianoRollTheme MakeLightTheme() {
+    PianoRollTheme t;
+    t.whiteKeyFill          = wxColour(248, 248, 246);
+    t.blackKeyFill          = wxColour(235, 238, 240);
+    t.noteSeparator         = wxColour(220, 224, 226);
+    t.noteLabelText         = wxColour(90, 90, 90);
+    t.majorGridLine         = wxColour(180, 186, 190);
+    t.minorGridLine         = wxColour(222, 226, 228);
+    t.gutterSeparator       = wxColour(60, 60, 60);
+    t.endRegionShade        = wxColour(0, 0, 0, 28);
+    t.rulerBg               = wxColour(42, 44, 50);
+    t.rulerGutterBg         = wxColour(30, 32, 36);
+    t.rulerGutterBeatText   = wxColour(130, 135, 140);
+    t.rulerGutterTimeText   = wxColour(100, 105, 110);
+    t.rulerSubTick          = wxColour(70, 75, 82);
+    t.rulerBarTick          = wxColour(190, 195, 200);
+    t.rulerBeatTick         = wxColour(130, 135, 140);
+    t.rulerBarText          = wxColour(240, 242, 245);
+    t.rulerBeatText         = wxColour(195, 198, 202);
+    t.rulerTimeText         = wxColour(140, 145, 150);
+    t.rulerBorder           = wxColour(70, 75, 82);
+    t.rulerGutterBorder     = wxColour(100, 105, 110);
+    t.automationLaneBg      = wxColour(32, 34, 38);
+    t.automationLaneGutterBg = wxColour(42, 44, 50);
+    t.automationLaneBorder  = wxColour(68, 72, 78);
+    t.automationLaneLabel   = wxColour(214, 217, 222);
+    t.automationLaneCenterLine = wxColour(84, 88, 96);
+    t.automationSelectedBorder = wxColour(255, 232, 190);
+    return t;
+}
+
+static PianoRollTheme MakeDarkTheme() {
+    PianoRollTheme t;
+    t.whiteKeyFill          = wxColour(28, 30, 34);
+    t.blackKeyFill          = wxColour(22, 24, 28);
+    t.noteSeparator         = wxColour(48, 52, 58);
+    t.noteLabelText         = wxColour(160, 165, 170);
+    t.majorGridLine         = wxColour(80, 85, 92);
+    t.minorGridLine         = wxColour(42, 46, 52);
+    t.gutterSeparator       = wxColour(100, 105, 110);
+    t.endRegionShade        = wxColour(0, 0, 0, 60);
+    t.rulerBg               = wxColour(32, 34, 38);
+    t.rulerGutterBg         = wxColour(22, 24, 28);
+    t.rulerGutterBeatText   = wxColour(130, 135, 140);
+    t.rulerGutterTimeText   = wxColour(100, 105, 110);
+    t.rulerSubTick          = wxColour(60, 65, 72);
+    t.rulerBarTick          = wxColour(170, 175, 180);
+    t.rulerBeatTick         = wxColour(110, 115, 120);
+    t.rulerBarText          = wxColour(220, 222, 225);
+    t.rulerBeatText         = wxColour(170, 173, 178);
+    t.rulerTimeText         = wxColour(120, 125, 130);
+    t.rulerBorder           = wxColour(60, 65, 72);
+    t.rulerGutterBorder     = wxColour(90, 95, 100);
+    t.automationLaneBg      = wxColour(24, 26, 30);
+    t.automationLaneGutterBg = wxColour(32, 34, 38);
+    t.automationLaneBorder  = wxColour(56, 60, 66);
+    t.automationLaneLabel   = wxColour(200, 203, 208);
+    t.automationLaneCenterLine = wxColour(72, 76, 84);
+    t.automationSelectedBorder = wxColour(255, 232, 190);
+    return t;
+}
+
+static bool DetectSystemDarkMode() {
+    wxColour bg = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
+    int luminance = (bg.Red() * 299 + bg.Green() * 587 + bg.Blue() * 114) / 1000;
+    return luminance < 128;
+}
+
 struct AutomationHitInfo {
     int laneIndex;
     uint32_t eventIndex;
@@ -338,7 +441,8 @@ public:
           m_lastPreviewDragNote(-1),
           m_userEndTick(0),
           m_draggingTimelineEnd(false),
-          m_timelineEndDragTick(0) {
+          m_timelineEndDragTick(0),
+          m_theme(DetectSystemDarkMode() ? MakeDarkTheme() : MakeLightTheme()) {
         SetBackgroundStyle(wxBG_STYLE_PAINT);
         SetScrollRate(16, 16);
         Bind(wxEVT_PAINT, &PianoRollPanel::OnPaint, this);
@@ -676,6 +780,7 @@ private:
     uint32_t m_userEndTick;
     bool m_draggingTimelineEnd;
     uint32_t m_timelineEndDragTick;
+    PianoRollTheme m_theme;
 
     bool ScrollHorizontallyWithWheel(wxMouseEvent const &event, int stepMultiplier) {
         int wheelDelta;
@@ -2283,18 +2388,18 @@ private:
             laneVisibleLeft = std::max(kPianoRollLeftGutter, visibleLeft);
             laneVisibleWidth = std::max(0, visibleRight - laneVisibleLeft);
             dc.SetPen(*wxTRANSPARENT_PEN);
-            dc.SetBrush(wxBrush(wxColour(32, 34, 38)));
+            dc.SetBrush(wxBrush(m_theme.automationLaneBg));
             if (laneVisibleWidth > 0) {
                 dc.DrawRectangle(laneVisibleLeft, laneTop, laneVisibleWidth, kAutomationLaneHeight);
             }
-            dc.SetBrush(wxBrush(wxColour(42, 44, 50)));
+            dc.SetBrush(wxBrush(m_theme.automationLaneGutterBg));
             dc.DrawRectangle(0, laneTop, kPianoRollLeftGutter, kAutomationLaneHeight);
-            dc.SetPen(wxPen(wxColour(68, 72, 78)));
+            dc.SetPen(wxPen(m_theme.automationLaneBorder));
             dc.DrawLine(0, laneBottom, visibleRight, laneBottom);
-            dc.SetTextForeground(wxColour(214, 217, 222));
+            dc.SetTextForeground(m_theme.automationLaneLabel);
             dc.DrawText(lane.label, 8, laneTop + (kAutomationLaneHeight / 2) - 8);
             if (lane.bipolar) {
-                dc.SetPen(wxPen(wxColour(84, 88, 96)));
+                dc.SetPen(wxPen(m_theme.automationLaneCenterLine));
                 dc.DrawLine(kPianoRollLeftGutter, laneTop + (kAutomationLaneHeight / 2), visibleRight, laneTop + (kAutomationLaneHeight / 2));
             }
             if (!m_document) {
@@ -2348,7 +2453,7 @@ private:
                             m_selectedAutomationLane == laneIndex &&
                             m_selectedAutomationEvent == static_cast<long>(tempoIndex)) {
                             dc.SetBrush(*wxTRANSPARENT_BRUSH);
-                            dc.SetPen(wxPen(wxColour(255, 232, 190), 2));
+                            dc.SetPen(wxPen(m_theme.automationSelectedBorder, 2));
                             dc.DrawRectangle(x0, laneTop + 1, std::max(2, x1 - x0), kAutomationLaneHeight - 2);
                         }
                     }
@@ -2410,7 +2515,7 @@ private:
                         m_selectedAutomationLane == laneIndex &&
                         m_selectedAutomationEvent == static_cast<long>(eventIndex)) {
                         dc.SetBrush(*wxTRANSPARENT_BRUSH);
-                        dc.SetPen(wxPen(wxColour(238, 240, 244), 2));
+                        dc.SetPen(wxPen(m_theme.automationSelectedBorder, 2));
                         dc.DrawRectangle(x0, laneTop + 1, std::max(2, x1 - x0), kAutomationLaneHeight - 2);
                     }
                 }
@@ -2470,7 +2575,7 @@ private:
                         m_selectedAutomationLane == laneIndex &&
                         m_selectedAutomationEvent == static_cast<long>(eventIndex)) {
                         dc.SetBrush(*wxTRANSPARENT_BRUSH);
-                        dc.SetPen(wxPen(wxColour(238, 240, 244), 2));
+                        dc.SetPen(wxPen(m_theme.automationSelectedBorder, 2));
                         dc.DrawRectangle(x0, laneTop + 1, std::max(2, x1 - x0), kAutomationLaneHeight - 2);
                     }
                 }
@@ -2534,17 +2639,17 @@ private:
 
         // Ruler background
         dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.SetBrush(wxBrush(wxColour(42, 44, 50)));
+        dc.SetBrush(wxBrush(m_theme.rulerBg));
         dc.DrawRectangle(scrollX, rulerTop, screenW, rulerH);
 
         // Left gutter corner (darker)
-        dc.SetBrush(wxBrush(wxColour(30, 32, 36)));
+        dc.SetBrush(wxBrush(m_theme.rulerGutterBg));
         dc.DrawRectangle(scrollX, rulerTop, kPianoRollLeftGutter, rulerH);
 
         // Gutter labels pinned to screen-left
-        dc.SetTextForeground(wxColour(130, 135, 140));
+        dc.SetTextForeground(m_theme.rulerGutterBeatText);
         dc.DrawText("Beat", scrollX + 3, rulerTop + 1);
-        dc.SetTextForeground(wxColour(100, 105, 110));
+        dc.SetTextForeground(m_theme.rulerGutterTimeText);
         dc.DrawText("Time", scrollX + 3, rulerTop + rulerH / 2);
 
         relLeft  = std::max(0, scrollX - kPianoRollLeftGutter);
@@ -2560,7 +2665,7 @@ private:
 
             if ((tick % quarterTicks) == 0) continue;
             vx = TickToX(tick);
-            dc.SetPen(wxPen(wxColour(70, 75, 82)));
+            dc.SetPen(wxPen(m_theme.rulerSubTick));
             dc.DrawLine(vx, rulerBot - 5, vx, rulerBot - 1);
             if (tickEnd - tick < stepTicks) {
                 break;
@@ -2587,15 +2692,15 @@ private:
             ds = static_cast<int>((seconds - std::floor(seconds)) * 10.0);
 
             // Tick mark: taller at bar starts
-            dc.SetPen(wxPen(isBar ? wxColour(190, 195, 200) : wxColour(130, 135, 140)));
+            dc.SetPen(wxPen(isBar ? m_theme.rulerBarTick : m_theme.rulerBeatTick));
             dc.DrawLine(vx, rulerTop + (isBar ? 2 : rulerH / 2), vx, rulerBot - 1);
 
             // Beat number (top row)
-            dc.SetTextForeground(isBar ? wxColour(240, 242, 245) : wxColour(195, 198, 202));
+            dc.SetTextForeground(isBar ? m_theme.rulerBarText : m_theme.rulerBeatText);
             dc.DrawText(wxString::Format("%d", beatNum), vx + 2, rulerTop + 1);
 
             // Time code (bottom row)
-            dc.SetTextForeground(wxColour(140, 145, 150));
+            dc.SetTextForeground(m_theme.rulerTimeText);
             dc.DrawText(wxString::Format("%d:%02d.%d", mm, ss, ds), vx + 2, rulerTop + rulerH / 2);
             if (tickEnd - tick < quarterTicks) {
                 break;
@@ -2603,11 +2708,11 @@ private:
         }
 
         // Bottom border
-        dc.SetPen(wxPen(wxColour(70, 75, 82)));
+        dc.SetPen(wxPen(m_theme.rulerBorder));
         dc.DrawLine(scrollX, rulerBot - 1, scrollX + screenW, rulerBot - 1);
 
         // Left gutter right-edge (re-draw on top of ruler)
-        dc.SetPen(wxPen(wxColour(100, 105, 110)));
+        dc.SetPen(wxPen(m_theme.rulerGutterBorder));
         dc.DrawLine(scrollX + kPianoRollLeftGutter, rulerTop, scrollX + kPianoRollLeftGutter, rulerBot);
 
         // Timeline end handle in ruler
@@ -2854,7 +2959,7 @@ private:
                                   visibleRect.GetTop(),
                                   std::max(1, visibleRect.GetRight() - std::max(kPianoRollLeftGutter, visibleRect.GetLeft())),
                                   visibleRect.GetHeight());
-        dc.SetBackground(wxBrush(wxColour(248, 248, 246)));
+        dc.SetBackground(wxBrush(m_theme.whiteKeyFill));
         dc.Clear();
 
         for (note = 0; note <= 127; ++note) {
@@ -2866,14 +2971,14 @@ private:
                 continue;
             }
             blackKey = (note % 12 == 1) || (note % 12 == 3) || (note % 12 == 6) || (note % 12 == 8) || (note % 12 == 10);
-            fillColor = blackKey ? wxColour(235, 238, 240) : wxColour(248, 248, 246);
+            fillColor = blackKey ? m_theme.blackKeyFill : m_theme.whiteKeyFill;
             dc.SetPen(*wxTRANSPARENT_PEN);
             dc.SetBrush(wxBrush(fillColor));
             dc.DrawRectangle(visibleRect.GetLeft(), noteY, visibleRect.GetWidth(), kNoteHeight);
-            dc.SetPen(wxPen(wxColour(220, 224, 226)));
+            dc.SetPen(wxPen(m_theme.noteSeparator));
             dc.DrawLine(kPianoRollLeftGutter, noteY, visibleRect.GetRight(), noteY);
             if (note % 12 == 0) {
-                dc.SetTextForeground(wxColour(90, 90, 90));
+                dc.SetTextForeground(m_theme.noteLabelText);
                 dc.DrawText(wxString::Format("C%d", (note / 12) - 1), 6, noteY - 1);
             }
         }
@@ -2890,14 +2995,14 @@ private:
 
             x = TickToX(gridTick);
             major = ((gridTick % quarterTicks) == 0);
-            dc.SetPen(wxPen(major ? wxColour(180, 186, 190) : wxColour(222, 226, 228)));
+            dc.SetPen(wxPen(major ? m_theme.majorGridLine : m_theme.minorGridLine));
             dc.DrawLine(x, gridTop, x, gridBottom);
             if (tickEnd - gridTick < stepTicks) {
                 break;
             }
         }
 
-        dc.SetPen(wxPen(wxColour(60, 60, 60)));
+        dc.SetPen(wxPen(m_theme.gutterSeparator));
         dc.DrawLine(kPianoRollLeftGutter, visibleRect.GetTop(), kPianoRollLeftGutter, visibleRect.GetBottom());
 
         if (HasTrack()) {
@@ -2965,7 +3070,7 @@ private:
                 /* Shaded region beyond end */
                 if (endX < visibleRect.GetRight()) {
                     dc.SetPen(*wxTRANSPARENT_PEN);
-                    dc.SetBrush(wxBrush(wxColour(0, 0, 0, 28)));
+                    dc.SetBrush(wxBrush(m_theme.endRegionShade));
                     dc.DrawRectangle(endX + 1,
                                      kPianoRollTopGutter,
                                      visibleRect.GetRight() - endX,

@@ -16,11 +16,13 @@
 - bankrecomp: wtv.hsb recomp prog 100 weirdness
 
 # Future
+- Grpahics for pitch envelope
 - Interpolation configuration (none, linear, cubic, etc, current is just on/off)
 - LZMA support for ZMF/NBS/C_SND
 - Neo Reverb for preview player
   - Custom .neoreverb support
   - means we need the reverb edit dialog from zefidi
+- Dark mode!
 
 # Harder stuff
 - Sound Bank Editor

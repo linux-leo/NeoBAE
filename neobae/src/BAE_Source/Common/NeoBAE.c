@@ -8694,6 +8694,8 @@ static void PV_PatchInstrumentEnvelopes(GM_Instrument *theI,
         pLFO->where_to_feed = PV_TranslateFromFileToMemoryID(
             (XDWORD)info->lfos[i].destination);
         pLFO->period = info->lfos[i].period;
+        if (pLFO->period != 0 && pLFO->period <= 512)
+            pLFO->period = 0; // disable invalid LFO period
         pLFO->waveShape = PV_TranslateFromFileToMemoryID(
             (XDWORD)info->lfos[i].waveShape);
         pLFO->DC_feed = info->lfos[i].DC_feed;

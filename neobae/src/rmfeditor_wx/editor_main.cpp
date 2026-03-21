@@ -51,7 +51,11 @@ extern "C" {
 #include <wx/msw/winundef.h>
 #endif // __WXMSW__
 
-#define VERSION "0.08a"
+#ifdef __WXGTK__
+#include <gtk/gtk.h>
+#endif // __WXGTK__
+
+#define VERSION "0.09a"
 
 namespace {
 
@@ -7976,11 +7980,59 @@ private:
 class EditorApp final : public wxApp {
 public:
     bool OnInit() override {
+        bool darkMode = false;
+
+#ifdef __WXMSW__
+        /* Windows: detect dark mode from registry, same as zefidi. */
+        {
+            HKEY key;
+            if (RegOpenKeyExA(HKEY_CURRENT_USER,
+                              "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                              0, KEY_READ, &key) == ERROR_SUCCESS) {
+                DWORD value;
+                DWORD size = sizeof(value);
+                DWORD type;
+                if (RegQueryValueExA(key, "AppsUseLightTheme", NULL, &type,
+                                     reinterpret_cast<BYTE *>(&value), &size) == ERROR_SUCCESS &&
+                    type == REG_DWORD) {
+                    darkMode = (value == 0);
+                }
+                RegCloseKey(key);
+            }
+            if (darkMode) {
+                /* wxWidgets 3.3+: enable dark mode for all controls and title bar. */
+                MSWEnableDarkMode();
+            }
+        }
+#endif // __WXMSW__
+
+#ifdef __WXGTK__
+        /* Linux/GTK: honour --dark command-line flag. */
+        {
+            wxString startupFile;
+            for (int i = 1; i < argc; ++i) {
+                if (argv[i] == "--dark") {
+                    darkMode = true;
+                }
+            }
+            if (darkMode) {
+                g_object_set(gtk_settings_get_default(),
+                             "gtk-application-prefer-dark-theme", TRUE, NULL);
+            }
+        }
+#endif // __WXGTK__
+
         auto *frame = new MainFrame();
         frame->Show(true);
 
-        if (argc > 1 && (argv[1].IsEmpty() == false)) {
-            wxString startupPath(argv[1]);
+        wxString startupPath;
+        for (int i = 1; i < argc; ++i) {
+            if (argv[i] == "--dark") continue;
+            if (startupPath.IsEmpty()) {
+                startupPath = argv[i];
+            }
+        }
+        if (!startupPath.IsEmpty()) {
             frame->CallAfter([frame, startupPath]() {
                 frame->OpenPathFromCli(startupPath);
             });

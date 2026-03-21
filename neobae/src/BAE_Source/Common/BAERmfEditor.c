@@ -12355,6 +12355,8 @@ BAEResult BAERmfEditorDocument_SetInstrumentExtInfo(BAERmfEditorDocument *docume
     {
         ext->lfos[i].destination = info->lfos[i].destination;
         ext->lfos[i].period = info->lfos[i].period;
+        if (ext->lfos[i].period != 0 && ext->lfos[i].period <= 512)
+            ext->lfos[i].period = 513; // engine requires period == 0 or > 512
         ext->lfos[i].waveShape = info->lfos[i].waveShape;
         ext->lfos[i].DC_feed = info->lfos[i].DC_feed;
         ext->lfos[i].level = info->lfos[i].level;
