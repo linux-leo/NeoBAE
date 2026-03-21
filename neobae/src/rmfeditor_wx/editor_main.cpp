@@ -72,8 +72,11 @@ static bool IsOpusCompressionType(BAERmfEditorCompressionType compressionType) {
         case BAE_EDITOR_COMPRESSION_OPUS_32K:
         case BAE_EDITOR_COMPRESSION_OPUS_48K:
         case BAE_EDITOR_COMPRESSION_OPUS_64K:
+        case BAE_EDITOR_COMPRESSION_OPUS_80K:
         case BAE_EDITOR_COMPRESSION_OPUS_96K:
         case BAE_EDITOR_COMPRESSION_OPUS_128K:
+        case BAE_EDITOR_COMPRESSION_OPUS_160K:
+        case BAE_EDITOR_COMPRESSION_OPUS_192K:
         case BAE_EDITOR_COMPRESSION_OPUS_256K:
             return true;
         default:
@@ -281,7 +284,7 @@ static bool UndoSnapshotsEqual(UndoDocumentState const &left, UndoDocumentState 
 class MainFrame final : public wxFrame {
 public:
     MainFrame()
-        : wxFrame(nullptr, wxID_ANY, wxString::Format("NeoBAE Studio v%s", kVersionString), wxDefaultPosition, wxSize(1400, 860)),
+        : wxFrame(nullptr, wxID_ANY, wxString::Format("NeoBAE Studio v%s", kVersionString), wxDefaultPosition, wxSize(1400, 940)),
           m_document(nullptr),
                     m_updatingControls(false),
                     m_editorNotebook(nullptr),
@@ -291,6 +294,11 @@ public:
                     m_playbackSong(nullptr),
                     m_notePreviewSong(nullptr),
                     m_keyboardPreviewSong(nullptr),
+                    m_bankPreviewSong(nullptr),
+                    m_bankPreviewSongStarted(false),
+                    m_bankPreviewLoadedInst(static_cast<BAE_INSTRUMENT>(-1)),
+                    m_bankPreviewDirtyApplied(false),
+                    m_hasBankDirtyExtInfo(false),
                     m_previewSound(nullptr),
                     m_playbackTimer(this, ID_PlaybackTimer),
                     m_notePreviewTimer(this, ID_NotePreviewTimer),
@@ -311,7 +319,7 @@ public:
                     m_hasPendingUndo(false),
                     m_restoringUndo(false),
                     m_hasUnsavedChanges(false) {
-                SetMinSize(wxSize(1280, 720));
+                SetMinSize(wxSize(1280, 800));
 #ifdef __WXMSW__
         SetIcon(wxICON(APPICON));
 #endif
@@ -561,8 +569,33 @@ public:
 
         m_editorNotebook->AddPage(splitter, "MIDI Editor", true);
         {
+            memset(&m_bankDirtyExtInfo, 0, sizeof(m_bankDirtyExtInfo));
             m_bankEditorPanel = CreateBankEditorPanel(m_editorNotebook);
             m_editorNotebook->AddPage(BankEditorPanel_AsWindow(m_bankEditorPanel), "Bank Editor", false);
+            BankEditorPanel_SetPreviewCallbacks(m_bankEditorPanel,
+                [this](unsigned char bank, unsigned char program, int note, int previewTag, bool isPercussion) {
+                    PlayBankPreviewNote(bank, program, note, previewTag, isPercussion);
+                },
+                [this](int previewTag) {
+                    StopBankPreviewNote(previewTag);
+                },
+                [this]() {
+                    StopBankPreview();
+                },
+                [this](BAERmfEditorInstrumentExtInfo const *info) {
+                    if (info) {
+                        m_bankDirtyExtInfo = *info;
+                        m_hasBankDirtyExtInfo = true;
+                        m_bankPreviewDirtyApplied = false;
+                        /* Force instrument reload so the patch is applied
+                         * on top of a fresh copy from the bank. */
+                        m_bankPreviewLoadedInst = static_cast<BAE_INSTRUMENT>(-1);
+                    } else {
+                        m_hasBankDirtyExtInfo = false;
+                        m_bankPreviewDirtyApplied = false;
+                        m_bankPreviewLoadedInst = static_cast<BAE_INSTRUMENT>(-1);
+                    }
+                });
         }
 
         CreateStatusBar(2);
@@ -650,6 +683,7 @@ public:
         StopPlayback(true);
         StopPianoRollPreview(true);
         StopKeyboardPreview();
+        StopBankPreview();
         StopPreviewSample();
         ShutdownPlaybackEngine();
     }
@@ -715,6 +749,20 @@ private:
     std::vector<unsigned char> m_notePreviewSongBlob;
     BAESong m_keyboardPreviewSong;
     std::vector<unsigned char> m_keyboardPreviewSongBlob;
+    BAESong m_bankPreviewSong;
+    bool m_bankPreviewSongStarted;
+    BAE_INSTRUMENT m_bankPreviewLoadedInst;
+    bool m_bankPreviewDirtyApplied;
+    std::vector<unsigned char> m_bankPreviewSongBlob;
+    struct BankPreviewNote {
+        unsigned char channel;
+        unsigned char note;
+        unsigned char program;
+        unsigned char bank;
+    };
+    std::unordered_map<int, BankPreviewNote> m_bankPreviewNotes;
+    BAERmfEditorInstrumentExtInfo m_bankDirtyExtInfo;
+    bool m_hasBankDirtyExtInfo;
     BAESound m_previewSound;
     std::unordered_map<int, BAESound> m_taggedPreviewSounds;
     struct TaggedInstrumentPreviewNote {
@@ -3935,6 +3983,178 @@ private:
         }
     }
 
+    /* ---- Bank editor preview ---- */
+
+    bool EnsureBankPreviewSong() {
+        if (m_bankPreviewSong) {
+            return true;
+        }
+        if (!EnsurePlaybackEngine()) {
+            return false;
+        }
+        /* Build a minimal empty MIDI to host the preview song.
+         * Format 0, 1 track, 120 ppqn, empty track with End-of-Track meta. */
+        static const unsigned char kMinimalMidi[] = {
+            'M','T','h','d', 0,0,0,6, 0,0, 0,1, 0,120,
+            'M','T','r','k', 0,0,0,4, 0,0xFF,0x2F,0x00
+        };
+        m_bankPreviewSongBlob.assign(kMinimalMidi, kMinimalMidi + sizeof(kMinimalMidi));
+        BAESong song = BAESong_New(m_playbackMixer);
+        if (!song) {
+            m_bankPreviewSongBlob.clear();
+            return false;
+        }
+        if (BAESong_LoadMidiFromMemory(song,
+                                        m_bankPreviewSongBlob.data(),
+                                        static_cast<uint32_t>(m_bankPreviewSongBlob.size()),
+                                        TRUE) != BAE_NO_ERROR) {
+            BAESong_Delete(song);
+            m_bankPreviewSongBlob.clear();
+            return false;
+        }
+        m_bankPreviewSong = song;
+        BAESong_Preroll(m_bankPreviewSong);
+        BAESong_SetVolume(m_bankPreviewSong, GetPreviewVolumeFixed());
+        BAESong_SetLoops(m_bankPreviewSong, 0);
+        return true;
+    }
+
+    void PlayBankPreviewNote(unsigned char bank, unsigned char program, int note, int previewTag, bool isPercussion) {
+        unsigned char channel;
+
+        if (!EnsureBankPreviewSong()) {
+            return;
+        }
+        if (isPercussion) {
+            /* Percussion instruments must use channel 9 (MIDI channel 10).
+             * The 'program' from the bank editor is instID%128, which is the
+             * note offset within the percussion bank.  Use it as the MIDI note
+             * and set the drum-kit program to 0. */
+            channel = 9;
+            note = static_cast<int>(program);  /* percussion note */
+            program = 0;                       /* drum kit 0 */
+        } else {
+            /* Map preview tags to channels like the keyboard preview does */
+            if (previewTag >= 'A' && previewTag <= 'Z') {
+                /* Musical typing key codes use alternating channels */
+                static const unsigned char kTagChannels[] = {
+                    0,1,2,3,4,5,6,7,8,15,10,11,12,13,14
+                };
+                int idx = previewTag - 'A';
+                channel = (idx < (int)(sizeof(kTagChannels)/sizeof(kTagChannels[0])))
+                    ? kTagChannels[idx] : 0;
+            } else {
+                channel = 0;
+            }
+            /* Avoid drums channel for melodic instruments */
+            if (channel == 9) {
+                channel = 10;
+            }
+        }
+
+        /* Stop any existing note on this tag */
+        StopBankPreviewNote(previewTag);
+
+        /* Set up channel state BEFORE the Preroll/Start cycle so the engine
+         * picks up the correct program and its ADSR/LFO/filter parameters. */
+        BAESong_UnmuteChannel(m_bankPreviewSong, channel);
+        BAESong_ControlChange(m_bankPreviewSong, channel, 7, 127, 0);
+        BAESong_ControlChange(m_bankPreviewSong, channel, 11, 127, 0);
+        BAESong_ControlChange(m_bankPreviewSong, channel, 10, 64, 0);
+        BAESong_ControlChange(m_bankPreviewSong, channel, 121, 0, 0);
+        BAESong_ControlChange(m_bankPreviewSong, channel, 127, 0, 0);
+        BAESong_ControlChange(m_bankPreviewSong, channel, 64, 0, 0);
+        BAESong_ControlChange(m_bankPreviewSong, channel, 66, 0, 0);
+        BAESong_ProgramBankChange(m_bankPreviewSong, channel, program,
+                                  RawMidiBankFromInternal(static_cast<uint16_t>(bank)), 0);
+
+        /* Only Preroll/Start the song once for the first note.  Doing it
+         * for every note resets all channel programs back to defaults via
+         * PV_ResetControlers, which causes a race where concurrent notes
+         * hear program 0 (standard piano) instead of the correct patch. */
+        if (!m_bankPreviewSongStarted) {
+            uint32_t songLengthUsec = 0;
+            BAESong_GetMicrosecondLength(m_bankPreviewSong, &songLengthUsec);
+            if (songLengthUsec > 0) {
+                BAESong_SetMicrosecondPosition(m_bankPreviewSong, songLengthUsec - 1);
+            }
+            BAESong_Preroll(m_bankPreviewSong);
+            BAESong_Start(m_bankPreviewSong, 0);
+            if (songLengthUsec > 0) {
+                BAESong_SetMicrosecondPosition(m_bankPreviewSong, songLengthUsec - 1);
+            }
+            m_bankPreviewSongStarted = true;
+        }
+
+        /* Pre-load the instrument once; reuse the cached version for
+         * subsequent keypresses of the same instrument.  This avoids
+         * the occasional load failure when the engine is busy. */
+        {
+            BAE_INSTRUMENT inst = TranslateBankProgramToInstrument(
+                static_cast<uint16_t>(bank), program, channel,
+                static_cast<unsigned char>(std::clamp(note, 0, 127)));
+            bool needsLoad = (inst != m_bankPreviewLoadedInst);
+            bool needsPatch = m_hasBankDirtyExtInfo && (!m_bankPreviewDirtyApplied || needsLoad);
+
+            if (needsLoad) {
+                if (BAESong_LoadInstrument(m_bankPreviewSong, inst) == BAE_NO_ERROR) {
+                    m_bankPreviewLoadedInst = inst;
+                    m_bankPreviewDirtyApplied = false;
+                }
+            }
+
+            if (needsPatch) {
+                BAESong_PatchLoadedInstrumentExtInfo(m_bankPreviewSong,
+                                                     inst, &m_bankDirtyExtInfo);
+                m_bankPreviewDirtyApplied = true;
+            }
+        }
+        BAESong_NoteOn(m_bankPreviewSong, channel,
+                        static_cast<unsigned char>(std::clamp(note, 0, 127)),
+                        100, 0);
+
+        BankPreviewNote bpn;
+        bpn.channel = channel;
+        bpn.note = static_cast<unsigned char>(std::clamp(note, 0, 127));
+        bpn.program = program;
+        bpn.bank = bank;
+        m_bankPreviewNotes[previewTag] = bpn;
+    }
+
+    void StopBankPreviewNote(int previewTag) {
+        if (!m_bankPreviewSong) {
+            return;
+        }
+        if (previewTag < 0) {
+            /* Stop all */
+            for (auto const &entry : m_bankPreviewNotes) {
+                BAESong_NoteOff(m_bankPreviewSong, entry.second.channel,
+                                entry.second.note, 0, 0);
+            }
+            m_bankPreviewNotes.clear();
+        } else {
+            auto it = m_bankPreviewNotes.find(previewTag);
+            if (it != m_bankPreviewNotes.end()) {
+                BAESong_NoteOff(m_bankPreviewSong, it->second.channel,
+                                it->second.note, 0, 0);
+                m_bankPreviewNotes.erase(it);
+            }
+        }
+    }
+
+    void StopBankPreview() {
+        if (m_bankPreviewSong) {
+            BAESong_Panic(m_bankPreviewSong);
+            BAESong_Delete(m_bankPreviewSong);
+            m_bankPreviewSong = nullptr;
+            m_bankPreviewSongStarted = false;
+            m_bankPreviewLoadedInst = static_cast<BAE_INSTRUMENT>(-1);
+            m_bankPreviewDirtyApplied = false;
+            m_bankPreviewSongBlob.clear();
+            m_bankPreviewNotes.clear();
+        }
+    }
+
     void PreviewPianoRollNote(uint16_t bank,
                               unsigned char program,
                               unsigned char noteChannel,
@@ -4158,8 +4378,11 @@ private:
             case BAE_EDITOR_COMPRESSION_OPUS_32K:
             case BAE_EDITOR_COMPRESSION_OPUS_48K:
             case BAE_EDITOR_COMPRESSION_OPUS_64K:
+            case BAE_EDITOR_COMPRESSION_OPUS_80K:
             case BAE_EDITOR_COMPRESSION_OPUS_96K:
             case BAE_EDITOR_COMPRESSION_OPUS_128K:
+            case BAE_EDITOR_COMPRESSION_OPUS_160K:
+            case BAE_EDITOR_COMPRESSION_OPUS_192K:
             case BAE_EDITOR_COMPRESSION_OPUS_256K:
                 samplePath = sampleBasePath + ".opus";
                 break;
@@ -5906,6 +6129,9 @@ private:
     void OnPreviewVolumeChanged(wxCommandEvent &) {
         if (m_playbackSong) {
             BAESong_SetVolume(m_playbackSong, GetPreviewVolumeFixed());
+        }
+        if (m_bankPreviewSong) {
+            BAESong_SetVolume(m_bankPreviewSong, GetPreviewVolumeFixed());
         }
     }
 

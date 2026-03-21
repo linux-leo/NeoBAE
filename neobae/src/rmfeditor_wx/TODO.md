@@ -49,17 +49,18 @@
 
 # 0.08a
 - ~~Resizable tracks (allow user to expand or shrink the track by click/dragging the far right end of the ruler)~~
+- Replacing a sample does not update the original sample node in the tree.
+  - Creates a new duplicate sample entry, and only the currently edited instrument is updated to use it, leaving other instruments still pointing to the old sample.
+- Bank editor
+  - need killswitch for bad ADSR
+  - need apply button
+  - make sure we load the edited bank (not original) into memory when switching to midi tab
+- Fix pitch issues with bank compressor
 
 # Future
 - ~~Implement ZSB (Zefie Sound Bank), same deal as RMF/ZMF, used for newer codecs. Uses ZREZ.~~
 - Interpolation configuration (none, linear, cubic, etc, current is just on/off)
-- Tab design and Bank Editor, one tab for MIDI data (current), one for Bank Editing
-  - Bank Edit tab has all instruments/samples listed in a large tree
-  - Context menu options for Clone/Alias functionality
-  - Context menu for compressing one instrument's samples or All instruments samples in the bank like we have for songs
-  - Maybe MIDI Data and Bank Editor should be mutually exclusive (show midi data for MID/RMF/ZMF, show Bank Editor for HSB/ZSB)
-  - Tabbed interface, when switching from bank editor to midi editor we should load the bank in memory from the bank editor for realtime usage
-
+- Make piano in bank editor and instrument editor scrollable for full range
 - Allow for automation like Volume to be able have a slide on it so its easy to make a fadeout/fadein for example, the edit dialog could have "start (item)" "end (item)"
 - Neo Reverb for preview player
   - Custom .neoreverb support

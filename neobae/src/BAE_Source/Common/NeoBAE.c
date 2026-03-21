@@ -8573,6 +8573,226 @@ BAEResult BAESong_UnloadInstrument(BAESong song, BAE_INSTRUMENT instrument)
     return BAE_TranslateOPErr(err);
 }
 
+// BAESong_PatchLoadedInstrumentExtInfo()
+// --------------------------------------
+// Modify the ADSR/LFO/LPF parameters of an already-loaded instrument
+// in place so that subsequent notes hear the modified params.
+//
+static void PV_PatchInstrumentEnvelopes(GM_Instrument *theI,
+                                         BAERmfEditorInstrumentExtInfo const *info)
+{
+    int32_t i, j;
+
+    /* Pan placement */
+    theI->panPlacement = (XSWORD)info->panPlacement;
+
+    /* ADSR envelope */
+    for (i = 0; i < (int32_t)info->volumeADSR.stageCount && i < ADSR_STAGES; i++)
+    {
+        theI->volumeADSRRecord.ADSRLevel[i] = info->volumeADSR.stages[i].level;
+        theI->volumeADSRRecord.ADSRTime[i] = info->volumeADSR.stages[i].time;
+        theI->volumeADSRRecord.ADSRFlags[i] =
+            PV_TranslateFromFileToMemoryID((XDWORD)info->volumeADSR.stages[i].flags);
+    }
+    for (; i < ADSR_STAGES; i++)
+    {
+        theI->volumeADSRRecord.ADSRLevel[i] = 0;
+        theI->volumeADSRRecord.ADSRTime[i] = 0;
+        theI->volumeADSRRecord.ADSRFlags[i] = ADSR_OFF;
+    }
+
+    /* LPF */
+    theI->LPF_frequency = info->LPF_frequency;
+    theI->LPF_resonance = info->LPF_resonance;
+    theI->LPF_lowpassAmount = info->LPF_lowpassAmount;
+
+    /* LFOs */
+    theI->LFORecordCount = 0;
+    for (i = 0; i < (int32_t)info->lfoCount && i < MAX_LFOS; i++)
+    {
+        GM_LFO *pLFO = &theI->LFORecords[i];
+        pLFO->where_to_feed = PV_TranslateFromFileToMemoryID(
+            (XDWORD)info->lfos[i].destination);
+        pLFO->period = info->lfos[i].period;
+        pLFO->waveShape = PV_TranslateFromFileToMemoryID(
+            (XDWORD)info->lfos[i].waveShape);
+        pLFO->DC_feed = info->lfos[i].DC_feed;
+        pLFO->level = info->lfos[i].level;
+
+        for (j = 0; j < (int32_t)info->lfos[i].adsr.stageCount && j < ADSR_STAGES; j++)
+        {
+            pLFO->a.ADSRLevel[j] = info->lfos[i].adsr.stages[j].level;
+            pLFO->a.ADSRTime[j] = info->lfos[i].adsr.stages[j].time;
+            pLFO->a.ADSRFlags[j] = PV_TranslateFromFileToMemoryID(
+                (XDWORD)info->lfos[i].adsr.stages[j].flags);
+        }
+        for (; j < ADSR_STAGES; j++)
+        {
+            pLFO->a.ADSRLevel[j] = 0;
+            pLFO->a.ADSRTime[j] = 0;
+            pLFO->a.ADSRFlags[j] = ADSR_OFF;
+        }
+        pLFO->a.currentTime = 0;
+        pLFO->a.currentPosition = 0;
+        pLFO->a.currentLevel = 0;
+        pLFO->a.previousTarget = 0;
+        pLFO->a.mode = 0;
+        pLFO->a.sustainingDecayLevel = XFIXED_1;
+        pLFO->currentWaveValue = 0;
+        pLFO->currentTime = 0;
+        pLFO->LFOcurrentTime = 0;
+        theI->LFORecordCount++;
+    }
+
+    /* Curves (tie-from/tie-to records for mod wheel depth modulation etc.) */
+    theI->curveRecordCount = 0;
+    for (i = 0; i < (int32_t)info->curveCount && i < MAX_CURVES; i++)
+    {
+        GM_TieTo *pCurve = &theI->curve[i];
+        pCurve->tieFrom = PV_TranslateFromFileToMemoryID(
+            (XDWORD)info->curves[i].tieFrom);
+        pCurve->tieTo = PV_TranslateFromFileToMemoryID(
+            (XDWORD)info->curves[i].tieTo);
+        pCurve->curveCount = info->curves[i].curveCount;
+        if (pCurve->curveCount > MAX_CURVES)
+        {
+            pCurve->curveCount = MAX_CURVES;
+        }
+        for (j = 0; j < pCurve->curveCount && j < MAX_CURVES; j++)
+        {
+            pCurve->from_Value[j] = info->curves[i].from_Value[j];
+            pCurve->to_Scalar[j] = info->curves[i].to_Scalar[j];
+        }
+        theI->curveRecordCount++;
+    }
+}
+
+BAEResult BAESong_PatchLoadedInstrumentExtInfo(BAESong song,
+                                               BAE_INSTRUMENT instrument,
+                                               BAERmfEditorInstrumentExtInfo const *info)
+{
+    OPErr err;
+    GM_Song *pSong;
+    GM_Instrument *theI;
+    XLongResourceID realInstrument;
+
+    err = NO_ERR;
+    if (!info)
+    {
+        return BAE_PARAM_ERR;
+    }
+    if ((song) && (song->mID == OBJECT_ID))
+    {
+        BAE_AcquireMutex(song->mLock);
+        pSong = song->pSong;
+        if (!pSong)
+        {
+            BAE_ReleaseMutex(song->mLock);
+            return BAE_NOT_SETUP;
+        }
+
+        if (GM_GetSongInstrumentRemap(pSong, (XLongResourceID)instrument,
+                                       &realInstrument) != NO_ERR)
+        {
+            realInstrument = (XLongResourceID)instrument;
+        }
+        if (realInstrument < 0 ||
+            realInstrument >= (XLongResourceID)(MAX_INSTRUMENTS * MAX_BANKS))
+        {
+            BAE_ReleaseMutex(song->mLock);
+            return BAE_PARAM_ERR;
+        }
+
+        theI = pSong->instrumentData[realInstrument];
+        if (!theI)
+        {
+            BAE_ReleaseMutex(song->mLock);
+            return BAE_NOT_SETUP;
+        }
+
+        /* Patch the main instrument */
+        PV_PatchInstrumentEnvelopes(theI, info);
+
+        /* If this is a keysplit instrument, propagate to all sub-instruments */
+        if (theI->doKeymapSplit)
+        {
+            XWORD splitCount = theI->u.k.KeymapSplitCount;
+            XWORD s;
+            for (s = 0; s < splitCount; s++)
+            {
+                GM_Instrument *theS = theI->u.k.keySplits[s].pSplitInstrument;
+                if (theS)
+                {
+                    PV_PatchInstrumentEnvelopes(theS, info);
+                }
+            }
+        }
+
+        /* Sample-level overrides (root key, sample rate, loop, key range) */
+        if (info->hasSampleOverride)
+        {
+            uint32_t idx = info->sampleOverrideIndex;
+            if (theI->doKeymapSplit)
+            {
+                XWORD splitCount = theI->u.k.KeymapSplitCount;
+                if (idx < (uint32_t)splitCount)
+                {
+                    GM_KeymapSplit *ks = &theI->u.k.keySplits[idx];
+                    GM_Instrument *theS = ks->pSplitInstrument;
+                    ks->lowMidi = info->sampleLowKey;
+                    ks->highMidi = info->sampleHighKey;
+                    ks->miscParameter1 = (XSWORD)info->sampleRootKey;
+                    ks->miscParameter2 = (XSWORD)info->sampleSplitVolume;
+                    if (theS && !theS->doKeymapSplit)
+                    {
+                        theS->u.w.baseMidiPitch = (XWORD)info->sampleRootKey;
+                        theS->u.w.sampledRate = (XFIXED)((XDWORD)info->sampleRate << 16);
+                        theS->u.w.startLoop = (XDWORD)info->sampleLoopStart;
+                        theS->u.w.endLoop = (XDWORD)info->sampleLoopEnd;
+                        /* GenSynth uses miscParameter1/2 from the sub-instrument
+                         * when useSoundModifierAsRootKey is TRUE (HSB/SF2 banks). */
+                        if (theS->useSoundModifierAsRootKey)
+                        {
+                            theS->miscParameter1 = (XSWORD)info->sampleRootKey;
+                        }
+                        theS->miscParameter2 = (XSWORD)info->sampleSplitVolume;
+                    }
+                }
+            }
+            else
+            {
+                /* Non-split instrument: patch the base waveform directly */
+                if (idx == 0)
+                {
+                    theI->u.w.baseMidiPitch = (XWORD)info->sampleRootKey;
+                    theI->u.w.sampledRate = (XFIXED)((XDWORD)info->sampleRate << 16);
+                    theI->u.w.startLoop = (XDWORD)info->sampleLoopStart;
+                    theI->u.w.endLoop = (XDWORD)info->sampleLoopEnd;
+                    if (theI->useSoundModifierAsRootKey)
+                    {
+                        theI->miscParameter1 = (XSWORD)info->sampleRootKey;
+                    }
+                    theI->miscParameter2 = (XSWORD)info->sampleSplitVolume;
+                }
+            }
+            BAE_PRINTF("PatchExtInfo: sampleOverride idx=%u rootKey=%u rate=%u loop=%u-%u lowKey=%u highKey=%u splitVol=%d smod=%d\n",
+                       idx, (unsigned)info->sampleRootKey, info->sampleRate,
+                       info->sampleLoopStart, info->sampleLoopEnd,
+                       (unsigned)info->sampleLowKey, (unsigned)info->sampleHighKey,
+                       (int)info->sampleSplitVolume,
+                       theI->doKeymapSplit ? (theI->u.k.keySplits[idx].pSplitInstrument ?
+                           theI->u.k.keySplits[idx].pSplitInstrument->useSoundModifierAsRootKey : -1) : theI->useSoundModifierAsRootKey);
+        }
+
+        BAE_ReleaseMutex(song->mLock);
+    }
+    else
+    {
+        err = NULL_OBJECT;
+    }
+    return BAE_TranslateOPErr(err);
+}
+
 // BAESong_IsInstrumentLoaded()
 // --------------------------------------
 //
@@ -8999,6 +9219,31 @@ BAEResult BAESong_AllNotesOff(BAESong song, uint32_t time)
         }
 
         QGM_AllNotesOff(song->pSong, time);
+        BAE_ReleaseMutex(song->mLock);
+    }
+    else
+    {
+        err = NULL_OBJECT;
+    }
+    return BAE_TranslateOPErr(err);
+}
+
+// BAESong_Panic()
+// --------------------------------------
+// Hard-kill all active voices for this song, bypassing ADSR release,
+// then stop the song.
+// --------------------------------------
+BAEResult BAESong_Panic(BAESong song)
+{
+    OPErr err;
+
+    err = NO_ERR;
+    if ((song) && (song->mID == OBJECT_ID))
+    {
+        BAE_AcquireMutex(song->mLock);
+        GM_KillSongNotes(song->pSong);
+        GM_KillSongEventsFromQueue(song->pSong);
+        PV_BAESong_Stop(song, FALSE);
         BAE_ReleaseMutex(song->mLock);
     }
     else

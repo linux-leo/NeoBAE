@@ -1956,6 +1956,9 @@ typedef int32_t UNIT_TYPE;
     XDWORD GM_GetSongTempoInBeatsPerMinute(GM_Song *pSong);
 
     // Instrument API
+    // Translate a FOUR_CHAR file-format ID to the compact in-memory UNIT_TYPE.
+    UNIT_TYPE PV_TranslateFromFileToMemoryID(XDWORD fileUnitType);
+
     // Given an instrument number from 0 to MAX_INSTRUMENTS*MAX_BANKS, this will load that instrument into the musicvars globals, including
     // splits. The instrument is assumed to be the real instrument. No remaps or aliases are taken care of here
     OPErr GM_LoadInstrument(GM_Song *pSong,

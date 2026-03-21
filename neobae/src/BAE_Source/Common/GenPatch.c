@@ -253,7 +253,7 @@ typedef struct InstrumentResourceHeaderView
 {
     XShortResourceID sndResourceID;
     int16_t          midiRootKey;
-    uint8_t          panPlacement;
+    int8_t           panPlacement;
     uint8_t          flags1;
     uint8_t          flags2;
     int8_t           smodResourceID;
@@ -285,7 +285,7 @@ static InstrumentResourceHeaderView PV_ReadInstrumentHeader(const InstrumentReso
 
     view.sndResourceID = (XShortResourceID)XGetShort(p + kInstOffset_sndResourceID);
     view.midiRootKey = (int16_t)XGetShort(p + kInstOffset_midiRootKey);
-    view.panPlacement = p[kInstOffset_panPlacement];
+    view.panPlacement = (int8_t)p[kInstOffset_panPlacement];
     view.flags1 = p[kInstOffset_flags1];
     view.flags2 = p[kInstOffset_flags2];
     view.smodResourceID = (int8_t)p[kInstOffset_smodResourceID];
@@ -379,7 +379,7 @@ static void PV_ProcessSampleWithSMOD(void *pSample,
 
 // All instrument control identifiers are stored in the file as 4 bytes. This function
 // translates between the larger 4 byte id into a smaller 1 byte ID for in memory use.
-static UNIT_TYPE PV_TranslateFromFileToMemoryID(XDWORD fileUnitType)
+UNIT_TYPE PV_TranslateFromFileToMemoryID(XDWORD fileUnitType)
 {
 #if USE_MEMORY_OPTS == 0
     return fileUnitType;

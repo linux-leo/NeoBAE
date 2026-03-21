@@ -2846,7 +2846,7 @@ private:
             dc.DrawLine(kPianoRollLeftGutter, noteY, visibleRect.GetRight(), noteY);
             if (note % 12 == 0) {
                 dc.SetTextForeground(wxColour(90, 90, 90));
-                dc.DrawText(wxString::Format("C%d", note / 12), 6, noteY - 1);
+                dc.DrawText(wxString::Format("C%d", (note / 12) - 1), 6, noteY - 1);
             }
         }
 

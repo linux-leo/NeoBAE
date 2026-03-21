@@ -21,6 +21,38 @@
 #include <X_Formats.h>
 #include <GenSnd.h>
 
+/* ── Skip-programs list ─────────────────────────────────────────── */
+
+#define MAX_SKIP_PROGRAMS 256
+
+static uint32_t skipPrograms[MAX_SKIP_PROGRAMS];
+static int      skipProgramCount = 0;
+
+/* Parse a comma-separated list of program numbers into skipPrograms[]. */
+static void parseSkipPrograms(const char *str)
+{
+    const char *p = str;
+    skipProgramCount = 0;
+    while (*p && skipProgramCount < MAX_SKIP_PROGRAMS)
+    {
+        while (*p == ',' || *p == ' ') p++;
+        if (*p == '\0') break;
+        skipPrograms[skipProgramCount++] = (uint32_t)atol(p);
+        while (*p && *p != ',') p++;
+    }
+}
+
+static int isSkippedProgram(uint32_t program)
+{
+    int i;
+    for (i = 0; i < skipProgramCount; i++)
+    {
+        if (skipPrograms[i] == program)
+            return 1;
+    }
+    return 0;
+}
+
 /* ── Codec table ────────────────────────────────────────────────── */
 
 enum
@@ -95,8 +127,11 @@ static const BitrateEntry opusBitrates[] =
     {  32, C_OPUS, CS_OPUS_32K  },
     {  48, C_OPUS, CS_OPUS_48K  },
     {  64, C_OPUS, CS_OPUS_64K  },
+    {  80, C_OPUS, CS_OPUS_80K  },
     {  96, C_OPUS, CS_OPUS_96K  },
     { 128, C_OPUS, CS_OPUS_128K },
+    { 160, C_OPUS, CS_OPUS_160K },
+    { 192, C_OPUS, CS_OPUS_192K },
     { 256, C_OPUS, CS_OPUS_256K }
 };
 
@@ -104,12 +139,19 @@ static const BitrateEntry opusBitrates[] =
 
 /* ── Compression type name helper ───────────────────────────────── */
 
-static const char *compressionName(XResourceType ct)
+static const char *compressionName(XResourceType ct, uint32_t subType)
 {
+    static char combined[48];
+    const char *base = NULL;
+    const char *bitrate = NULL;
+
     switch ((uint32_t)ct)
     {
         case 0:                                     return "PCM";
+        case FOUR_CHAR('n','o','n','e'):            return "PCM";
         case FOUR_CHAR('i','m','a','4'):            return "IMA4/ADPCM";
+        case FOUR_CHAR('i','m','a','W'):            return "IMA4/ADPCM";
+        case FOUR_CHAR('i','m','a','3'):            return "IMA3/ADPCM";
         case FOUR_CHAR('M','A','C','3'):            return "MACE3";
         case FOUR_CHAR('M','A','C','6'):            return "MACE6";
         case FOUR_CHAR('u','l','a','w'):            return "uLaw";
@@ -129,10 +171,43 @@ static const char *compressionName(XResourceType ct)
         case FOUR_CHAR('m','p','g','l'):            return "MP3 (256k)";
         case FOUR_CHAR('m','p','g','m'):            return "MP3 (320k)";
         case FOUR_CHAR('f','L','a','C'):            return "FLAC";
-        case FOUR_CHAR('O','g','g','V'):            return "Vorbis";
-        case FOUR_CHAR('O','g','g','O'):            return "Opus";
+        case FOUR_CHAR('O','g','g','V'):            base = "Vorbis"; break;
+        case FOUR_CHAR('O','g','g','O'):            base = "Opus"; break;
         default:                                    return "Unknown";
     }
+
+    /* Vorbis/Opus — append bitrate from sub-type if available */
+    switch ((uint32_t)subType)
+    {
+        case FOUR_CHAR('v','0','3','2'): bitrate = " (32k)"; break;
+        case FOUR_CHAR('v','0','4','8'): bitrate = " (48k)"; break;
+        case FOUR_CHAR('v','0','6','4'): bitrate = " (64k)"; break;
+        case FOUR_CHAR('v','0','8','0'): bitrate = " (80k)"; break;
+        case FOUR_CHAR('v','0','9','6'): bitrate = " (96k)"; break;
+        case FOUR_CHAR('v','1','2','8'): bitrate = " (128k)"; break;
+        case FOUR_CHAR('v','1','6','0'): bitrate = " (160k)"; break;
+        case FOUR_CHAR('v','1','9','2'): bitrate = " (192k)"; break;
+        case FOUR_CHAR('v','2','5','6'): bitrate = " (256k)"; break;
+        case FOUR_CHAR('o','0','1','2'): bitrate = " (12k)"; break;
+        case FOUR_CHAR('o','0','1','6'): bitrate = " (16k)"; break;
+        case FOUR_CHAR('o','0','2','4'): bitrate = " (24k)"; break;
+        case FOUR_CHAR('o','0','3','2'): bitrate = " (32k)"; break;
+        case FOUR_CHAR('o','0','4','8'): bitrate = " (48k)"; break;
+        case FOUR_CHAR('o','0','6','4'): bitrate = " (64k)"; break;
+        case FOUR_CHAR('o','0','8','0'): bitrate = " (80k)"; break;
+        case FOUR_CHAR('o','0','9','6'): bitrate = " (96k)"; break;
+        case FOUR_CHAR('o','1','2','8'): bitrate = " (128k)"; break;
+        case FOUR_CHAR('o','1','6','0'): bitrate = " (160k)"; break;
+        case FOUR_CHAR('o','1','9','2'): bitrate = " (192k)"; break;
+        case FOUR_CHAR('o','2','5','6'): bitrate = " (256k)"; break;
+        default: break;
+    }
+    if (bitrate)
+    {
+        snprintf(combined, sizeof(combined), "%s%s", base, bitrate);
+        return combined;
+    }
+    return base;
 }
 
 /* ── Opus sub-type packing ──────────────────────────────────────── */
@@ -150,9 +225,12 @@ static uint32_t opusSubTypeToIndex(SndCompressionSubType subType)
         case CS_OPUS_32K:  return 3;
         case CS_OPUS_48K:  return 4;
         case CS_OPUS_64K:  return 5;
+        case CS_OPUS_80K:  return 9;
         case CS_OPUS_96K:  return 6;
+        case CS_OPUS_128K: return 7;
+        case CS_OPUS_160K: return 10;
+        case CS_OPUS_192K: return 11;
         case CS_OPUS_256K: return 8;
-        case CS_OPUS_128K:
         default:           return 7;
     }
 }
@@ -161,6 +239,34 @@ static SndCompressionSubType packOpusSubType(SndCompressionSubType baseSubType)
 {
     /* Audio mode = 0 in high 16 bits */
     return (SndCompressionSubType)(opusSubTypeToIndex(baseSubType) & 0xFFFFU);
+}
+
+/* Store the compression sub-type tag in a Type3 SND resource so it can be
+ * read back by PV_GetStoredCompressionSubTypeFromSnd (in BAERmfEditor.c).
+ * Only meaningful for Vorbis and Opus. */
+#define BANKRECOMP_SUBTYPE_TAG  FOUR_CHAR('b','q','s','t')
+
+static void storeCompressionSubType(XPTR sndData, int32_t sndSize,
+                                    SndCompressionType compressionType,
+                                    SndCompressionSubType compressionSubType)
+{
+    XSndHeader3 *header3;
+
+    if (!sndData || sndSize < (int32_t)sizeof(XSndHeader3))
+    {
+        return;
+    }
+    if (compressionType != C_VORBIS && compressionType != C_OPUS)
+    {
+        return;
+    }
+    header3 = (XSndHeader3 *)sndData;
+    if (XGetShort(&header3->type) != XThirdSoundFormat)
+    {
+        return;
+    }
+    XPutLong(&header3->sndBuffer.reserved3[0], (uint32_t)BANKRECOMP_SUBTYPE_TAG);
+    XPutLong(&header3->sndBuffer.reserved3[1], (uint32_t)compressionSubType);
 }
 
 /* ── Help output ────────────────────────────────────────────────── */
@@ -172,6 +278,8 @@ static void printHelp(const char *progName)
     printf("Options:\n");
     printf("  --codec N      Target codec number (see list below)\n");
     printf("  --bitrate N    Target bitrate in kbps (e.g. 128) or bps (e.g. 128000)\n");
+    printf("  --minframes N  Skip recompression for samples with fewer than N frames\n");
+    printf("  --skip P,P,... Skip recompression for listed program numbers\n");
     printf("  --help         Show this help message\n\n");
     printf("Codecs:\n");
     printf("  %d  %-22s  (no bitrate option)\n", CODEC_PCM, codecNames[CODEC_PCM]);
@@ -181,9 +289,9 @@ static void printHelp(const char *progName)
     printf("  %d  %-22s  bitrates: 32, 48, 64, 80, 96, 128, 160, 192, 256 kbps\n",
            CODEC_VORBIS, codecNames[CODEC_VORBIS]);
     printf("  %d  %-22s  (no bitrate option, lossless)\n", CODEC_FLAC, codecNames[CODEC_FLAC]);
-    printf("  %d  %-22s  bitrates: 12, 16, 24, 32, 48, 64, 96, 128, 256 kbps\n",
+    printf("  %d  %-22s  bitrates: 12, 16, 24, 32, 48, 64, 80, 96, 128, 160, 192, 256 kbps\n",
            CODEC_OPUS, codecNames[CODEC_OPUS]);
-    printf("  %d  %-22s  bitrates: 12, 16, 24, 32, 48, 64, 96, 128, 256 kbps\n",
+    printf("  %d  %-22s  bitrates: 12, 16, 24, 32, 48, 64, 80, 96, 128, 160, 192, 256 kbps\n",
            CODEC_OPUS_RT, codecNames[CODEC_OPUS_RT]);
     printf("\nNote: VORBIS, FLAC, OPUS codecs force ZSB (ZREZ) output format.\n");
     printf("      Without --codec, the bank is resaved with original compression.\n");
@@ -308,70 +416,61 @@ static XPTR recompressSnd(XPTR sndData, int32_t sndSize,
     SampleDataInfo sampleInfo;
     XPTR samplePtr;
     GM_Waveform waveform;
-    GM_Waveform decoded;
     OPErr err;
     XPTR newSndData;
     SndCompressionSubType encodeSub;
-    XFIXED roundTripSourceRate;
+    XFIXED sourceRate;
+    XResourceType origCompression;
 
+    (void)sndSize;
     *outSize = 0;
 
-    /* Parse the SND to get sample info */
+    /* Decode the SND resource to PCM.
+     * XGetSamplePtrFromSnd handles ALL compression types internally —
+     * it decodes compressed data and returns a PCM pointer.  For PCM
+     * input it returns a pointer into sndData; for compressed input
+     * it allocates a new buffer.  Note: sampleInfo.compressionType is
+     * preserved as the ORIGINAL codec (not C_NONE) even though the
+     * returned data is decoded PCM. */
     XSetMemory(&sampleInfo, (int32_t)sizeof(sampleInfo), 0);
     samplePtr = XGetSamplePtrFromSnd(sndData, &sampleInfo);
-    if (!samplePtr || sampleInfo.size == 0)
+    if (!samplePtr || sampleInfo.frames == 0)
     {
-        fprintf(stderr, "      Warning: failed to parse SND resource, skipping\n");
+        fprintf(stderr, "      Warning: failed to decode SND resource, skipping\n");
         return NULL;
     }
 
-    /* Build a GM_Waveform from the parsed info */
+    /* Remember original compression and source rate before we modify anything */
+    origCompression = sampleInfo.compressionType;
+    sourceRate = sampleInfo.rate;
+
+    /* Build a GM_Waveform from the decoded data.
+     * Force compressionType to C_NONE since XGetSamplePtrFromSnd already
+     * decoded any compressed data — do NOT call XDecodeSampleData again. */
     XSetMemory(&waveform, (int32_t)sizeof(waveform), 0);
     XTranslateFromSampleDataToWaveform(&sampleInfo, &waveform);
     waveform.theWaveform = samplePtr;
-    waveform.waveSize = sampleInfo.size;
+    waveform.compressionType = C_NONE;
+    waveform.waveSize = sampleInfo.frames * sampleInfo.channels * (sampleInfo.bitSize / 8);
 
-    /* Decode compressed data to PCM if necessary */
-    if (waveform.compressionType != (XDWORD)C_NONE)
+    /* For Opus target: save the source rate so we can restore correct pitch.
+     * The Opus encoder always resamples to 48kHz and stores 48kHz in the SND
+     * header.  Without the round-trip flag the engine would use 48kHz for pitch
+     * calculation, which is wrong when the original was at a different rate.
+     * We set the round-trip flag for BOTH standard and round-trip Opus modes
+     * so the engine restores the correct pitch. */
+    if (targetComp == C_OPUS)
     {
-        XSetMemory(&decoded, (int32_t)sizeof(decoded), 0);
-        err = XDecodeSampleData(&waveform, 0, &decoded);
-
-        /* Free the decoded sample pointer if XGetSamplePtrFromSnd allocated it
-         * (compressed formats allocate; PCM returns a pointer into pRes) */
-        if (samplePtr != NULL && samplePtr != sndData &&
-            (char *)samplePtr < (char *)sndData ||
-            (char *)samplePtr >= (char *)sndData + sndSize)
+        if (opusRoundTrip)
         {
-            XDisposePtr(samplePtr);
+            /* Round-trip: spoof rate to 48kHz so encoder skips resampling */
+            waveform.sampledRate = (XFIXED)(48000U << 16);
         }
-
-        if (err != NO_ERR)
-        {
-            fprintf(stderr, "      Warning: decode failed (err=%d), skipping\n", (int)err);
-            return NULL;
-        }
-        waveform = decoded;
-        /* decoded.theWaveform is now owned by us, freed after encode */
-    }
-    else
-    {
-        /* PCM data — theWaveform points into sndData, no separate allocation to free.
-         * If target is already PCM, nothing to do. */
+        /* Standard: leave waveform.sampledRate as-is; encoder will resample */
     }
 
-    roundTripSourceRate = 0;
-
-    /* For Opus round-trip: spoof the rate to 48000Hz so the encoder doesn't
-     * resample, then restore the real rate in the SND header after encoding. */
-    if (opusRoundTrip && targetComp == C_OPUS)
-    {
-        roundTripSourceRate = waveform.sampledRate;
-        waveform.sampledRate = (XFIXED)(48000U << 16);
-    }
-
-    /* Prepare the encode sub-type.  For Opus, pack into the index format
-     * that XCreateSoundObjectFromData expects. */
+    /* For Opus, pack sub-type into the index format that
+     * XCreateSoundObjectFromData expects. */
     encodeSub = targetSub;
     if (targetComp == C_OPUS)
     {
@@ -384,12 +483,12 @@ static XPTR recompressSnd(XPTR sndData, int32_t sndSize,
                                      targetComp, encodeSub,
                                      NULL, NULL);
 
-    /* Free decoded PCM if we allocated it */
-    if (waveform.compressionType == (XDWORD)C_NONE &&
-        waveform.theWaveform != samplePtr &&
-        waveform.theWaveform != NULL)
+    /* Free the decoded PCM buffer if XGetSamplePtrFromSnd allocated it.
+     * Compressed sources → newly allocated buffer (must free).
+     * PCM sources → pointer into sndData (must NOT free). */
+    if (origCompression != (XResourceType)C_NONE && samplePtr != NULL)
     {
-        XDisposePtr(waveform.theWaveform);
+        XDisposePtr(samplePtr);
     }
 
     if (err != NO_ERR || !newSndData)
@@ -398,14 +497,19 @@ static XPTR recompressSnd(XPTR sndData, int32_t sndSize,
         return NULL;
     }
 
-    /* For Opus round-trip, restore the original sample rate and set the flag */
-    if (opusRoundTrip && roundTripSourceRate != 0)
+    /* For Opus: restore the original sample rate and set round-trip flag so
+     * the engine uses the correct rate for pitch calculation instead of 48kHz. */
+    if (targetComp == C_OPUS && sourceRate != 0)
     {
-        XSetSoundSampleRate(newSndData, roundTripSourceRate);
+        XSetSoundSampleRate(newSndData, sourceRate);
         XSetSoundOpusRoundTripFlag(newSndData, TRUE);
     }
 
-    /* Set loop points from original sample */
+    /* Store compression sub-type tag so bitrate can be read back (Vorbis/Opus) */
+    storeCompressionSubType(newSndData, XGetPtrSize(newSndData),
+                            targetComp, targetSub);
+
+    /* Restore original loop points */
     XSetSoundLoopPoints(newSndData, (int32_t)sampleInfo.loopStart,
                         (int32_t)sampleInfo.loopEnd);
 
@@ -426,6 +530,7 @@ int main(int argc, char *argv[])
     const char *outputPath = NULL;
     int codec = -1;           /* -1 = no recompression */
     uint32_t bitrateKbps = 0; /* 0 = use default for codec */
+    uint32_t minFrames = 0;   /* 0 = compress all samples */
     int argIdx;
     SndCompressionType targetComp;
     SndCompressionSubType targetSub;
@@ -462,6 +567,24 @@ int main(int argc, char *argv[])
                 return 1;
             }
             bitrateKbps = parseBitrate(argv[++argIdx]);
+        }
+        else if (strcmp(argv[argIdx], "--minframes") == 0)
+        {
+            if (argIdx + 1 >= argc)
+            {
+                fprintf(stderr, "Error: --minframes requires a number argument\n");
+                return 1;
+            }
+            minFrames = (uint32_t)atol(argv[++argIdx]);
+        }
+        else if (strcmp(argv[argIdx], "--skip") == 0)
+        {
+            if (argIdx + 1 >= argc)
+            {
+                fprintf(stderr, "Error: --skip requires a comma-separated list of program numbers\n");
+                return 1;
+            }
+            parseSkipPrograms(argv[++argIdx]);
         }
         else if (argv[argIdx][0] == '-')
         {
@@ -567,6 +690,18 @@ int main(int argc, char *argv[])
             }
         }
         printf("\n");
+        if (minFrames > 0)
+        {
+            printf("Minimum frames: %u (samples below this are kept as-is)\n", minFrames);
+        }
+        if (skipProgramCount > 0)
+        {
+            int si;
+            printf("Skipping programs:");
+            for (si = 0; si < skipProgramCount; si++)
+                printf(" %u", skipPrograms[si]);
+            printf("\n");
+        }
     }
 
     /* Create a minimal mixer just to load the bank */
@@ -605,6 +740,11 @@ int main(int argc, char *argv[])
         return 1;
     }
     printf("Instrument count: %u\n\n", instCount);
+
+    /* Collect SND resource IDs belonging to skipped programs */
+#define MAX_SKIP_SNDS 4096
+    int32_t skipSndIDs[MAX_SKIP_SNDS];
+    int     skipSndCount = 0;
 
     for (i = 0; i < instCount; i++)
     {
@@ -647,7 +787,25 @@ int main(int argc, char *argv[])
                    sampleInfo.sampleRate, sampleInfo.frameCount,
                    sampleInfo.bitDepth, sampleInfo.channels,
                    sampleInfo.loopStart, sampleInfo.loopEnd,
-                   compressionName(sampleInfo.compressionType));
+                   compressionName(sampleInfo.compressionType,
+                                   sampleInfo.compressionSubType));
+
+            /* Track SND IDs belonging to skipped programs */
+            if (skipProgramCount > 0 && isSkippedProgram(instInfo.program) &&
+                skipSndCount < MAX_SKIP_SNDS)
+            {
+                int already = 0, si;
+                for (si = 0; si < skipSndCount; si++)
+                {
+                    if (skipSndIDs[si] == sampleInfo.sndResourceID)
+                    {
+                        already = 1;
+                        break;
+                    }
+                }
+                if (!already)
+                    skipSndIDs[skipSndCount++] = sampleInfo.sndResourceID;
+            }
         }
 
         /* Show extended info summary */
@@ -790,15 +948,55 @@ int main(int argc, char *argv[])
                     {
                         int32_t newSize;
                         XPTR newSnd;
+                        int skipMinFrames = 0;
+                        int skipProgram = 0;
 
-                        printf("  Recompressing SND ID=%d (%s)...",
-                               (int)resID, compressionName(sndTypes[typeIdx]));
+                        /* Check --skip programs */
+                        if (skipSndCount > 0)
+                        {
+                            int si;
+                            for (si = 0; si < skipSndCount; si++)
+                            {
+                                if (skipSndIDs[si] == (int32_t)resID)
+                                {
+                                    skipProgram = 1;
+                                    break;
+                                }
+                            }
+                        }
+
+                        /* Check --minframes threshold before recompressing */
+                        if (minFrames > 0)
+                        {
+                            SampleDataInfo peekInfo;
+                            XSetMemory(&peekInfo, (int32_t)sizeof(peekInfo), 0);
+                            if (XGetSampleInfoFromSnd(resData, &peekInfo) == 0 &&
+                                peekInfo.frames < minFrames)
+                            {
+                                skipMinFrames = 1;
+                            }
+                        }
+
+                        {
+                            SampleDataInfo nameInfo;
+                            XSetMemory(&nameInfo, (int32_t)sizeof(nameInfo), 0);
+                            XGetSampleInfoFromSnd(resData, &nameInfo);
+                            printf("  Recompressing SND ID=%d (%s)...",
+                                   (int)resID, compressionName(nameInfo.compressionType, 0));
+                        }
                         fflush(stdout);
 
-                        newSnd = recompressSnd(resData, resSize,
-                                              targetComp, targetSub,
-                                              (codec == CODEC_OPUS_RT),
-                                              &newSize);
+                        if (skipMinFrames || skipProgram)
+                        {
+                            newSnd = NULL;
+                        }
+                        else
+                        {
+                            newSnd = recompressSnd(resData, resSize,
+                                                  targetComp, targetSub,
+                                                  (codec == CODEC_OPUS_RT),
+                                                  &newSize);
+                        }
                         if (newSnd)
                         {
                             /* Write recompressed SND as ID_SND (canonical type) */
@@ -810,11 +1008,22 @@ int main(int argc, char *argv[])
                         }
                         else
                         {
-                            /* Failed to recompress — keep original */
+                            /* Failed to recompress or skipped — keep original */
                             XAddFileResource(outFile, sndTypes[typeIdx], resID, resName,
                                              resData, resSize);
                             sndSkipped++;
-                            printf(" SKIPPED (kept original)\n");
+                            if (skipProgram)
+                            {
+                                printf(" SKIPPED (program excluded)\n");
+                            }
+                            else if (skipMinFrames)
+                            {
+                                printf(" SKIPPED (frames < %u)\n", minFrames);
+                            }
+                            else
+                            {
+                                printf(" SKIPPED (kept original)\n");
+                            }
                         }
                     }
 

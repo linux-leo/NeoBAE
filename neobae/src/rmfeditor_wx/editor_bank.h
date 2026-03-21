@@ -13,6 +13,8 @@
 #ifndef EDITOR_BANK_H
 #define EDITOR_BANK_H
 
+#include <functional>
+
 #include <wx/panel.h>
 
 extern "C" {
@@ -37,5 +39,19 @@ void BankEditorPanel_LoadBank(BankEditorPanel *panel,
 
 /* Clear the bank editor panel (no bank loaded). */
 void BankEditorPanel_Clear(BankEditorPanel *panel);
+
+/* Set preview callbacks for piano and keyboard note preview.
+ * playCallback: (bank, program, note, previewTag, isPercussion) - triggers a note-on
+ * stopCallback: (previewTag) - triggers note-off for the given tag, or all if tag < 0
+ * invalidateCallback: called when instrument parameters change so the engine reloads
+ * dirtyParamsCallback: called with updated ExtInfo when the user edits instrument
+ *     parameters (or nullptr to clear).  The host should store the info and apply
+ *     it after BAESong_LoadInstrument via BAESong_PatchLoadedInstrumentExtInfo. */
+void BankEditorPanel_SetPreviewCallbacks(
+    BankEditorPanel *panel,
+    std::function<void(unsigned char bank, unsigned char program, int note, int previewTag, bool isPercussion)> playCallback,
+    std::function<void(int previewTag)> stopCallback,
+    std::function<void()> invalidateCallback,
+    std::function<void(BAERmfEditorInstrumentExtInfo const *info)> dirtyParamsCallback);
 
 #endif /* EDITOR_BANK_H */

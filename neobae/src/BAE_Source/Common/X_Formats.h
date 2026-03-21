@@ -904,8 +904,11 @@ typedef enum SndCompressionSubType
     CS_OPUS_32K         = FOUR_CHAR('o','0','3','2'),   // Ogg Opus target 32 kbps
     CS_OPUS_48K         = FOUR_CHAR('o','0','4','8'),   // Ogg Opus target 48 kbps
     CS_OPUS_64K         = FOUR_CHAR('o','0','6','4'),   // Ogg Opus target 64 kbps
+    CS_OPUS_80K         = FOUR_CHAR('o','0','8','0'),   // Ogg Opus target 80 kbps    
     CS_OPUS_96K         = FOUR_CHAR('o','0','9','6'),   // Ogg Opus target 96 kbps
     CS_OPUS_128K        = FOUR_CHAR('o','1','2','8'),   // Ogg Opus target 128 kbps
+    CS_OPUS_160K        = FOUR_CHAR('o','1','6','0'),   // Ogg Opus target 160 kbps
+    CS_OPUS_192K        = FOUR_CHAR('o','1','9','2'),   // Ogg Opus target 192 kbps
     CS_OPUS_256K        = FOUR_CHAR('o','2','5','6')    // Ogg Opus target 256 kbps
 } SndCompressionSubType;
 

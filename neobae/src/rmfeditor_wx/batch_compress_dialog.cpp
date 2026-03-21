@@ -33,10 +33,13 @@ static std::pair<int, int> CompressionTypeToCodecBitrate(BAERmfEditorCompression
         case BAE_EDITOR_COMPRESSION_OPUS_32K:    return std::make_pair(opusRoundTrip ? 7 : 6, 3);
         case BAE_EDITOR_COMPRESSION_OPUS_48K:    return std::make_pair(opusRoundTrip ? 7 : 6, 4);
         case BAE_EDITOR_COMPRESSION_OPUS_64K:    return std::make_pair(opusRoundTrip ? 7 : 6, 5);
-        case BAE_EDITOR_COMPRESSION_OPUS_96K:    return std::make_pair(opusRoundTrip ? 7 : 6, 6);
-        case BAE_EDITOR_COMPRESSION_OPUS_128K:   return std::make_pair(opusRoundTrip ? 7 : 6, 7);
-        case BAE_EDITOR_COMPRESSION_OPUS_256K:   return std::make_pair(opusRoundTrip ? 7 : 6, 8);
-        default:                                  return std::make_pair(6, 7);
+        case BAE_EDITOR_COMPRESSION_OPUS_80K:    return std::make_pair(opusRoundTrip ? 7 : 6, 6);
+        case BAE_EDITOR_COMPRESSION_OPUS_96K:    return std::make_pair(opusRoundTrip ? 7 : 6, 7);
+        case BAE_EDITOR_COMPRESSION_OPUS_128K:   return std::make_pair(opusRoundTrip ? 7 : 6, 8);
+        case BAE_EDITOR_COMPRESSION_OPUS_160K:   return std::make_pair(opusRoundTrip ? 7 : 6, 9);
+        case BAE_EDITOR_COMPRESSION_OPUS_192K:   return std::make_pair(opusRoundTrip ? 7 : 6, 10);
+        case BAE_EDITOR_COMPRESSION_OPUS_256K:   return std::make_pair(opusRoundTrip ? 7 : 6, 11);
+        default:                                  return std::make_pair(6, 8);
     }
 }
 
@@ -207,10 +210,13 @@ void BatchCompressDialog::UpdateBitrateChoice(int codecIdx)
         m_bitrateChoice->Append("32k");
         m_bitrateChoice->Append("48k");
         m_bitrateChoice->Append("64k");
+        m_bitrateChoice->Append("80k");
         m_bitrateChoice->Append("96k");
         m_bitrateChoice->Append("128k");
+        m_bitrateChoice->Append("160k");
+        m_bitrateChoice->Append("192k");
         m_bitrateChoice->Append("256k");
-        m_bitrateChoice->SetSelection(7); // 128k default
+        m_bitrateChoice->SetSelection(8); // 128k default
         m_bitrateChoice->Enable(true);
         break;
 
@@ -274,9 +280,12 @@ BAERmfEditorCompressionType BatchCompressDialog::GetSelectedCompressionType() co
         case 3: return BAE_EDITOR_COMPRESSION_OPUS_32K;
         case 4: return BAE_EDITOR_COMPRESSION_OPUS_48K;
         case 5: return BAE_EDITOR_COMPRESSION_OPUS_64K;
-        case 6: return BAE_EDITOR_COMPRESSION_OPUS_96K;
-        case 7: return BAE_EDITOR_COMPRESSION_OPUS_128K;
-        case 8: return BAE_EDITOR_COMPRESSION_OPUS_256K;
+        case 6: return BAE_EDITOR_COMPRESSION_OPUS_80K;
+        case 7: return BAE_EDITOR_COMPRESSION_OPUS_96K;
+        case 8: return BAE_EDITOR_COMPRESSION_OPUS_128K;
+        case 9: return BAE_EDITOR_COMPRESSION_OPUS_160K;
+        case 10: return BAE_EDITOR_COMPRESSION_OPUS_192K;
+        case 11: return BAE_EDITOR_COMPRESSION_OPUS_256K;
         default: return BAE_EDITOR_COMPRESSION_OPUS_128K;
         }
     }

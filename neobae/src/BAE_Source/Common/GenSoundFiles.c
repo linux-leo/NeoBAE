@@ -3774,9 +3774,11 @@ static GM_Waveform* PV_ReadIntoMemoryOpusFile(XFILE file, XBOOL decodeData,
                             int16_t *out16 = (int16_t*)(newBuf + new_total);
                             for (int fi = 0; fi < totalFloats; fi++) {
                                 float v = fbuf[fi];
-                                if (v > 1.0f) v = 1.0f; if (v < -1.0f) v = -1.0f;
+                                if (v > 1.0f)  v = 1.0f;
+                                if (v < -1.0f) v = -1.0f;
                                 int32_t vi = (int32_t)(v * 32767.0f);
-                                if (vi > 32767) vi = 32767; if (vi < -32768) vi = -32768;
+                                if (vi > 32767)  vi = 32767;
+                                if (vi < -32768) vi = -32768;
                                 out16[fi] = (int16_t)vi;
                             }
                             new_total += (uint32_t)totalFloats * 2;

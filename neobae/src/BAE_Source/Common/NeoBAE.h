@@ -2235,6 +2235,16 @@ extern "C"
     BAEResult BAESong_AllNotesOff(BAESong song,
                                   uint32_t time);
 
+    // BAESong_Panic()
+    // ------------------------------------
+    // Immediately and forcefully kills all active voices for the indicated
+    // BAESong and stops the song.  Unlike BAESong_AllNotesOff which sends a
+    // graceful key-off (honouring ADSR release), this hard-kills every voice
+    // so that silence is achieved instantly, even with badly-configured
+    // envelopes.
+    // ------------------------------------
+    BAEResult BAESong_Panic(BAESong song);
+
     // BAESong_LoadGroovoid()
     // ------------------------------------
     // Loads the indicated BAESong with the MIDI data contained in the Groovoid with
@@ -2909,7 +2919,10 @@ typedef enum BAERmfEditorCompressionType
     BAE_EDITOR_COMPRESSION_MP3_320K    = 20, /* MP3 at 320 kbps */
     BAE_EDITOR_COMPRESSION_OPUS_12K    = 21, /* Ogg Opus at 12 kbps */
     BAE_EDITOR_COMPRESSION_OPUS_24K    = 22, /* Ogg Opus at 24 kbps */
-    BAE_EDITOR_COMPRESSION_OPUS_48K    = 23  /* Ogg Opus at 48 kbps */
+    BAE_EDITOR_COMPRESSION_OPUS_48K    = 23, /* Ogg Opus at 48 kbps */
+    BAE_EDITOR_COMPRESSION_OPUS_80K    = 30, /* Ogg Opus at 80 kbps */
+    BAE_EDITOR_COMPRESSION_OPUS_160K   = 31, /* Ogg Opus at 160 kbps */
+    BAE_EDITOR_COMPRESSION_OPUS_192K   = 32  /* Ogg Opus at 192 kbps */
 } BAERmfEditorCompressionType;
 
 typedef enum BAERmfEditorMidiStorageType
@@ -3022,7 +3035,28 @@ typedef struct BAERmfEditorInstrumentExtInfo
     BAERmfEditorLFOInfo lfos[BAE_EDITOR_MAX_LFOS];
     uint32_t curveCount;
     BAERmfEditorCurveInfo curves[BAE_EDITOR_MAX_CURVES];
+    /* Per-keysplit sample override (bank editor preview) */
+    BAE_BOOL hasSampleOverride;     /* TRUE when the fields below are valid */
+    uint32_t sampleOverrideIndex;   /* keysplit index (0 for non-split instruments) */
+    unsigned char sampleRootKey;    /* baseMidiPitch for GM_Waveform */
+    unsigned char sampleLowKey;     /* lowMidi for GM_KeymapSplit */
+    unsigned char sampleHighKey;    /* highMidi for GM_KeymapSplit */
+    int16_t sampleSplitVolume;      /* miscParameter2 for GM_KeymapSplit */
+    uint32_t sampleRate;            /* integer Hz; converted to 16.16 for sampledRate */
+    uint32_t sampleLoopStart;       /* startLoop for GM_Waveform */
+    uint32_t sampleLoopEnd;         /* endLoop for GM_Waveform */
 } BAERmfEditorInstrumentExtInfo;
+
+// BAESong_PatchLoadedInstrumentExtInfo()
+// --------------------------------------
+// Modify the ADSR/LFO/LPF parameters of an already-loaded instrument
+// in place, including all keysplit sub-instruments.  Used by the bank
+// editor so that preview notes hear the user's parameter edits without
+// requiring a full bank reload.
+// --------------------------------------
+BAEResult BAESong_PatchLoadedInstrumentExtInfo(BAESong song,
+                                               BAE_INSTRUMENT instrument,
+                                               BAERmfEditorInstrumentExtInfo const *info);
 
 /* ----------------------------------------------------------------------- */
 
@@ -3263,8 +3297,8 @@ typedef struct BAERmfEditorBankInstrumentInfo
 {
     uint32_t instID;                /* INST resource ID from bank */
     char name[256];                 /* INST resource name from bank */
-    unsigned char program;          /* instID % 128 */
-    uint16_t bank;                  /* instID / 128 (bank select) */
+    unsigned char program;          /* instID % 128 (7-bit program within melodic/percussion half) */
+    uint16_t bank;                  /* instID / 256 (user-facing bank: 0-255=bank 0, 256-511=bank 1, etc.) */
     int16_t keySplitCount;          /* number of key splits (0 = non-split) */
     unsigned char flags1;           /* ZBF_ bitmask from INST header */
     unsigned char flags2;           /* ZBF_ bitmask from INST header */
@@ -3342,6 +3376,7 @@ typedef struct BAERmfEditorBankSampleInfo
     uint32_t loopStart;                  /* Loop start frame */
     uint32_t loopEnd;                    /* Loop end frame */
     XResourceType compressionType;       /* Compression type (X_UNCOMPRESSED, X_FLAC, etc.) */
+    uint32_t compressionSubType;          /* Compression sub-type (CS_VORBIS_*K, CS_OPUS_*K, or CS_DEFAULT) */
 } BAERmfEditorBankSampleInfo;
 
 /* Count the number of samples (key splits) in a bank instrument.
@@ -3388,6 +3423,21 @@ BAEResult BAERmfEditorBank_SaveToFile(BAEBankToken bankToken,
 BAEResult BAERmfEditorBank_SaveToMemory(BAEBankToken bankToken,
                                         unsigned char **outData,
                                         uint32_t *outSize);
+
+/* Decode waveform data for a specific sample within a bank instrument.
+ * This loads and decodes the SND resource to PCM. The caller must call
+ * BAERmfEditorBank_FreeWaveformData() to free outWaveData when done. */
+BAEResult BAERmfEditorBank_GetSampleWaveformData(BAEBankToken bankToken,
+                                                  uint32_t instrumentIndex,
+                                                  uint32_t sampleIndex,
+                                                  void **outWaveData,
+                                                  uint32_t *outFrameCount,
+                                                  uint16_t *outBitSize,
+                                                  uint16_t *outChannels,
+                                                  BAE_UNSIGNED_FIXED *outSampleRate);
+
+/* Free waveform data returned by BAERmfEditorBank_GetSampleWaveformData. */
+void BAERmfEditorBank_FreeWaveformData(void *waveData);
 
 #ifdef __cplusplus
 } // extern "C"

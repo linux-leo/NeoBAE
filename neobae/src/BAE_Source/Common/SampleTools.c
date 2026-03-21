@@ -866,6 +866,48 @@ XERR XGetSampleInfoFromSnd(XPTR pResource, SampleDataInfo *pOutInfo)
                         pOutInfo->frames = (XDWORD)XGetLong(&header3->decodedBytes) / pOutInfo->channels / 2;
                         break;
             #endif
+#if USE_FLAC_DECODER == TRUE
+                    case C_FLAC:
+                        pOutInfo->size = XGetLong(&header3->encodedBytes);
+                        pOutInfo->frames = XGetLong(&header3->frameCount);
+                        pOutInfo->bitSize = 16;
+                        break;
+#endif
+#if USE_VORBIS_DECODER == TRUE
+                    case C_VORBIS:
+                    case CS_VORBIS_32K:
+                    case CS_VORBIS_48K:
+                    case CS_VORBIS_64K:
+                    case CS_VORBIS_80K:
+                    case CS_VORBIS_96K:
+                    case CS_VORBIS_128K:
+                    case CS_VORBIS_160K:
+                    case CS_VORBIS_192K:
+                    case CS_VORBIS_256K:
+                        pOutInfo->size = XGetLong(&header3->encodedBytes);
+                        pOutInfo->frames = XGetLong(&header3->frameCount);
+                        pOutInfo->bitSize = 16;
+                        break;
+#endif
+#if USE_OPUS_DECODER == TRUE
+                    case C_OPUS:
+                    case CS_OPUS_12K:
+                    case CS_OPUS_16K:
+                    case CS_OPUS_24K:
+                    case CS_OPUS_32K:
+                    case CS_OPUS_48K:
+                    case CS_OPUS_64K:
+                    case CS_OPUS_80K:
+                    case CS_OPUS_96K:
+                    case CS_OPUS_128K:
+                    case CS_OPUS_160K:
+                    case CS_OPUS_192K:
+                    case CS_OPUS_256K:
+                        pOutInfo->size = XGetLong(&header3->encodedBytes);
+                        pOutInfo->frames = XGetLong(&header3->frameCount);
+                        pOutInfo->bitSize = 16;
+                        break;
+#endif            
                     default:
                         BAE_PRINTF("Unsupported codec %d\n", pOutInfo->compressionType);
                         BAE_ASSERT(FALSE);
@@ -2247,8 +2289,11 @@ XSoundFormat1*      header;
         case 3: bitrate =  32000; break;  /* CS_OPUS_32K  */
         case 4: bitrate =  48000; break;  /* CS_OPUS_48K  */
         case 5: bitrate =  64000; break;  /* CS_OPUS_64K  */
-        case 6: bitrate =  96000; break;  /* CS_OPUS_96K  */
-        case 8: bitrate = 256000; break;  /* CS_OPUS_256K */
+        case 6: bitrate =  80000; break;  /* CS_OPUS_80K  */
+        case 8: bitrate =  96000; break;  /* CS_OPUS_96K  */
+        case 9:  bitrate = 160000; break; /* CS_OPUS_160K */
+        case 10: bitrate = 192000; break; /* CS_OPUS_192K */
+        case 11: bitrate = 256000; break; /* CS_OPUS_256K */
         case 7:                           /* CS_OPUS_128K */
         default: bitrate = 128000; break;
         }
