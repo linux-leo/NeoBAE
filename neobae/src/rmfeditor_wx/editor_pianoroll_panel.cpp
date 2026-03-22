@@ -20,6 +20,7 @@ constexpr int kBasePixelsPerQuarter = 96;
 constexpr int kResizeHandlePixels = 6;
 constexpr int kAutomationLaneHeight = 44;
 constexpr int kAutomationLaneGap = 6;
+constexpr int kAutomationNodeHitRadius = 6;
 constexpr uint32_t kDefaultNoteDuration = 480;
 constexpr int kTempoLaneIndex = 0;
 
@@ -41,6 +42,7 @@ enum class MidiLoopDragMode {
 enum {
     ID_PianoRollEdit = wxID_HIGHEST + 2000,
     ID_PianoRollDelete,
+    ID_PianoRollToggleRamp,
 };
 
 enum class PianoRollSelectionKind {
@@ -178,6 +180,75 @@ struct AutomationHitInfo {
     int rightX;
     int value;
     bool hasFollowingEvent;
+};
+
+enum class AutomationInterpolation {
+    Step,
+    Linear,
+};
+
+struct AutomationCurveNode {
+    uint32_t tick;
+    int value;
+    uint32_t sourceEventIndex;
+    bool implicitNode;
+};
+
+struct AutomationCurveSegment {
+    uint32_t startTick;
+    uint32_t endTick;
+    int startValue;
+    int endValue;
+    uint32_t sourceEventIndex;
+    bool hasFollowingEvent;
+    AutomationInterpolation interpolation;
+};
+
+struct AutomationLaneCache {
+    bool valid = false;
+    uint64_t revision = 0;
+    uint32_t documentEndTick = 0;
+    std::vector<AutomationCurveNode> nodes;
+    std::vector<AutomationCurveSegment> segments;
+};
+
+struct AutomationDisplayBucket {
+    int x = 0;
+    int minY = 0;
+    int maxY = 0;
+    int firstY = 0;
+    int lastY = 0;
+    bool hasData = false;
+};
+
+struct AutomationDisplayCache {
+    bool valid = false;
+    uint64_t revision = 0;
+    int laneIndex = -1;
+    int visibleLeft = 0;
+    int visibleRight = 0;
+    int pixelsPerQuarter = 0;
+    std::vector<AutomationDisplayBucket> buckets;
+};
+
+struct AutomationRampSegmentKey {
+    int laneIndex;
+    uint32_t tick;
+    int value;
+};
+
+struct NoteCacheEntry {
+    BAERmfEditorNoteInfo noteInfo;
+    uint32_t sourceIndex;
+    uint32_t endTick;
+};
+
+struct NoteTrackCache {
+    bool valid = false;
+    int trackIndex = -1;
+    uint32_t ticksPerBin = 0;
+    std::vector<NoteCacheEntry> notes;
+    std::vector<std::vector<std::vector<uint32_t>>> pitchBins;
 };
 
 static wxString GetControllerLaneLabel(unsigned char controller) {
@@ -432,6 +503,8 @@ public:
           m_selectedItemKind(PianoRollSelectionKind::None),
           m_selectedAutomationLane(-1),
           m_selectedAutomationEvent(-1),
+          m_hoverAutomationLane(-1),
+          m_hoverAutomationEvent(-1),
           m_dragAutomationValid(false),
           m_dragStartTick(0),
           m_dragStartNote(0),
@@ -456,6 +529,7 @@ public:
         Bind(wxEVT_CHAR_HOOK, &PianoRollPanel::OnCharHook, this);
         Bind(wxEVT_MENU, &PianoRollPanel::OnEditSelectedItem, this, ID_PianoRollEdit);
         Bind(wxEVT_MENU, &PianoRollPanel::OnDeleteSelectedItem, this, ID_PianoRollDelete);
+        Bind(wxEVT_MENU, &PianoRollPanel::OnToggleRampSegment, this, ID_PianoRollToggleRamp);
         UpdateVirtualSize();
     }
 
@@ -467,6 +541,9 @@ public:
         m_selectedItemKind = PianoRollSelectionKind::None;
         m_selectedAutomationLane = -1;
         m_selectedAutomationEvent = -1;
+        m_hoverAutomationLane = -1;
+        m_hoverAutomationEvent = -1;
+        m_rampSegments.clear();
         m_dragAutomationValid = false;
         m_dragging = false;
         m_dragMode = DragMode::None;
@@ -475,6 +552,8 @@ public:
         m_dragOriginalNotes.clear();
         m_userEndTick = 0;
         m_draggingTimelineEnd = false;
+        InvalidateNoteCache();
+        InvalidateAutomationCaches();
         UpdateVirtualSize();
         ScrollToMidiContentCenter();
         Refresh();
@@ -487,12 +566,17 @@ public:
         m_selectedItemKind = PianoRollSelectionKind::None;
         m_selectedAutomationLane = -1;
         m_selectedAutomationEvent = -1;
+        m_hoverAutomationLane = -1;
+        m_hoverAutomationEvent = -1;
+        m_rampSegments.clear();
         m_dragAutomationValid = false;
         m_dragging = false;
         m_dragMode = DragMode::None;
         m_selectBoxActive = false;
         m_dragOriginalNoteIndices.clear();
         m_dragOriginalNotes.clear();
+        InvalidateNoteCache();
+        InvalidateAutomationCaches();
         UpdateVirtualSize();
         ScrollToMidiContentCenter();
         Refresh();
@@ -557,6 +641,8 @@ public:
             m_selectedNotes.clear();
             m_selectedAutomationLane = -1;
             m_selectedAutomationEvent = -1;
+            m_hoverAutomationLane = -1;
+            m_hoverAutomationEvent = -1;
         }
         m_dragging = false;
         m_dragAutomationValid = false;
@@ -566,6 +652,8 @@ public:
         m_dragOriginalNotes.clear();
         m_dragUndoActive = false;
         m_dragUndoLabel.clear();
+        InvalidateNoteCache();
+        InvalidateAutomationCaches();
         UpdateVirtualSize();
         Refresh();
         if (m_selectionChangedCallback) {
@@ -631,6 +719,7 @@ public:
         }
         if (anyChanged) {
             CommitUndoAction("Change Note Instrument");
+            InvalidateNoteCache();
             Refresh();
         } else {
             CancelUndoAction();
@@ -746,6 +835,8 @@ private:
     PianoRollSelectionKind m_selectedItemKind;
     int m_selectedAutomationLane;
     long m_selectedAutomationEvent;
+    int m_hoverAutomationLane;
+    long m_hoverAutomationEvent;
     bool m_dragAutomationValid;
     AutomationHitInfo m_dragAutomationHit;
     BAERmfEditorNoteInfo m_dragOriginalNote;
@@ -781,6 +872,446 @@ private:
     bool m_draggingTimelineEnd;
     uint32_t m_timelineEndDragTick;
     PianoRollTheme m_theme;
+    NoteTrackCache m_noteTrackCache;
+    uint64_t m_automationRevision = 1;
+    std::vector<AutomationLaneCache> m_automationLaneCaches;
+    std::vector<AutomationDisplayCache> m_automationDisplayCaches;
+    std::vector<AutomationRampSegmentKey> m_rampSegments;
+
+    void InvalidateNoteCache() {
+        m_noteTrackCache.valid = false;
+        m_noteTrackCache.trackIndex = -1;
+        m_noteTrackCache.ticksPerBin = 0;
+        m_noteTrackCache.notes.clear();
+        m_noteTrackCache.pitchBins.clear();
+    }
+
+    bool BuildNoteTrackCache() {
+        uint32_t noteCount;
+        uint32_t maxEndTick;
+
+        if (!HasTrack()) {
+            InvalidateNoteCache();
+            return false;
+        }
+        noteCount = 0;
+        if (BAERmfEditorDocument_GetNoteCount(m_document,
+                                              static_cast<uint16_t>(m_selectedTrack),
+                                              &noteCount) != BAE_NO_ERROR) {
+            InvalidateNoteCache();
+            return false;
+        }
+
+        m_noteTrackCache.valid = false;
+        m_noteTrackCache.trackIndex = m_selectedTrack;
+        m_noteTrackCache.ticksPerBin = std::max<uint32_t>(GetTicksPerQuarter(), 1);
+        m_noteTrackCache.notes.clear();
+        m_noteTrackCache.notes.reserve(static_cast<size_t>(noteCount));
+        maxEndTick = m_noteTrackCache.ticksPerBin;
+
+        for (uint32_t noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
+            BAERmfEditorNoteInfo noteInfo;
+            NoteCacheEntry entry;
+
+            if (!GetNoteInfo(noteIndex, &noteInfo)) {
+                continue;
+            }
+            entry.noteInfo = noteInfo;
+            entry.sourceIndex = noteIndex;
+            entry.endTick = noteInfo.startTick + std::max<uint32_t>(1, noteInfo.durationTicks);
+            maxEndTick = std::max(maxEndTick, entry.endTick);
+            m_noteTrackCache.notes.push_back(entry);
+        }
+
+        {
+            uint32_t binCount;
+
+            binCount = std::max<uint32_t>(1, (maxEndTick / m_noteTrackCache.ticksPerBin) + 1);
+            m_noteTrackCache.pitchBins.clear();
+            m_noteTrackCache.pitchBins.resize(128);
+            for (int pitch = 0; pitch < 128; ++pitch) {
+                m_noteTrackCache.pitchBins[static_cast<size_t>(pitch)].resize(binCount);
+            }
+            for (uint32_t entryIndex = 0; entryIndex < static_cast<uint32_t>(m_noteTrackCache.notes.size()); ++entryIndex) {
+                NoteCacheEntry const &entry = m_noteTrackCache.notes[entryIndex];
+                uint32_t startBin;
+                uint32_t endBin;
+
+                startBin = entry.noteInfo.startTick / m_noteTrackCache.ticksPerBin;
+                endBin = (entry.endTick - 1) / m_noteTrackCache.ticksPerBin;
+                for (uint32_t binIndex = startBin; binIndex <= endBin; ++binIndex) {
+                    m_noteTrackCache.pitchBins[static_cast<size_t>(entry.noteInfo.note)][binIndex].push_back(entryIndex);
+                }
+            }
+        }
+
+        m_noteTrackCache.valid = true;
+        return true;
+    }
+
+    NoteTrackCache const *GetNoteTrackCache() {
+        if (!HasTrack()) {
+            return nullptr;
+        }
+        if (!m_noteTrackCache.valid || m_noteTrackCache.trackIndex != m_selectedTrack) {
+            if (!BuildNoteTrackCache()) {
+                return nullptr;
+            }
+        }
+        return &m_noteTrackCache;
+    }
+
+    void GatherNoteEntriesInRect(wxRect const &rect, std::vector<uint32_t> *outEntryIndices) {
+        NoteTrackCache const *cache;
+        uint32_t visibleStartTick;
+        uint32_t visibleEndTick;
+        uint32_t startBin;
+        uint32_t endBin;
+        int topNote;
+        int bottomNote;
+        int lowNote;
+        int highNote;
+        std::vector<unsigned char> seen;
+
+        if (!outEntryIndices) {
+            return;
+        }
+        outEntryIndices->clear();
+        cache = GetNoteTrackCache();
+        if (!cache || cache->notes.empty() || cache->pitchBins.empty()) {
+            return;
+        }
+
+        visibleStartTick = XToTick(std::max(kPianoRollLeftGutter, rect.GetLeft()));
+        visibleEndTick = XToTick(std::max(kPianoRollLeftGutter, rect.GetRight()));
+        startBin = std::min<uint32_t>(visibleStartTick / cache->ticksPerBin,
+                                      static_cast<uint32_t>(cache->pitchBins[0].size() - 1));
+        endBin = std::min<uint32_t>(visibleEndTick / cache->ticksPerBin,
+                                    static_cast<uint32_t>(cache->pitchBins[0].size() - 1));
+        topNote = std::clamp(YToNote(rect.GetTop()), 0, 127);
+        bottomNote = std::clamp(YToNote(rect.GetBottom()), 0, 127);
+        lowNote = std::min(topNote, bottomNote);
+        highNote = std::max(topNote, bottomNote);
+        seen.assign(cache->notes.size(), 0);
+
+        for (int pitch = lowNote; pitch <= highNote; ++pitch) {
+            for (uint32_t binIndex = startBin; binIndex <= endBin; ++binIndex) {
+                for (uint32_t entryIndex : cache->pitchBins[static_cast<size_t>(pitch)][binIndex]) {
+                    NoteCacheEntry const &entry = cache->notes[entryIndex];
+
+                    if (seen[entryIndex]) {
+                        continue;
+                    }
+                    if (entry.endTick <= visibleStartTick || entry.noteInfo.startTick > visibleEndTick) {
+                        continue;
+                    }
+                    seen[entryIndex] = 1;
+                    outEntryIndices->push_back(entryIndex);
+                }
+            }
+        }
+
+        std::sort(outEntryIndices->begin(),
+                  outEntryIndices->end(),
+                  [&](uint32_t left, uint32_t right) {
+                      return cache->notes[left].sourceIndex < cache->notes[right].sourceIndex;
+                  });
+    }
+
+    bool IsRampSegmentKey(int laneIndex, uint32_t tick, int value) const {
+        for (AutomationRampSegmentKey const &key : m_rampSegments) {
+            if (key.laneIndex == laneIndex && key.tick == tick && key.value == value) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void ToggleRampSegmentKey(int laneIndex, uint32_t tick, int value) {
+        for (size_t i = 0; i < m_rampSegments.size(); ++i) {
+            AutomationRampSegmentKey const &key = m_rampSegments[i];
+            if (key.laneIndex == laneIndex && key.tick == tick && key.value == value) {
+                m_rampSegments.erase(m_rampSegments.begin() + static_cast<long>(i));
+                return;
+            }
+        }
+        m_rampSegments.push_back({ laneIndex, tick, value });
+    }
+
+    bool ToggleRampForSelectedAutomationSegment() {
+        uint32_t documentEndTick;
+        AutomationLaneCache const *laneCache;
+
+        if (m_selectedItemKind != PianoRollSelectionKind::Automation ||
+            m_selectedAutomationLane < 0 || m_selectedAutomationEvent < 0) {
+            return false;
+        }
+        documentEndTick = GetDocumentEndTick();
+        laneCache = GetAutomationLaneCache(m_selectedAutomationLane, documentEndTick);
+        if (!laneCache) {
+            return false;
+        }
+        for (AutomationCurveSegment const &segment : laneCache->segments) {
+            if (segment.sourceEventIndex != static_cast<uint32_t>(m_selectedAutomationEvent)) {
+                continue;
+            }
+            if (!segment.hasFollowingEvent) {
+                return false;
+            }
+            ToggleRampSegmentKey(m_selectedAutomationLane, segment.startTick, segment.startValue);
+            InvalidateAutomationCaches();
+            RefreshAutomationLane(m_selectedAutomationLane);
+            return true;
+        }
+        return false;
+    }
+
+    void EnsureAutomationCacheStorage() {
+        size_t laneCount;
+
+        laneCount = GetAutomationLanes().size();
+        if (m_automationLaneCaches.size() != laneCount) {
+            m_automationLaneCaches.clear();
+            m_automationLaneCaches.resize(laneCount);
+        }
+        if (m_automationDisplayCaches.size() != laneCount) {
+            m_automationDisplayCaches.clear();
+            m_automationDisplayCaches.resize(laneCount);
+            for (size_t laneIndex = 0; laneIndex < m_automationDisplayCaches.size(); ++laneIndex) {
+                m_automationDisplayCaches[laneIndex].laneIndex = static_cast<int>(laneIndex);
+            }
+        }
+    }
+
+    void InvalidateAutomationCaches() {
+        ++m_automationRevision;
+        EnsureAutomationCacheStorage();
+        for (AutomationLaneCache &cache : m_automationLaneCaches) {
+            cache.valid = false;
+            cache.nodes.clear();
+            cache.segments.clear();
+        }
+        for (AutomationDisplayCache &cache : m_automationDisplayCaches) {
+            cache.valid = false;
+            cache.buckets.clear();
+        }
+    }
+
+    AutomationDisplayCache const *GetAutomationDisplayCache(int laneIndex,
+                                                            int visibleLeft,
+                                                            int visibleRight,
+                                                            int laneTop,
+                                                            int laneBottom,
+                                                            AutomationLaneDescriptor const &lane,
+                                                            AutomationLaneCache const *laneCache) {
+        AutomationDisplayCache *cache;
+        int bucketCount;
+
+        EnsureAutomationCacheStorage();
+        if (laneIndex < 0 || laneIndex >= static_cast<int>(m_automationDisplayCaches.size()) || !laneCache) {
+            return nullptr;
+        }
+        cache = &m_automationDisplayCaches[static_cast<size_t>(laneIndex)];
+        if (cache->valid &&
+            cache->revision == m_automationRevision &&
+            cache->visibleLeft == visibleLeft &&
+            cache->visibleRight == visibleRight &&
+            cache->pixelsPerQuarter == GetPixelsPerQuarter()) {
+            return cache;
+        }
+
+        bucketCount = std::max(1, visibleRight - visibleLeft + 1);
+        cache->buckets.clear();
+        cache->buckets.resize(static_cast<size_t>(bucketCount));
+        for (int bucketIndex = 0; bucketIndex < bucketCount; ++bucketIndex) {
+            AutomationDisplayBucket &bucket = cache->buckets[static_cast<size_t>(bucketIndex)];
+
+            bucket.x = visibleLeft + bucketIndex;
+            bucket.hasData = false;
+        }
+
+        auto valueToY = [&](int value) -> int {
+            int clampedValue;
+
+            clampedValue = std::clamp(value, 0, lane.maxValue);
+            return laneBottom - 1 - ((clampedValue * (kAutomationLaneHeight - 1)) / std::max(1, lane.maxValue));
+        };
+
+        uint32_t visibleStartTick;
+        uint32_t visibleEndTick;
+
+        visibleStartTick = XToTick(std::max(kPianoRollLeftGutter, visibleLeft));
+        visibleEndTick = XToTick(std::max(kPianoRollLeftGutter, visibleRight));
+        auto segmentIt = std::lower_bound(laneCache->segments.begin(),
+                                          laneCache->segments.end(),
+                                          visibleStartTick,
+                                          [](AutomationCurveSegment const &segment, uint32_t tick) {
+                                              return segment.startTick < tick;
+                                          });
+        if (segmentIt != laneCache->segments.begin()) {
+            --segmentIt;
+        }
+        while (segmentIt != laneCache->segments.end() && segmentIt->endTick <= visibleStartTick) {
+            ++segmentIt;
+        }
+
+        for (; segmentIt != laneCache->segments.end(); ++segmentIt) {
+            AutomationCurveSegment const &segment = *segmentIt;
+            int x0;
+            int x1;
+            int y0;
+            int y1;
+            int startBucket;
+            int endBucket;
+
+            if (segment.startTick > visibleEndTick) {
+                break;
+            }
+            x0 = TickToX(segment.startTick);
+            x1 = TickToX(std::max(segment.startTick + 1, segment.endTick));
+            if (x1 < visibleLeft || x0 > visibleRight) {
+                continue;
+            }
+            y0 = valueToY(segment.startValue);
+            y1 = valueToY(segment.endValue);
+            startBucket = std::clamp(x0 - visibleLeft, 0, bucketCount - 1);
+            endBucket = std::clamp(x1 - visibleLeft, 0, bucketCount - 1);
+            for (int bucketIndex = startBucket; bucketIndex <= endBucket; ++bucketIndex) {
+                AutomationDisplayBucket &bucket = cache->buckets[static_cast<size_t>(bucketIndex)];
+                int sampleY;
+
+                if (segment.interpolation == AutomationInterpolation::Linear && x1 != x0) {
+                    sampleY = y0 + (((bucket.x - x0) * (y1 - y0)) / (x1 - x0));
+                } else {
+                    sampleY = y0;
+                    if (segment.hasFollowingEvent && bucket.x == x1) {
+                        sampleY = y1;
+                    }
+                }
+                if (!bucket.hasData) {
+                    bucket.minY = sampleY;
+                    bucket.maxY = sampleY;
+                    bucket.firstY = sampleY;
+                    bucket.lastY = sampleY;
+                    bucket.hasData = true;
+                } else {
+                    bucket.minY = std::min(bucket.minY, sampleY);
+                    bucket.maxY = std::max(bucket.maxY, sampleY);
+                    bucket.lastY = sampleY;
+                }
+            }
+        }
+
+        cache->valid = true;
+        cache->revision = m_automationRevision;
+        cache->visibleLeft = visibleLeft;
+        cache->visibleRight = visibleRight;
+        cache->pixelsPerQuarter = GetPixelsPerQuarter();
+        return cache;
+    }
+
+    bool BuildAutomationLaneCache(int laneIndex, uint32_t documentEndTick) {
+        std::vector<AutomationLaneDescriptor> const &lanes = GetAutomationLanes();
+        AutomationLaneCache *cache;
+        uint32_t eventCount;
+
+        EnsureAutomationCacheStorage();
+        if (!m_document || !IsAutomationLaneVisible(laneIndex) ||
+            laneIndex < 0 || laneIndex >= static_cast<int>(m_automationLaneCaches.size())) {
+            return false;
+        }
+        cache = &m_automationLaneCaches[static_cast<size_t>(laneIndex)];
+        cache->nodes.clear();
+        cache->segments.clear();
+
+        eventCount = 0;
+        if (!GetAutomationEventCount(laneIndex, &eventCount)) {
+            cache->valid = false;
+            return false;
+        }
+
+        if (lanes[static_cast<size_t>(laneIndex)].kind == AutomationLaneKind::Tempo && eventCount == 0) {
+            uint32_t defaultBpm;
+            AutomationCurveNode implicitNode;
+
+            defaultBpm = 120;
+            BAERmfEditorDocument_GetTempoBPM(m_document, &defaultBpm);
+            implicitNode.tick = 0;
+            implicitNode.value = static_cast<int>(defaultBpm);
+            implicitNode.sourceEventIndex = 0;
+            implicitNode.implicitNode = true;
+            cache->nodes.push_back(implicitNode);
+        } else {
+            for (uint32_t eventIndex = 0; eventIndex < eventCount; ++eventIndex) {
+                uint32_t tick;
+                int value;
+                AutomationCurveNode node;
+
+                if (!GetAutomationEvent(laneIndex, eventIndex, &tick, &value)) {
+                    continue;
+                }
+                node.tick = tick;
+                node.value = value;
+                node.sourceEventIndex = eventIndex;
+                node.implicitNode = false;
+                cache->nodes.push_back(node);
+            }
+            std::stable_sort(cache->nodes.begin(),
+                             cache->nodes.end(),
+                             [](AutomationCurveNode const &left, AutomationCurveNode const &right) {
+                                 if (left.tick != right.tick) {
+                                     return left.tick < right.tick;
+                                 }
+                                 return left.sourceEventIndex < right.sourceEventIndex;
+                             });
+        }
+
+        for (size_t nodeIndex = 0; nodeIndex < cache->nodes.size(); ++nodeIndex) {
+            AutomationCurveNode const &node = cache->nodes[nodeIndex];
+            AutomationCurveSegment segment;
+
+            segment.startTick = node.tick;
+            segment.endTick = documentEndTick;
+            segment.startValue = node.value;
+            segment.endValue = node.value;
+            segment.sourceEventIndex = node.sourceEventIndex;
+            segment.hasFollowingEvent = false;
+            segment.interpolation = IsRampSegmentKey(laneIndex, node.tick, node.value)
+                                        ? AutomationInterpolation::Linear
+                                        : AutomationInterpolation::Step;
+
+            if (nodeIndex + 1 < cache->nodes.size()) {
+                AutomationCurveNode const &nextNode = cache->nodes[nodeIndex + 1];
+
+                segment.endTick = nextNode.tick;
+                segment.endValue = nextNode.value;
+                segment.hasFollowingEvent = !nextNode.implicitNode;
+            }
+            if (segment.endTick <= segment.startTick) {
+                segment.endTick = segment.startTick + 1;
+            }
+            cache->segments.push_back(segment);
+        }
+
+        cache->documentEndTick = documentEndTick;
+        cache->revision = m_automationRevision;
+        cache->valid = true;
+        return true;
+    }
+
+    AutomationLaneCache const *GetAutomationLaneCache(int laneIndex, uint32_t documentEndTick) {
+        EnsureAutomationCacheStorage();
+        if (laneIndex < 0 || laneIndex >= static_cast<int>(m_automationLaneCaches.size())) {
+            return nullptr;
+        }
+        AutomationLaneCache &cache = m_automationLaneCaches[static_cast<size_t>(laneIndex)];
+        if (!cache.valid || cache.revision != m_automationRevision || cache.documentEndTick != documentEndTick) {
+            if (!BuildAutomationLaneCache(laneIndex, documentEndTick)) {
+                return nullptr;
+            }
+        }
+        return &cache;
+    }
 
     bool ScrollHorizontallyWithWheel(wxMouseEvent const &event, int stepMultiplier) {
         int wheelDelta;
@@ -882,28 +1413,26 @@ private:
     }
 
     void UpdateAreaSelection(wxRect const &selectionRect) {
-        uint32_t noteCount;
+        std::vector<uint32_t> visibleEntries;
+        NoteTrackCache const *cache;
 
         m_selectedNotes.clear();
         if (!HasTrack()) {
             UpdatePrimarySelectedNote();
             return;
         }
-        noteCount = 0;
-        if (BAERmfEditorDocument_GetNoteCount(m_document, static_cast<uint16_t>(m_selectedTrack), &noteCount) != BAE_NO_ERROR) {
+        cache = GetNoteTrackCache();
+        if (!cache) {
             UpdatePrimarySelectedNote();
             return;
         }
-        for (uint32_t noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
-            BAERmfEditorNoteInfo noteInfo;
+        GatherNoteEntriesInRect(selectionRect, &visibleEntries);
+        for (uint32_t entryIndex : visibleEntries) {
             wxRect noteRect;
 
-            if (!GetNoteInfo(noteIndex, &noteInfo)) {
-                continue;
-            }
-            noteRect = BuildNoteRect(noteInfo);
+            noteRect = BuildNoteRect(cache->notes[entryIndex].noteInfo);
             if (noteRect.Intersects(selectionRect)) {
-                m_selectedNotes.push_back(static_cast<long>(noteIndex));
+                m_selectedNotes.push_back(static_cast<long>(cache->notes[entryIndex].sourceIndex));
             }
         }
         UpdatePrimarySelectedNote();
@@ -996,6 +1525,7 @@ private:
 
     void UpdateHoverCursor(wxPoint point) {
         BAERmfEditorNoteInfo noteInfo;
+        AutomationHitInfo automationNodeHit;
         AutomationHitInfo automationHit;
         long hitNote;
         MidiLoopDragMode loopDragMode;
@@ -1016,6 +1546,10 @@ private:
         }
         hitNote = HitTestNote(point, &noteInfo);
         if (hitNote < 0) {
+            if (HitTestAutomationNode(point, &automationNodeHit)) {
+                SetCursor(wxCursor(wxCURSOR_SIZING));
+                return;
+            }
             if (HitTestAutomation(point, &automationHit)) {
                 DragMode mode;
 
@@ -1126,17 +1660,115 @@ private:
         return std::clamp(value, 0, lane.maxValue);
     }
 
-    bool HitTestAutomation(wxPoint point, AutomationHitInfo *outHitInfo = nullptr) const {
+    int AutomationValueToY(int laneIndex, int value) const {
         std::vector<AutomationLaneDescriptor> const &lanes = GetAutomationLanes();
+        AutomationLaneDescriptor const &lane = lanes[laneIndex];
+        int laneBottom;
+        int clampedValue;
+
+        laneBottom = GetAutomationLaneY(laneIndex) + kAutomationLaneHeight;
+        clampedValue = std::clamp(value, 0, lane.maxValue);
+        return laneBottom - 1 - ((clampedValue * (kAutomationLaneHeight - 1)) / std::max(1, lane.maxValue));
+    }
+
+    bool HitTestAutomationNode(wxPoint point, AutomationHitInfo *outHitInfo = nullptr) {
+        std::vector<AutomationLaneDescriptor> const &lanes = GetAutomationLanes();
+        uint32_t documentEndTick;
+
+        if (!m_document || point.y < GetAutomationAreaTop()) {
+            return false;
+        }
+        documentEndTick = GetDocumentEndTick();
+        for (int laneIndex = 0; laneIndex < static_cast<int>(lanes.size()); ++laneIndex) {
+            AutomationLaneCache const *laneCache;
+            int laneTop;
+            int laneBottom;
+
+            if (!IsAutomationLaneVisible(laneIndex)) {
+                continue;
+            }
+            laneTop = GetAutomationLaneY(laneIndex);
+            laneBottom = laneTop + kAutomationLaneHeight;
+            if (point.y < laneTop - kAutomationNodeHitRadius || point.y >= laneBottom + kAutomationNodeHitRadius) {
+                continue;
+            }
+            laneCache = GetAutomationLaneCache(laneIndex, documentEndTick);
+            if (!laneCache) {
+                continue;
+            }
+            for (AutomationCurveNode const &node : laneCache->nodes) {
+                int nodeX;
+                int nodeY;
+
+                nodeX = TickToX(node.tick);
+                nodeY = AutomationValueToY(laneIndex, node.value);
+                if (std::abs(point.x - nodeX) <= kAutomationNodeHitRadius &&
+                    std::abs(point.y - nodeY) <= kAutomationNodeHitRadius) {
+                    if (outHitInfo) {
+                        outHitInfo->laneIndex = laneIndex;
+                        outHitInfo->eventIndex = node.sourceEventIndex;
+                        outHitInfo->tick = node.tick;
+                        outHitInfo->endTick = documentEndTick;
+                        outHitInfo->laneTop = laneTop;
+                        outHitInfo->laneBottom = laneBottom;
+                        outHitInfo->leftX = nodeX;
+                        outHitInfo->rightX = nodeX;
+                        outHitInfo->value = node.value;
+                        outHitInfo->hasFollowingEvent = false;
+                        for (AutomationCurveSegment const &segment : laneCache->segments) {
+                            if (segment.sourceEventIndex == node.sourceEventIndex) {
+                                outHitInfo->endTick = segment.endTick;
+                                outHitInfo->hasFollowingEvent = segment.hasFollowingEvent;
+                                break;
+                            }
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    bool FindAutomationSegmentAtTick(AutomationLaneCache const *laneCache,
+                                     uint32_t tick,
+                                     AutomationCurveSegment const **outSegment) const {
+        auto it = std::upper_bound(laneCache->segments.begin(),
+                                   laneCache->segments.end(),
+                                   tick,
+                                   [](uint32_t needleTick, AutomationCurveSegment const &segment) {
+                                       return needleTick < segment.startTick;
+                                   });
+
+        while (it != laneCache->segments.begin()) {
+            --it;
+            if (it->startTick <= tick && tick < it->endTick) {
+                if (outSegment) {
+                    *outSegment = &(*it);
+                }
+                return true;
+            }
+            if (it->endTick <= tick) {
+                break;
+            }
+        }
+        return false;
+    }
+
+    bool HitTestAutomation(wxPoint point, AutomationHitInfo *outHitInfo = nullptr) {
+        std::vector<AutomationLaneDescriptor> const &lanes = GetAutomationLanes();
+        uint32_t tick;
+        uint32_t documentEndTick;
         int laneIndex;
 
         if (!m_document || point.y < GetAutomationAreaTop()) {
             return false;
         }
+        tick = XToTick(point.x);
+        documentEndTick = GetDocumentEndTick();
         for (laneIndex = 0; laneIndex < static_cast<int>(lanes.size()); ++laneIndex) {
-            AutomationLaneDescriptor const &lane = lanes[laneIndex];
-            uint32_t eventCount;
-            uint32_t eventIndex;
+            AutomationLaneCache const *laneCache;
+            AutomationCurveSegment const *segment;
             int laneTop;
             int laneBottom;
 
@@ -1148,167 +1780,30 @@ private:
             if (point.y < laneTop || point.y >= laneBottom) {
                 continue;
             }
-            if (lane.kind == AutomationLaneKind::Tempo) {
-                eventCount = 0;
-                if (BAERmfEditorDocument_GetTempoEventCount(m_document, &eventCount) != BAE_NO_ERROR) {
-                    continue;
-                }
-                if (eventCount == 0) {
-                    /* Default tempo bar spans the whole document – make it selectable. */
-                    if (point.x >= kPianoRollLeftGutter) {
-                        if (outHitInfo) {
-                            uint32_t defaultBpm = 120;
-                            BAERmfEditorDocument_GetTempoBPM(m_document, &defaultBpm);
-                            outHitInfo->laneIndex = laneIndex;
-                            outHitInfo->eventIndex = 0;
-                            outHitInfo->tick = 0;
-                            outHitInfo->endTick = GetDocumentEndTick();
-                            outHitInfo->laneTop = laneTop;
-                            outHitInfo->laneBottom = laneBottom;
-                            outHitInfo->leftX = kPianoRollLeftGutter;
-                            outHitInfo->rightX = TickToX(GetDocumentEndTick());
-                            outHitInfo->value = static_cast<int>(defaultBpm);
-                            outHitInfo->hasFollowingEvent = false;
-                        }
-                        return true;
-                    }
-                    continue;
-                }
-                for (eventIndex = 0; eventIndex < eventCount; ++eventIndex) {
-                    uint32_t tick;
-                    uint32_t microsecondsPerQuarter;
-                    uint32_t nextTick;
-                    int leftX;
-                    int rightX;
+            laneCache = GetAutomationLaneCache(laneIndex, documentEndTick);
+            if (!laneCache) {
+                continue;
+            }
+            segment = nullptr;
+            if (FindAutomationSegmentAtTick(laneCache, tick, &segment) && segment) {
+                int leftX;
+                int rightX;
 
-                    if (BAERmfEditorDocument_GetTempoEvent(m_document, eventIndex, &tick, &microsecondsPerQuarter) != BAE_NO_ERROR) {
-                        continue;
-                    }
-                    nextTick = GetDocumentEndTick();
-                    if (eventIndex + 1 < eventCount) {
-                        uint32_t nextMicrosecondsPerQuarter;
-
-                        BAERmfEditorDocument_GetTempoEvent(m_document, eventIndex + 1, &nextTick, &nextMicrosecondsPerQuarter);
-                    }
-                    leftX = TickToX(tick);
-                    rightX = TickToX(std::max(tick + 1, nextTick));
-                    if (point.x >= leftX && point.x < rightX) {
-                        if (outHitInfo) {
-                            outHitInfo->laneIndex = laneIndex;
-                            outHitInfo->eventIndex = eventIndex;
-                            outHitInfo->tick = tick;
-                            outHitInfo->endTick = nextTick;
-                            outHitInfo->laneTop = laneTop;
-                            outHitInfo->laneBottom = laneBottom;
-                            outHitInfo->leftX = leftX;
-                            outHitInfo->rightX = rightX;
-                            outHitInfo->value = microsecondsPerQuarter ? static_cast<int>(60000000UL / microsecondsPerQuarter) : 120;
-                            outHitInfo->hasFollowingEvent = (eventIndex + 1) < eventCount;
-                        }
-                        return true;
-                    }
+                leftX = TickToX(segment->startTick);
+                rightX = TickToX(std::max(segment->startTick + 1, segment->endTick));
+                if (outHitInfo) {
+                    outHitInfo->laneIndex = laneIndex;
+                    outHitInfo->eventIndex = segment->sourceEventIndex;
+                    outHitInfo->tick = segment->startTick;
+                    outHitInfo->endTick = segment->endTick;
+                    outHitInfo->laneTop = laneTop;
+                    outHitInfo->laneBottom = laneBottom;
+                    outHitInfo->leftX = leftX;
+                    outHitInfo->rightX = rightX;
+                    outHitInfo->value = segment->startValue;
+                    outHitInfo->hasFollowingEvent = segment->hasFollowingEvent;
                 }
-            } else if (lane.kind == AutomationLaneKind::Controller) {
-                eventCount = 0;
-                if (BAERmfEditorDocument_GetTrackCCEventCount(m_document,
-                                                              static_cast<uint16_t>(m_selectedTrack),
-                                                              lane.controller,
-                                                              &eventCount) != BAE_NO_ERROR) {
-                    continue;
-                }
-                for (eventIndex = 0; eventIndex < eventCount; ++eventIndex) {
-                    uint32_t tick;
-                    unsigned char value;
-                    uint32_t nextTick;
-                    int leftX;
-                    int rightX;
-
-                    if (BAERmfEditorDocument_GetTrackCCEvent(m_document,
-                                                             static_cast<uint16_t>(m_selectedTrack),
-                                                             lane.controller,
-                                                             eventIndex,
-                                                             &tick,
-                                                             &value) != BAE_NO_ERROR) {
-                        continue;
-                    }
-                    nextTick = GetDocumentEndTick();
-                    if (eventIndex + 1 < eventCount) {
-                        unsigned char nextValue;
-
-                        BAERmfEditorDocument_GetTrackCCEvent(m_document,
-                                                             static_cast<uint16_t>(m_selectedTrack),
-                                                             lane.controller,
-                                                             eventIndex + 1,
-                                                             &nextTick,
-                                                             &nextValue);
-                    }
-                    leftX = TickToX(tick);
-                    rightX = TickToX(std::max(tick + 1, nextTick));
-                    if (point.x >= leftX && point.x < rightX) {
-                        if (outHitInfo) {
-                            outHitInfo->laneIndex = laneIndex;
-                            outHitInfo->eventIndex = eventIndex;
-                            outHitInfo->tick = tick;
-                            outHitInfo->endTick = nextTick;
-                            outHitInfo->laneTop = laneTop;
-                            outHitInfo->laneBottom = laneBottom;
-                            outHitInfo->leftX = leftX;
-                            outHitInfo->rightX = rightX;
-                            outHitInfo->value = value;
-                            outHitInfo->hasFollowingEvent = (eventIndex + 1) < eventCount;
-                        }
-                        return true;
-                    }
-                }
-            } else {
-                eventCount = 0;
-                if (BAERmfEditorDocument_GetTrackPitchBendEventCount(m_document,
-                                                                     static_cast<uint16_t>(m_selectedTrack),
-                                                                     &eventCount) != BAE_NO_ERROR) {
-                    continue;
-                }
-                for (eventIndex = 0; eventIndex < eventCount; ++eventIndex) {
-                    uint32_t tick;
-                    uint16_t value;
-                    uint32_t nextTick;
-                    int leftX;
-                    int rightX;
-
-                    if (BAERmfEditorDocument_GetTrackPitchBendEvent(m_document,
-                                                                    static_cast<uint16_t>(m_selectedTrack),
-                                                                    eventIndex,
-                                                                    &tick,
-                                                                    &value) != BAE_NO_ERROR) {
-                        continue;
-                    }
-                    nextTick = GetDocumentEndTick();
-                    if (eventIndex + 1 < eventCount) {
-                        uint16_t nextValue;
-
-                        BAERmfEditorDocument_GetTrackPitchBendEvent(m_document,
-                                                                    static_cast<uint16_t>(m_selectedTrack),
-                                                                    eventIndex + 1,
-                                                                    &nextTick,
-                                                                    &nextValue);
-                    }
-                    leftX = TickToX(tick);
-                    rightX = TickToX(std::max(tick + 1, nextTick));
-                    if (point.x >= leftX && point.x < rightX) {
-                        if (outHitInfo) {
-                            outHitInfo->laneIndex = laneIndex;
-                            outHitInfo->eventIndex = eventIndex;
-                            outHitInfo->tick = tick;
-                            outHitInfo->endTick = nextTick;
-                            outHitInfo->laneTop = laneTop;
-                            outHitInfo->laneBottom = laneBottom;
-                            outHitInfo->leftX = leftX;
-                            outHitInfo->rightX = rightX;
-                            outHitInfo->value = static_cast<int>(value);
-                            outHitInfo->hasFollowingEvent = (eventIndex + 1) < eventCount;
-                        }
-                        return true;
-                    }
-                }
+                return true;
             }
         }
         return false;
@@ -1405,21 +1900,33 @@ private:
         std::vector<AutomationLaneDescriptor> const &lanes = GetAutomationLanes();
 
         if (lanes[laneIndex].kind == AutomationLaneKind::Tempo) {
-            return BAERmfEditorDocument_AddTempoEvent(m_document,
-                                                      tick,
-                                                      static_cast<uint32_t>(60000000UL / std::max(1, value))) == BAE_NO_ERROR;
+            if (BAERmfEditorDocument_AddTempoEvent(m_document,
+                                                   tick,
+                                                   static_cast<uint32_t>(60000000UL / std::max(1, value))) == BAE_NO_ERROR) {
+                InvalidateAutomationCaches();
+                return true;
+            }
+            return false;
         }
         if (lanes[laneIndex].kind == AutomationLaneKind::Controller) {
-            return BAERmfEditorDocument_AddTrackCCEvent(m_document,
-                                                        static_cast<uint16_t>(m_selectedTrack),
-                                                        lanes[laneIndex].controller,
-                                                        tick,
-                                                        static_cast<unsigned char>(value)) == BAE_NO_ERROR;
+            if (BAERmfEditorDocument_AddTrackCCEvent(m_document,
+                                                     static_cast<uint16_t>(m_selectedTrack),
+                                                     lanes[laneIndex].controller,
+                                                     tick,
+                                                     static_cast<unsigned char>(value)) == BAE_NO_ERROR) {
+                InvalidateAutomationCaches();
+                return true;
+            }
+            return false;
         }
-        return BAERmfEditorDocument_AddTrackPitchBendEvent(m_document,
-                                                           static_cast<uint16_t>(m_selectedTrack),
-                                                           tick,
-                                                           static_cast<uint16_t>(value)) == BAE_NO_ERROR;
+        if (BAERmfEditorDocument_AddTrackPitchBendEvent(m_document,
+                                                        static_cast<uint16_t>(m_selectedTrack),
+                                                        tick,
+                                                        static_cast<uint16_t>(value)) == BAE_NO_ERROR) {
+            InvalidateAutomationCaches();
+            return true;
+        }
+        return false;
     }
 
     bool SetAutomationEvent(int laneIndex, uint32_t eventIndex, uint32_t tick, int value) {
@@ -1429,24 +1936,36 @@ private:
         std::vector<AutomationLaneDescriptor> const &lanes = GetAutomationLanes();
 
         if (lanes[laneIndex].kind == AutomationLaneKind::Tempo) {
-            return BAERmfEditorDocument_SetTempoEvent(m_document,
-                                                      eventIndex,
-                                                      tick,
-                                                      static_cast<uint32_t>(60000000UL / std::max(1, value))) == BAE_NO_ERROR;
+            if (BAERmfEditorDocument_SetTempoEvent(m_document,
+                                                   eventIndex,
+                                                   tick,
+                                                   static_cast<uint32_t>(60000000UL / std::max(1, value))) == BAE_NO_ERROR) {
+                InvalidateAutomationCaches();
+                return true;
+            }
+            return false;
         }
         if (lanes[laneIndex].kind == AutomationLaneKind::Controller) {
-            return BAERmfEditorDocument_SetTrackCCEvent(m_document,
+            if (BAERmfEditorDocument_SetTrackCCEvent(m_document,
+                                                     static_cast<uint16_t>(m_selectedTrack),
+                                                     lanes[laneIndex].controller,
+                                                     eventIndex,
+                                                     tick,
+                                                     static_cast<unsigned char>(value)) == BAE_NO_ERROR) {
+                InvalidateAutomationCaches();
+                return true;
+            }
+            return false;
+        }
+        if (BAERmfEditorDocument_SetTrackPitchBendEvent(m_document,
                                                         static_cast<uint16_t>(m_selectedTrack),
-                                                        lanes[laneIndex].controller,
                                                         eventIndex,
                                                         tick,
-                                                        static_cast<unsigned char>(value)) == BAE_NO_ERROR;
+                                                        static_cast<uint16_t>(value)) == BAE_NO_ERROR) {
+            InvalidateAutomationCaches();
+            return true;
         }
-        return BAERmfEditorDocument_SetTrackPitchBendEvent(m_document,
-                                                           static_cast<uint16_t>(m_selectedTrack),
-                                                           eventIndex,
-                                                           tick,
-                                                           static_cast<uint16_t>(value)) == BAE_NO_ERROR;
+        return false;
     }
 
     bool GetTrackCCValueAtTick(unsigned char cc, uint32_t tick, unsigned char *outValue) const {
@@ -1510,19 +2029,27 @@ private:
                 continue;
             }
             if (eventTick == tick) {
-                return BAERmfEditorDocument_SetTrackCCEvent(m_document,
-                                                            static_cast<uint16_t>(m_selectedTrack),
-                                                            cc,
-                                                            i,
-                                                            tick,
-                                                            value) == BAE_NO_ERROR;
+                if (BAERmfEditorDocument_SetTrackCCEvent(m_document,
+                                                         static_cast<uint16_t>(m_selectedTrack),
+                                                         cc,
+                                                         i,
+                                                         tick,
+                                                         value) == BAE_NO_ERROR) {
+                    InvalidateAutomationCaches();
+                    return true;
+                }
+                return false;
             }
         }
-        return BAERmfEditorDocument_AddTrackCCEvent(m_document,
-                                                    static_cast<uint16_t>(m_selectedTrack),
-                                                    cc,
-                                                    tick,
-                                                    value) == BAE_NO_ERROR;
+        if (BAERmfEditorDocument_AddTrackCCEvent(m_document,
+                                                 static_cast<uint16_t>(m_selectedTrack),
+                                                 cc,
+                                                 tick,
+                                                 value) == BAE_NO_ERROR) {
+            InvalidateAutomationCaches();
+            return true;
+        }
+        return false;
     }
 
     DragMode GetDragModeForAutomation(AutomationHitInfo const &hitInfo, wxPoint point) const {
@@ -1608,6 +2135,7 @@ private:
             return false;
         }
         CommitUndoAction("Edit Note");
+        InvalidateNoteCache();
         UpdateVirtualSize();
         Refresh();
         return true;
@@ -1668,7 +2196,7 @@ private:
                         m_selectionChangedCallback();
                     }
                     UpdateVirtualSize();
-                    Refresh();
+                    RefreshAutomationLane(laneIndex);
                     return true;
                 }
                 CancelUndoAction();
@@ -1798,7 +2326,7 @@ private:
         }
         CommitUndoAction(title);
         UpdateVirtualSize();
-        Refresh();
+        RefreshAutomationLane(laneIndex);
         return true;
     }
 
@@ -1832,12 +2360,13 @@ private:
                                                                         static_cast<uint32_t>(m_selectedAutomationEvent));
             }
             if (result == BAE_NO_ERROR) {
+                InvalidateAutomationCaches();
                 CommitUndoAction("Delete Event");
                 m_selectedItemKind = PianoRollSelectionKind::None;
+                RefreshAutomationLane(m_selectedAutomationLane);
                 m_selectedAutomationLane = -1;
                 m_selectedAutomationEvent = -1;
                 UpdateVirtualSize();
-                Refresh();
             } else {
                 CancelUndoAction();
             }
@@ -1854,6 +2383,13 @@ private:
 
     void OnDeleteSelectedItem(wxCommandEvent &) {
         DeleteCurrentSelection();
+    }
+
+    void OnToggleRampSegment(wxCommandEvent &) {
+        if (ToggleRampForSelectedAutomationSegment()) {
+            return;
+        }
+        wxBell();
     }
 
     int GetAutomationAreaTop() const {
@@ -1885,6 +2421,54 @@ private:
         virtualSize = GetVirtualSize();
         targetTop = std::max(0, virtualSize.GetHeight() - clientHeight);
         Scroll(0, targetTop / scrollPixelsY);
+    }
+
+    void RefreshAutomationLane(int laneIndex, int padding = 8) {
+        int scrollPixelsX;
+        int scrollPixelsY;
+        int viewUnitsX;
+        int viewUnitsY;
+        int viewTop;
+        int clientWidth;
+        int clientHeight;
+        int laneTop;
+        int laneBottom;
+        int clientTop;
+        int refreshTop;
+        int refreshBottom;
+
+        if (!IsAutomationLaneVisible(laneIndex)) {
+            return;
+        }
+        GetScrollPixelsPerUnit(&scrollPixelsX, &scrollPixelsY);
+        if (scrollPixelsY <= 0) {
+            scrollPixelsY = 1;
+        }
+        GetViewStart(&viewUnitsX, &viewUnitsY);
+        viewTop = viewUnitsY * scrollPixelsY;
+        clientWidth = GetClientSize().GetWidth();
+        clientHeight = GetClientSize().GetHeight();
+        if (clientWidth <= 0 || clientHeight <= 0) {
+            return;
+        }
+        laneTop = GetAutomationLaneY(laneIndex);
+        laneBottom = laneTop + kAutomationLaneHeight;
+        clientTop = laneTop - viewTop;
+        refreshTop = std::max(0, clientTop - padding);
+        refreshBottom = std::min(clientHeight, (laneBottom - viewTop) + padding);
+        if (refreshBottom <= refreshTop) {
+            return;
+        }
+        RefreshRect(wxRect(0, refreshTop, clientWidth, refreshBottom - refreshTop), false);
+    }
+
+    void RefreshAutomationLanes(int firstLane, int secondLane = -1) {
+        if (firstLane >= 0) {
+            RefreshAutomationLane(firstLane);
+        }
+        if (secondLane >= 0 && secondLane != firstLane) {
+            RefreshAutomationLane(secondLane);
+        }
     }
 
 public:
@@ -2146,6 +2730,8 @@ private:
                                                         newEndTick);
         }
         m_userEndTick = newEndTick;
+        InvalidateNoteCache();
+        InvalidateAutomationCaches();
     }
 
     uint32_t GetSelectedTrackContentEndTick() const {
@@ -2366,12 +2952,14 @@ private:
 
     void DrawAutomationLanes(wxDC &dc, wxSize const &virtualSize, wxRect const &visibleRect) {
         std::vector<AutomationLaneDescriptor> const &lanes = GetAutomationLanes();
+        uint32_t documentEndTick;
         int laneIndex;
         int visibleLeft;
         int visibleRight;
 
         visibleLeft = std::max(0, visibleRect.GetLeft());
         visibleRight = std::min(virtualSize.GetWidth(), visibleRect.GetRight());
+        documentEndTick = GetDocumentEndTick();
 
         for (laneIndex = 0; laneIndex < static_cast<int>(lanes.size()); ++laneIndex) {
             AutomationLaneDescriptor const &lane = lanes[laneIndex];
@@ -2405,179 +2993,140 @@ private:
             if (!m_document) {
                 continue;
             }
-            if (lane.kind == AutomationLaneKind::Tempo) {
-                uint32_t tempoCount;
-                uint32_t tempoIndex;
+            AutomationLaneCache const *laneCache;
+            AutomationDisplayCache const *displayCache;
+            bool useDownsampledDisplay;
 
-                tempoCount = 0;
-                if (BAERmfEditorDocument_GetTempoEventCount(m_document, &tempoCount) != BAE_NO_ERROR || tempoCount == 0) {
-                    uint32_t bpm;
-                    int barHeight;
+            laneCache = GetAutomationLaneCache(laneIndex, documentEndTick);
+            if (!laneCache) {
+                continue;
+            }
+            uint32_t visibleStartTick;
+            uint32_t visibleEndTick;
 
-                    bpm = 120;
-                    BAERmfEditorDocument_GetTempoBPM(m_document, &bpm);
-                    barHeight = std::clamp((static_cast<int>(bpm) * kAutomationLaneHeight) / 240, 2, kAutomationLaneHeight);
-                    dc.SetPen(*wxTRANSPARENT_PEN);
-                    dc.SetBrush(wxBrush(lane.color));
-                    dc.DrawRectangle(kPianoRollLeftGutter, laneBottom - barHeight, virtualSize.GetWidth() - kPianoRollLeftGutter, barHeight);
+            visibleStartTick = XToTick(std::max(kPianoRollLeftGutter, visibleLeft));
+            visibleEndTick = XToTick(std::max(kPianoRollLeftGutter, visibleRight));
+            auto valueToY = [&](int value) -> int {
+                int clampedValue;
+
+                clampedValue = std::clamp(value, 0, lane.maxValue);
+                return laneBottom - 1 - ((clampedValue * (kAutomationLaneHeight - 1)) / std::max(1, lane.maxValue));
+            };
+            useDownsampledDisplay = static_cast<int>(laneCache->segments.size()) > std::max(64, laneVisibleWidth * 2);
+            displayCache = nullptr;
+            if (useDownsampledDisplay) {
+                displayCache = GetAutomationDisplayCache(laneIndex,
+                                                         laneVisibleLeft,
+                                                         visibleRight,
+                                                         laneTop,
+                                                         laneBottom,
+                                                         lane,
+                                                         laneCache);
+            }
+            if (displayCache) {
+                dc.SetPen(wxPen(lane.color, 1));
+                for (AutomationDisplayBucket const &bucket : displayCache->buckets) {
+                    if (!bucket.hasData) {
+                        continue;
+                    }
+                    if (bucket.minY == bucket.maxY) {
+                        dc.DrawPoint(bucket.x, bucket.minY);
+                    } else {
+                        dc.DrawLine(bucket.x, bucket.minY, bucket.x, bucket.maxY);
+                    }
+                }
+            } else {
+            auto segmentIt = std::lower_bound(laneCache->segments.begin(),
+                                              laneCache->segments.end(),
+                                              visibleStartTick,
+                                              [](AutomationCurveSegment const &segment, uint32_t tick) {
+                                                  return segment.startTick < tick;
+                                              });
+            if (segmentIt != laneCache->segments.begin()) {
+                --segmentIt;
+            }
+            while (segmentIt != laneCache->segments.end() && segmentIt->endTick <= visibleStartTick) {
+                ++segmentIt;
+            }
+
+            for (; segmentIt != laneCache->segments.end(); ++segmentIt) {
+                AutomationCurveSegment const &segment = *segmentIt;
+                int x0;
+                int x1;
+                int y0;
+                int y1;
+                bool segmentSelected;
+
+                if (segment.startTick > visibleEndTick) {
+                    break;
+                }
+                x0 = TickToX(segment.startTick);
+                x1 = TickToX(std::max(segment.startTick + 1, segment.endTick));
+                if (x1 < visibleLeft || x0 > visibleRight) {
+                    continue;
+                }
+                y0 = valueToY(segment.startValue);
+                y1 = valueToY(segment.endValue);
+                segmentSelected = (m_selectedItemKind == PianoRollSelectionKind::Automation &&
+                                   m_selectedAutomationLane == laneIndex &&
+                                   m_selectedAutomationEvent == static_cast<long>(segment.sourceEventIndex));
+                dc.SetPen(wxPen(segmentSelected ? m_theme.automationSelectedBorder : lane.color,
+                                segmentSelected ? 2 : 1));
+                if (segment.interpolation == AutomationInterpolation::Linear && segment.hasFollowingEvent) {
+                    dc.DrawLine(x0, y0, x1, y1);
                 } else {
-                    for (tempoIndex = 0; tempoIndex < tempoCount; ++tempoIndex) {
-                        uint32_t tick;
-                        uint32_t microsecondsPerQuarter;
-                        uint32_t nextTick;
-                        uint32_t bpm;
-                        int x0;
-                        int x1;
-                        int barHeight;
-
-                        if (BAERmfEditorDocument_GetTempoEvent(m_document, tempoIndex, &tick, &microsecondsPerQuarter) != BAE_NO_ERROR || microsecondsPerQuarter == 0) {
-                            continue;
-                        }
-                        nextTick = GetDocumentEndTick();
-                        if (tempoIndex + 1 < tempoCount) {
-                            uint32_t nextMicrosecondsPerQuarter;
-
-                            BAERmfEditorDocument_GetTempoEvent(m_document, tempoIndex + 1, &nextTick, &nextMicrosecondsPerQuarter);
-                        }
-                        bpm = 60000000UL / microsecondsPerQuarter;
-                        x0 = TickToX(tick);
-                        x1 = TickToX(std::max(tick + 1, nextTick));
-                        if (x1 < visibleLeft || x0 > visibleRight) {
-                            continue;
-                        }
-                        barHeight = std::clamp((static_cast<int>(bpm) * kAutomationLaneHeight) / 240, 2, kAutomationLaneHeight);
-                        dc.SetPen(*wxTRANSPARENT_PEN);
-                        dc.SetBrush(wxBrush(lane.color));
-                        dc.DrawRectangle(x0, laneBottom - barHeight, std::max(1, x1 - x0), barHeight);
-                        if (m_selectedItemKind == PianoRollSelectionKind::Automation &&
-                            m_selectedAutomationLane == laneIndex &&
-                            m_selectedAutomationEvent == static_cast<long>(tempoIndex)) {
-                            dc.SetBrush(*wxTRANSPARENT_BRUSH);
-                            dc.SetPen(wxPen(m_theme.automationSelectedBorder, 2));
-                            dc.DrawRectangle(x0, laneTop + 1, std::max(2, x1 - x0), kAutomationLaneHeight - 2);
-                        }
+                    dc.DrawLine(x0, y0, x1, y0);
+                    if (segment.hasFollowingEvent) {
+                        dc.DrawLine(x1, y0, x1, y1);
                     }
                 }
-            } else if (HasTrack() && lane.kind == AutomationLaneKind::Controller) {
-                uint32_t eventCount;
-                uint32_t eventIndex;
-                unsigned char controller;
+            }
+            }
 
-                controller = lane.controller;
-                eventCount = 0;
-                if (BAERmfEditorDocument_GetTrackCCEventCount(m_document, static_cast<uint16_t>(m_selectedTrack), controller, &eventCount) != BAE_NO_ERROR) {
-                    continue;
+            if (m_selectedAutomationLane == laneIndex || m_hoverAutomationLane == laneIndex) {
+                int visibleNodeCount;
+                int maxVisibleNodeMarkers;
+                bool suppressDenseNodeMarkers;
+
+                visibleNodeCount = 0;
+                for (AutomationCurveNode const &node : laneCache->nodes) {
+                    int nodeX;
+
+                    nodeX = TickToX(node.tick);
+                    if (nodeX + 6 < visibleLeft || nodeX - 6 > visibleRight) {
+                        continue;
+                    }
+                    ++visibleNodeCount;
                 }
-                for (eventIndex = 0; eventIndex < eventCount; ++eventIndex) {
-                    uint32_t tick;
-                    unsigned char value;
-                    uint32_t nextTick;
-                    int x0;
-                    int x1;
+                maxVisibleNodeMarkers = std::max(24, laneVisibleWidth / 12);
+                suppressDenseNodeMarkers = visibleNodeCount > maxVisibleNodeMarkers;
+                for (AutomationCurveNode const &node : laneCache->nodes) {
+                    int nodeX;
+                    int nodeY;
+                    int radius;
+                    bool nodeSelected;
+                    bool nodeHovered;
 
-                    if (BAERmfEditorDocument_GetTrackCCEvent(m_document, static_cast<uint16_t>(m_selectedTrack), controller, eventIndex, &tick, &value) != BAE_NO_ERROR) {
+                    nodeX = TickToX(node.tick);
+                    if (nodeX + 6 < visibleLeft || nodeX - 6 > visibleRight) {
                         continue;
                     }
-                    nextTick = GetDocumentEndTick();
-                    if (eventIndex + 1 < eventCount) {
-                        unsigned char nextValue;
-
-                        BAERmfEditorDocument_GetTrackCCEvent(m_document, static_cast<uint16_t>(m_selectedTrack), controller, eventIndex + 1, &nextTick, &nextValue);
-                    }
-                    x0 = TickToX(tick);
-                    x1 = TickToX(std::max(tick + 1, nextTick));
-                    if (x1 < visibleLeft || x0 > visibleRight) {
+                    nodeY = valueToY(node.value);
+                    nodeSelected = (m_selectedItemKind == PianoRollSelectionKind::Automation &&
+                                    m_selectedAutomationLane == laneIndex &&
+                                    m_selectedAutomationEvent == static_cast<long>(node.sourceEventIndex));
+                    nodeHovered = (m_hoverAutomationLane == laneIndex &&
+                                   m_hoverAutomationEvent == static_cast<long>(node.sourceEventIndex));
+                    if (suppressDenseNodeMarkers && !nodeSelected && !nodeHovered) {
                         continue;
                     }
-                    dc.SetPen(*wxTRANSPARENT_PEN);
-                    dc.SetBrush(wxBrush(lane.color));
-                    if (lane.bipolar) {
-                        int centerY;
-                        int offsetY;
-                        int centerValue;
-
-                        centerY = laneTop + (kAutomationLaneHeight / 2);
-                        centerValue = (lane.maxValue + 1) / 2;
-                        offsetY = ((static_cast<int>(value) - centerValue) * (kAutomationLaneHeight / 2 - 2)) / std::max(1, centerValue);
-                        if (offsetY >= 0) {
-                            dc.DrawRectangle(x0, centerY - offsetY, std::max(1, x1 - x0), std::max(1, offsetY));
-                        } else {
-                            dc.DrawRectangle(x0, centerY, std::max(1, x1 - x0), std::max(1, -offsetY));
-                        }
-                    } else {
-                        int barHeight;
-
-                        barHeight = (static_cast<int>(value) * kAutomationLaneHeight) / 127;
-                        barHeight = std::clamp(barHeight, 1, kAutomationLaneHeight);
-                        dc.DrawRectangle(x0, laneBottom - barHeight, std::max(1, x1 - x0), barHeight);
-                    }
-                    if (m_selectedItemKind == PianoRollSelectionKind::Automation &&
-                        m_selectedAutomationLane == laneIndex &&
-                        m_selectedAutomationEvent == static_cast<long>(eventIndex)) {
-                        dc.SetBrush(*wxTRANSPARENT_BRUSH);
-                        dc.SetPen(wxPen(m_theme.automationSelectedBorder, 2));
-                        dc.DrawRectangle(x0, laneTop + 1, std::max(2, x1 - x0), kAutomationLaneHeight - 2);
-                    }
-                }
-            } else if (HasTrack() && lane.kind == AutomationLaneKind::PitchBend) {
-                uint32_t eventCount;
-                uint32_t eventIndex;
-
-                eventCount = 0;
-                if (BAERmfEditorDocument_GetTrackPitchBendEventCount(m_document,
-                                                                     static_cast<uint16_t>(m_selectedTrack),
-                                                                     &eventCount) != BAE_NO_ERROR) {
-                    continue;
-                }
-                for (eventIndex = 0; eventIndex < eventCount; ++eventIndex) {
-                    uint32_t tick;
-                    uint16_t value;
-                    uint32_t nextTick;
-                    int x0;
-                    int x1;
-                    int centerY;
-                    int offsetY;
-                    int centerValue;
-
-                    if (BAERmfEditorDocument_GetTrackPitchBendEvent(m_document,
-                                                                    static_cast<uint16_t>(m_selectedTrack),
-                                                                    eventIndex,
-                                                                    &tick,
-                                                                    &value) != BAE_NO_ERROR) {
-                        continue;
-                    }
-                    nextTick = GetDocumentEndTick();
-                    if (eventIndex + 1 < eventCount) {
-                        uint16_t nextValue;
-
-                        BAERmfEditorDocument_GetTrackPitchBendEvent(m_document,
-                                                                    static_cast<uint16_t>(m_selectedTrack),
-                                                                    eventIndex + 1,
-                                                                    &nextTick,
-                                                                    &nextValue);
-                    }
-                    x0 = TickToX(tick);
-                    x1 = TickToX(std::max(tick + 1, nextTick));
-                    if (x1 < visibleLeft || x0 > visibleRight) {
-                        continue;
-                    }
-                    dc.SetPen(*wxTRANSPARENT_PEN);
-                    dc.SetBrush(wxBrush(lane.color));
-                    centerY = laneTop + (kAutomationLaneHeight / 2);
-                    centerValue = (lane.maxValue + 1) / 2;
-                    offsetY = ((static_cast<int>(value) - centerValue) * (kAutomationLaneHeight / 2 - 2)) / std::max(1, centerValue);
-                    if (offsetY >= 0) {
-                        dc.DrawRectangle(x0, centerY - offsetY, std::max(1, x1 - x0), std::max(1, offsetY));
-                    } else {
-                        dc.DrawRectangle(x0, centerY, std::max(1, x1 - x0), std::max(1, -offsetY));
-                    }
-                    if (m_selectedItemKind == PianoRollSelectionKind::Automation &&
-                        m_selectedAutomationLane == laneIndex &&
-                        m_selectedAutomationEvent == static_cast<long>(eventIndex)) {
-                        dc.SetBrush(*wxTRANSPARENT_BRUSH);
-                        dc.SetPen(wxPen(m_theme.automationSelectedBorder, 2));
-                        dc.DrawRectangle(x0, laneTop + 1, std::max(2, x1 - x0), kAutomationLaneHeight - 2);
-                    }
+                    radius = nodeSelected ? 4 : (nodeHovered ? 4 : 3);
+                    dc.SetPen(wxPen(nodeSelected ? m_theme.automationSelectedBorder : lane.color,
+                                    nodeSelected ? 2 : 1));
+                    dc.SetBrush(wxBrush(nodeSelected ? m_theme.automationSelectedBorder
+                                                    : (nodeHovered ? wxColour(240, 240, 240)
+                                                                   : lane.color)));
+                    dc.DrawCircle(nodeX, nodeY, radius);
                 }
             }
         }
@@ -2860,32 +3409,32 @@ private:
     }
 
     long HitTestNote(wxPoint point, BAERmfEditorNoteInfo *noteInfoOut = nullptr) const {
-        uint32_t noteCount;
-        uint32_t noteIndex;
+        NoteTrackCache const *cache;
+        uint32_t tick;
+        uint32_t binIndex;
+        int note;
 
         if (!HasTrack()) {
             return -1;
         }
-        noteCount = 0;
-        if (BAERmfEditorDocument_GetNoteCount(m_document, static_cast<uint16_t>(m_selectedTrack), &noteCount) != BAE_NO_ERROR) {
+        cache = const_cast<PianoRollPanel *>(this)->GetNoteTrackCache();
+        if (!cache || cache->pitchBins.empty()) {
             return -1;
         }
-        for (noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
-            BAERmfEditorNoteInfo noteInfo;
+        tick = XToTick(point.x);
+        note = std::clamp(YToNote(point.y), 0, 127);
+        binIndex = std::min<uint32_t>(tick / cache->ticksPerBin,
+                                      static_cast<uint32_t>(cache->pitchBins[static_cast<size_t>(note)].size() - 1));
+        for (uint32_t entryIndex : cache->pitchBins[static_cast<size_t>(note)][binIndex]) {
+            NoteCacheEntry const &entry = cache->notes[entryIndex];
             wxRect noteRect;
 
-            if (!GetNoteInfo(noteIndex, &noteInfo)) {
-                continue;
-            }
-            noteRect = wxRect(TickToX(noteInfo.startTick),
-                              NoteToY(noteInfo.note),
-                              std::max(8, TickToX(noteInfo.startTick + noteInfo.durationTicks) - TickToX(noteInfo.startTick)),
-                              kNoteHeight - 1);
+            noteRect = BuildNoteRect(entry.noteInfo);
             if (noteRect.Contains(point)) {
                 if (noteInfoOut) {
-                    *noteInfoOut = noteInfo;
+                    *noteInfoOut = entry.noteInfo;
                 }
-                return static_cast<long>(noteIndex);
+                return static_cast<long>(entry.sourceIndex);
             }
         }
         return -1;
@@ -2922,6 +3471,7 @@ private:
             CommitUndoAction("Delete Note");
             m_selectedNotes.clear();
             m_selectedNote = -1;
+            InvalidateNoteCache();
             UpdateVirtualSize();
             Refresh();
         } else {
@@ -3023,31 +3573,27 @@ private:
         DrawMidiLoopOverlay(dc, visibleRect, clientSize);
 
         if (HasTrack()) {
-            uint32_t noteCount;
-            uint32_t noteIndex;
+            NoteTrackCache const *noteCache;
+            std::vector<uint32_t> visibleEntries;
 
-            noteCount = 0;
-            BAERmfEditorDocument_GetNoteCount(m_document, static_cast<uint16_t>(m_selectedTrack), &noteCount);
-            for (noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
-                BAERmfEditorNoteInfo noteInfo;
+            noteCache = GetNoteTrackCache();
+            if (noteCache) {
+                GatherNoteEntriesInRect(notesVisibleRect, &visibleEntries);
+            }
+            for (uint32_t entryIndex : visibleEntries) {
+                NoteCacheEntry const &entry = noteCache->notes[entryIndex];
                 wxRect noteRect;
                 bool selected;
 
-                if (!GetNoteInfo(noteIndex, &noteInfo)) {
-                    continue;
-                }
-                noteRect = wxRect(TickToX(noteInfo.startTick),
-                                  NoteToY(noteInfo.note),
-                                  std::max(8, TickToX(noteInfo.startTick + noteInfo.durationTicks) - TickToX(noteInfo.startTick)),
-                                  kNoteHeight - 1);
+                noteRect = BuildNoteRect(entry.noteInfo);
                 if (!noteRect.Intersects(notesVisibleRect)) {
                     continue;
                 }
-                selected = IsNoteSelected(static_cast<long>(noteIndex));
+                selected = IsNoteSelected(static_cast<long>(entry.sourceIndex));
                 dc.SetBrush(wxBrush(selected ? wxColour(216, 106, 58) : wxColour(73, 135, 210)));
                 dc.SetPen(wxPen(selected ? wxColour(110, 42, 17) : wxColour(34, 72, 120)));
                 dc.DrawRectangle(noteRect);
-                if (selected && static_cast<long>(noteIndex) == m_selectedNote) {
+                if (selected && static_cast<long>(entry.sourceIndex) == m_selectedNote) {
                     int handleTop;
 
                     handleTop = noteRect.GetTop() + 1;
@@ -3104,11 +3650,14 @@ private:
 
     void OnLeftDown(wxMouseEvent &event) {
         wxPoint logicalPoint;
+        AutomationHitInfo automationNodeHit;
         AutomationHitInfo automationHit;
         BAERmfEditorNoteInfo noteInfo;
         long hitNote;
+        int previousAutomationLane;
 
         SetFocus();
+        previousAutomationLane = (m_selectedItemKind == PianoRollSelectionKind::Automation) ? m_selectedAutomationLane : -1;
         logicalPoint = CalcUnscrolledPosition(event.GetPosition());
         if (IsPointInStickyRuler(logicalPoint) && logicalPoint.x >= kPianoRollLeftGutter) {
             if (HitTestTimelineEndHandle(logicalPoint)) {
@@ -3194,7 +3743,33 @@ private:
             BeginUndoAction(m_dragUndoLabel);
             m_dragUndoActive = true;
             CaptureMouse();
-        } else if (HitTestAutomation(logicalPoint, &automationHit)) {
+        } else {
+            bool nodeHit;
+
+            nodeHit = HitTestAutomationNode(logicalPoint, &automationNodeHit);
+            if (!(nodeHit || HitTestAutomation(logicalPoint, &automationHit))) {
+                m_selectedAutomationLane = -1;
+                m_selectedAutomationEvent = -1;
+                m_dragging = true;
+                m_dragAutomationValid = false;
+                m_dragMode = DragMode::SelectBox;
+                m_dragUndoActive = false;
+                m_dragUndoLabel.clear();
+                m_selectBoxActive = true;
+                m_selectBoxStart = logicalPoint;
+                m_selectBoxCurrent = logicalPoint;
+                m_selectedNotes.clear();
+                m_selectedNote = -1;
+                m_selectedItemKind = PianoRollSelectionKind::None;
+                m_lastPreviewDragNote = -1;
+                if (HasCapture()) {
+                    ReleaseMouse();
+                }
+                CaptureMouse();
+            } else {
+            if (nodeHit) {
+                automationHit = automationNodeHit;
+            }
             m_selectedNotes.clear();
             m_selectedItemKind = PianoRollSelectionKind::Automation;
             m_selectedNote = -1;
@@ -3204,36 +3779,24 @@ private:
             m_selectBoxActive = false;
             m_dragAutomationValid = true;
             m_dragAutomationHit = automationHit;
-            m_dragMode = GetDragModeForAutomation(automationHit, logicalPoint);
-            m_dragUndoLabel = (m_dragMode == DragMode::ResizeRight) ? "Resize Event" : "Edit Event";
+            m_dragMode = nodeHit ? DragMode::Move : GetDragModeForAutomation(automationHit, logicalPoint);
+            m_dragUndoLabel = nodeHit ? "Move Node" : ((m_dragMode == DragMode::ResizeRight) ? "Resize Event" : "Edit Event");
             BeginUndoAction(m_dragUndoLabel);
             m_dragUndoActive = true;
             m_lastPreviewDragNote = -1;
             CaptureMouse();
-        } else {
-            m_selectedAutomationLane = -1;
-            m_selectedAutomationEvent = -1;
-            m_dragging = true;
-            m_dragAutomationValid = false;
-            m_dragMode = DragMode::SelectBox;
-            m_dragUndoActive = false;
-            m_dragUndoLabel.clear();
-            m_selectBoxActive = true;
-            m_selectBoxStart = logicalPoint;
-            m_selectBoxCurrent = logicalPoint;
-            m_selectedNotes.clear();
-            m_selectedNote = -1;
-            m_selectedItemKind = PianoRollSelectionKind::None;
-            m_lastPreviewDragNote = -1;
-            if (HasCapture()) {
-                ReleaseMouse();
             }
-            CaptureMouse();
         }
         if (m_selectionChangedCallback) {
             m_selectionChangedCallback();
         }
-        Refresh();
+        if (m_selectedItemKind == PianoRollSelectionKind::Automation && m_selectedAutomationLane >= 0) {
+            RefreshAutomationLanes(previousAutomationLane, m_selectedAutomationLane);
+        } else if (previousAutomationLane >= 0) {
+            RefreshAutomationLane(previousAutomationLane);
+        } else {
+            Refresh();
+        }
     }
 
     void OnLeftUp(wxMouseEvent &) {
@@ -3332,7 +3895,7 @@ private:
                 }
                 CommitUndoAction(m_dragUndoLabel);
                 UpdateVirtualSize();
-                Refresh();
+                RefreshAutomationLane(laneIndex);
             } else {
                 CancelUndoAction();
             }
@@ -3376,6 +3939,7 @@ private:
                 }
             }
             CommitUndoAction("Add Note");
+            InvalidateNoteCache();
             UpdateVirtualSize();
             Refresh();
         } else {
@@ -3385,9 +3949,11 @@ private:
 
     void OnRightDown(wxMouseEvent &event) {
         wxPoint logicalPoint;
+        AutomationHitInfo automationNodeHit;
         AutomationHitInfo automationHit;
         long hitNote;
         wxMenu menu;
+        int previousAutomationLane;
 
         if (!m_document) {
             return;
@@ -3395,6 +3961,7 @@ private:
         if (event.LeftIsDown() || m_dragging || HasCapture()) {
             return;
         }
+        previousAutomationLane = (m_selectedItemKind == PianoRollSelectionKind::Automation) ? m_selectedAutomationLane : -1;
         logicalPoint = CalcUnscrolledPosition(event.GetPosition());
         hitNote = HitTestNote(logicalPoint);
         if (hitNote >= 0) {
@@ -3405,22 +3972,38 @@ private:
             }
             m_selectedAutomationLane = -1;
             m_selectedAutomationEvent = -1;
-        } else if (HitTestAutomation(logicalPoint, &automationHit)) {
+        } else {
+            bool nodeHit;
+
+            nodeHit = HitTestAutomationNode(logicalPoint, &automationNodeHit);
+            if (!(nodeHit || HitTestAutomation(logicalPoint, &automationHit))) {
+                return;
+            }
+            if (nodeHit) {
+                automationHit = automationNodeHit;
+            }
             m_selectedNotes.clear();
             m_selectedItemKind = PianoRollSelectionKind::Automation;
             m_selectedNote = -1;
             m_selectedAutomationLane = automationHit.laneIndex;
             m_selectedAutomationEvent = static_cast<long>(automationHit.eventIndex);
-        } else {
-            return;
         }
         menu.Append(ID_PianoRollEdit, "Edit");
+        if (m_selectedItemKind == PianoRollSelectionKind::Automation) {
+            menu.Append(ID_PianoRollToggleRamp, "Toggle Ramp To Next\tR");
+        }
         menu.Append(ID_PianoRollDelete, "Delete");
         PopupMenu(&menu, event.GetPosition());
         if (m_selectionChangedCallback) {
             m_selectionChangedCallback();
         }
-        Refresh();
+        if (m_selectedItemKind == PianoRollSelectionKind::Automation && m_selectedAutomationLane >= 0) {
+            RefreshAutomationLanes(previousAutomationLane, m_selectedAutomationLane);
+        } else if (previousAutomationLane >= 0) {
+            RefreshAutomationLane(previousAutomationLane);
+        } else {
+            Refresh();
+        }
     }
 
     void OnMotion(wxMouseEvent &event) {
@@ -3475,7 +4058,26 @@ private:
             return;
         }
         if (!m_dragging) {
-            UpdateHoverCursor(CalcUnscrolledPosition(event.GetPosition()));
+            AutomationHitInfo hoverHit;
+            bool hasHover;
+            int newHoverLane;
+            long newHoverEvent;
+            int previousHoverLane;
+
+            logicalPoint = CalcUnscrolledPosition(event.GetPosition());
+            UpdateHoverCursor(logicalPoint);
+            hasHover = HitTestAutomationNode(logicalPoint, &hoverHit);
+            if (!hasHover) {
+                hasHover = HitTestAutomation(logicalPoint, &hoverHit);
+            }
+            previousHoverLane = m_hoverAutomationLane;
+            newHoverLane = hasHover ? hoverHit.laneIndex : -1;
+            newHoverEvent = hasHover ? static_cast<long>(hoverHit.eventIndex) : -1;
+            if (newHoverLane != m_hoverAutomationLane || newHoverEvent != m_hoverAutomationEvent) {
+                m_hoverAutomationLane = newHoverLane;
+                m_hoverAutomationEvent = newHoverEvent;
+                RefreshAutomationLanes(previousHoverLane, newHoverLane);
+            }
             return;
         }
         if (!event.Dragging() || !event.LeftIsDown()) {
@@ -3574,6 +4176,7 @@ private:
                                                  static_cast<uint32_t>(m_selectedNote),
                                                  &updatedNote);
             }
+            InvalidateNoteCache();
             UpdateVirtualSize();
             Refresh();
             return;
@@ -3620,8 +4223,7 @@ private:
                                    static_cast<uint32_t>(m_selectedAutomationEvent) + 1,
                                    automationTick,
                                    nextValueCurrent)) {
-                UpdateVirtualSize();
-                Refresh();
+                RefreshAutomationLane(m_selectedAutomationLane);
             }
             return;
         }
@@ -3659,13 +4261,17 @@ private:
                                    static_cast<uint32_t>(m_selectedAutomationEvent),
                                    automationTick,
                                    automationValue)) {
-                UpdateVirtualSize();
-                Refresh();
+                RefreshAutomationLane(m_selectedAutomationLane);
             }
         }
     }
 
     void OnCharHook(wxKeyEvent &event) {
+        if (event.GetKeyCode() == 'R' || event.GetKeyCode() == 'r') {
+            if (ToggleRampForSelectedAutomationSegment()) {
+                return;
+            }
+        }
         if (event.GetKeyCode() == WXK_DELETE || event.GetKeyCode() == WXK_BACK) {
             DeleteCurrentSelection();
             return;
@@ -3698,7 +4304,17 @@ private:
 
     void OnMouseLeave(wxMouseEvent &) {
         if (!m_dragging) {
+            bool hadHover;
+            int previousHoverLane;
+
+            hadHover = (m_hoverAutomationLane >= 0 || m_hoverAutomationEvent >= 0);
+            previousHoverLane = m_hoverAutomationLane;
+            m_hoverAutomationLane = -1;
+            m_hoverAutomationEvent = -1;
             SetCursor(wxNullCursor);
+            if (hadHover) {
+                RefreshAutomationLane(previousHoverLane);
+            }
         }
     }
 };

@@ -21,8 +21,13 @@
 # 0.10a
 - ~~Codec bitrate ignored in instrument editor sample dialog?~~
 - ~~ADPCM wrong pitch (detuned low)~~
+- ~~Fix loop markers covered the note field~~
+- ~~Revamp CC tracks in piano roll~~
 
 # Future
+- More throughly test backwards compatiblity with BeatnikX, maybe even WebTV Plus
+  - mod2rmf doesn't play as intended in BeatnikX, are we generating correctly?
+  - Works fine in NeoBAE, but RMF files in particular NEED to be properly backwards compatible
 - bankrecomp: wtv.hsb recomp prog 100 weirdness
 - Graphics for pitch envelope
 - Interpolation configuration (none, linear, cubic, etc, current is just on/off)
