@@ -1717,14 +1717,11 @@ public:
 
         /* Codec */
         {
-            bool canKeep = data.hasOriginalData;
             BAERmfEditorCompressionType effectiveComp = data.compressionType;
-            if (!canKeep && effectiveComp == BAE_EDITOR_COMPRESSION_DONT_CHANGE)
-                effectiveComp = BAE_EDITOR_COMPRESSION_PCM;
             auto [codecIdx, bitrateIdx] = CompressionTypeToCodecBitrate(effectiveComp);
             if (codecIdx == 6 && data.opusRoundTripResample) codecIdx = 7;
             m_codecChoice->SetSelection(codecIdx);
-            m_codecChoice->SetString(0, canKeep ? "Don't Change" : "Don't Change (N/A)");
+            m_codecChoice->SetString(0, "Don't Change");
             UpdateBitrateChoice(codecIdx);
             if (bitrateIdx >= 0 && bitrateIdx < (int)m_bitrateChoice->GetCount())
                 m_bitrateChoice->SetSelection(bitrateIdx);
