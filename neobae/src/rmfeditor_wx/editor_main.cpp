@@ -56,7 +56,7 @@ extern "C" {
 #include <gtk/gtk.h>
 #endif // __WXGTK__
 
-#define VERSION "0.09a"
+#define VERSION "0.10a"
 
 namespace {
 
@@ -338,7 +338,8 @@ public:
                     m_loadingLoopControls(false),
                     m_hasPendingUndo(false),
                     m_restoringUndo(false),
-                    m_hasUnsavedChanges(false) {
+                    m_hasUnsavedChanges(false),
+                    m_bankHasUnsavedChanges(false) {
                 SetMinSize(wxSize(1280, 800));
 #ifdef __WXMSW__
         SetIcon(wxICON(APPICON));
@@ -372,7 +373,7 @@ public:
             m_currentBankMenuItem->Enable(false);
         }
         soundBankMenu->AppendSeparator();
-        soundBankMenu->Append(ID_LoadBank, "Load a &Bank for Preview (HSB/ZSB)...\tCtrl+B");
+        soundBankMenu->Append(ID_LoadBank, "Load a &Bank (HSB/ZSB)...\tCtrl+B");
         soundBankMenu->Append(ID_CloneFromBank, "&Clone an Instrument from currently loaded Bank...");
         soundBankMenu->Append(ID_CloneAllUsedFromBank, "Clone &All Used Instruments from MIDI Stream...");
         soundBankMenu->Append(ID_AliasFromBank, "&Alias an Instrument from currently loaded Bank...");
@@ -386,11 +387,12 @@ public:
         {
             wxMenu *bankMenu = new wxMenu();
             bankMenu->Append(wxID_OPEN, "&Open\tCtrl+O");
+            bankMenu->Append(ID_LoadBank, "Load a &Bank (HSB/ZSB)...\tCtrl+B");
             bankMenu->AppendSeparator();
             bankMenu->Append(ID_BankSave, "&Save Bank\tCtrl+S");
             bankMenu->Append(ID_BankSaveAs, "Save Bank &As...\tCtrl+Shift+S");
             bankMenu->AppendSeparator();
-            bankMenu->Append(ID_BankLoadBuiltin, "Load &Built-in Bank into Editor");
+            bankMenu->Append(ID_BankLoadBuiltin, "Load &Built-in Bank");
             bankMenu->AppendSeparator();
             bankMenu->Append(ID_SaveSession, "Save S&ession\tCtrl+Alt+S");
             bankMenu->Append(ID_SaveSessionAs, "Save Se&ssion as...");
@@ -712,6 +714,13 @@ public:
         });
         LoadIniSettings();
         EnsurePlaybackEngine();
+        /* Load the built-in bank into the bank editor so it is always
+         * populated, even before the user explicitly opens a bank file. */
+#ifdef _BUILT_IN_PATCHES
+        if (m_bankEditorPanel && m_bankLoaded && m_bankToken) {
+            BankEditorPanel_LoadBank(m_bankEditorPanel, m_bankToken, "(built-in)");
+        }
+#endif
         UpdateLoadedBankStatus();
         RefreshMidiLoopControlsFromDocument();
         UpdateUndoMenuState();
@@ -853,6 +862,7 @@ private:
     bool m_hasPendingUndo;
     bool m_restoringUndo;
     bool m_hasUnsavedChanges;
+    bool m_bankHasUnsavedChanges;
 
     static wxString GetIniPath() {
         return wxFileName::GetHomeDir() + "/.nbstudio.ini";
@@ -1246,6 +1256,36 @@ private:
         return true;
     }
 
+    /* Prompt the user if the bank editor has unsaved changes before
+     * replacing it with a different bank.  Returns true if safe to
+     * proceed, false if the user cancelled. */
+    bool ConfirmDiscardBankChanges() {
+        if (!m_bankHasUnsavedChanges) {
+            return true;
+        }
+        int choice = wxMessageBox(
+            "The current bank has unsaved changes.\n\n"
+            "Would you like to save the bank before loading a new one?",
+            "Unsaved Bank Changes",
+            wxYES_NO | wxCANCEL | wxICON_WARNING,
+            this);
+        if (choice == wxCANCEL) {
+            return false;
+        }
+        if (choice == wxYES) {
+            wxCommandEvent dummy;
+            OnBankSave(dummy);
+            /* If the path was empty, OnBankSave redirects to SaveAs.
+             * If the user cancelled SaveAs, the flag is still set. */
+            if (m_bankHasUnsavedChanges) {
+                return false;
+            }
+        }
+        /* User chose No, or save succeeded — discard is OK */
+        m_bankHasUnsavedChanges = false;
+        return true;
+    }
+
     void OnCloseWindow(wxCloseEvent &event) {
         if (event.CanVeto() && m_hasUnsavedChanges && m_document) {
             int choice = wxMessageBox(
@@ -1278,6 +1318,25 @@ private:
                         event.Veto();
                         return;
                     }
+                }
+            }
+        }
+        if (event.CanVeto() && m_bankHasUnsavedChanges) {
+            int choice = wxMessageBox(
+                "The bank has unsaved changes.\n\nSave bank before exiting?",
+                "Unsaved Bank Changes",
+                wxYES_NO | wxCANCEL | wxICON_WARNING,
+                this);
+            if (choice == wxCANCEL) {
+                event.Veto();
+                return;
+            }
+            if (choice == wxYES) {
+                wxCommandEvent dummy;
+                OnBankSave(dummy);
+                if (m_bankHasUnsavedChanges) {
+                    event.Veto();
+                    return;
                 }
             }
         }
@@ -1734,7 +1793,8 @@ private:
 
     void OnBankSave(wxCommandEvent &) {
         if (!m_bankToken || m_loadedBankPath.empty()) {
-            OnBankSaveAs(*(new wxCommandEvent()));
+            wxCommandEvent dummy;
+            OnBankSaveAs(dummy);
             return;
         }
         wxScopedCharBuffer utf8 = m_loadedBankPath.utf8_str();
@@ -1743,6 +1803,7 @@ private:
             wxMessageBox(wxString::Format("Failed to save bank (error %d).", static_cast<int>(result)),
                          "Save Bank", wxOK | wxICON_ERROR, this);
         } else {
+            m_bankHasUnsavedChanges = false;
             SetStatusText(wxString("Bank saved: ") + wxFileNameFromPath(m_loadedBankPath));
         }
     }
@@ -1767,6 +1828,7 @@ private:
                              "Save Bank As", wxOK | wxICON_ERROR, this);
             } else {
                 m_loadedBankPath = savePath;
+                m_bankHasUnsavedChanges = false;
                 SetTitle(wxString("NeoBAE Studio - ") + wxFileNameFromPath(savePath));
                 SetStatusText(wxString("Bank saved: ") + wxFileNameFromPath(savePath));
             }
@@ -1775,6 +1837,9 @@ private:
 
     void OnBankLoadBuiltin(wxCommandEvent &) {
 #ifdef _BUILT_IN_PATCHES
+        if (!ConfirmDiscardBankChanges()) {
+            return;
+        }
         if (!EnsurePlaybackEngine()) {
             wxMessageBox("Failed to initialize audio engine.",
                          "Load Built-in Bank", wxOK | wxICON_ERROR, this);
@@ -1804,6 +1869,7 @@ private:
         if (m_bankEditorPanel) {
             BankEditorPanel_LoadBank(m_bankEditorPanel, m_bankToken, "(built-in)");
         }
+        m_bankHasUnsavedChanges = false;
         SwitchToEditorTab(kEditorModeBank);
 #else
         wxMessageBox("Built-in patches are not available in this build.",
@@ -1811,7 +1877,11 @@ private:
 #endif
     }
 
-    void LoadBankForEditing(wxString const &path) {
+    /* Load a bank file into BOTH the mixer (for playback) and the bank
+     * editor (for browsing/editing).  If switchToBank is true the UI
+     * switches to the Bank Editor tab; otherwise the current tab is kept
+     * (useful when loading from the MIDI editor's Sound Bank menu). */
+    void LoadBankForEditing(wxString const &path, bool switchToBank = true) {
         fprintf(stderr, "[nbstudio] LoadBankForEditing: %s\n", static_cast<const char *>(path.utf8_str()));
         if (!EnsurePlaybackEngine()) {
             wxMessageBox("Failed to initialize audio engine.",
@@ -1831,8 +1901,11 @@ private:
             wxScopedCharBuffer utf8Path = path.utf8_str();
             BankEditorPanel_LoadBank(m_bankEditorPanel, m_bankToken, utf8Path.data());
         }
-        fprintf(stderr, "[nbstudio] LoadBankForEditing: switching to bank tab...\n");
-        SwitchToEditorTab(kEditorModeBank);
+        m_bankHasUnsavedChanges = false;
+        if (switchToBank) {
+            fprintf(stderr, "[nbstudio] LoadBankForEditing: switching to bank tab...\n");
+            SwitchToEditorTab(kEditorModeBank);
+        }
         fprintf(stderr, "[nbstudio] LoadBankForEditing: done\n");
     }
 
@@ -5469,6 +5542,9 @@ private:
             if (ext == "nbs") {
                 LoadSession(selectedPath);
             } else if (ext == "hsb" || ext == "zsb") {
+                if (!ConfirmDiscardBankChanges()) {
+                    return;
+                }
                 LoadBankForEditing(selectedPath);
             } else {
                 LoadDocument(selectedPath);
@@ -6717,6 +6793,9 @@ private:
     }
 
     void OnLoadBank(wxCommandEvent &) {
+        if (!ConfirmDiscardBankChanges()) {
+            return;
+        }
         wxFileDialog dialog(this,
                             "Load Sound Bank",
                             wxEmptyString,
@@ -6726,13 +6805,16 @@ private:
         if (dialog.ShowModal() != wxID_OK) {
             return;
         }
-        if (!LoadBankFromFile(dialog.GetPath())) {
-            wxMessageBox("Failed to load bank file.", "Load Bank", wxOK | wxICON_ERROR, this);
-        }
+        /* Load into both the mixer and the bank editor.
+         * Stay on the current tab (don't force-switch to bank editor). */
+        LoadBankForEditing(dialog.GetPath(), false);
     }
 
     void OnReloadInternalBank(wxCommandEvent &) {
         if (!m_playbackMixer) {
+            return;
+        }
+        if (!ConfirmDiscardBankChanges()) {
             return;
         }
         StopPlayback(true);
@@ -6752,9 +6834,17 @@ private:
                 SetStatusText("Failed to reload internal bank", 0);
             }
         }
+        /* Reload the built-in bank into the bank editor too */
+        if (m_bankEditorPanel && m_bankLoaded && m_bankToken) {
+            BankEditorPanel_LoadBank(m_bankEditorPanel, m_bankToken, "(built-in)");
+        }
 #else
         SetStatusText("All banks unloaded", 0);
+        if (m_bankEditorPanel) {
+            BankEditorPanel_Clear(m_bankEditorPanel);
+        }
 #endif
+        m_bankHasUnsavedChanges = false;
         UpdateLoadedBankStatus();
     }
 

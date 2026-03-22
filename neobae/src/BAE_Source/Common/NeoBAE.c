@@ -8686,12 +8686,13 @@ static void PV_PatchInstrumentEnvelopes(GM_Instrument *theI,
     theI->LPF_resonance = info->LPF_resonance;
     theI->LPF_lowpassAmount = info->LPF_lowpassAmount;
 
-    /* LFOs */
-    theI->LFORecordCount = 0;
-#if DEBUG
-    BAE_PRINTF("PV_PatchInstrumentEnvelopes: info->lfoCount=%u\n", (unsigned)info->lfoCount);
-#endif
-    for (i = 0; i < (int32_t)info->lfoCount && i < MAX_LFOS; i++)
+    /* LFOs — patch only the editor-known LFOs; preserve any extra
+     * engine-added records (e.g. the default mod-wheel pitch LFO that
+     * PV_GetEnvelopeData appends when INST_DEFAULT_MOD is absent). */
+    {
+        int32_t originalLFOCount = theI->LFORecordCount;
+        theI->LFORecordCount = 0;
+        for (i = 0; i < (int32_t)info->lfoCount && i < MAX_LFOS; i++)
     {
         GM_LFO *pLFO = &theI->LFORecords[i];
         pLFO->where_to_feed = PV_TranslateFromFileToMemoryID(
@@ -8734,6 +8735,12 @@ static void PV_PatchInstrumentEnvelopes(GM_Instrument *theI,
         pLFO->currentTime = 0;
         pLFO->LFOcurrentTime = 0;
         theI->LFORecordCount++;
+    }
+    /* Restore the original count if the engine had more LFOs (e.g. the
+     * default mod-wheel pitch LFO added by PV_GetEnvelopeData).  Those
+     * extra records are still in the array — we just didn't overwrite them. */
+    if (originalLFOCount > theI->LFORecordCount)
+        theI->LFORecordCount = originalLFOCount;
     }
 }
 

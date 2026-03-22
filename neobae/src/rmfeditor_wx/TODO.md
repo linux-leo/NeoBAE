@@ -18,6 +18,9 @@
 - ~~Settings menu not working on windows? Why?~~
 - ~~Dark mode!~~
 
+# 0.10a
+- Codec bitrate ignored in instrument editor sample dialog?
+
 # Future
 - bankrecomp: wtv.hsb recomp prog 100 weirdness
 - Graphics for pitch envelope
@@ -35,7 +38,7 @@
   - lots of bugs with sample editor
   - needs context menus still
   - musicial keyboard vs form fields
-  - LFO broken
+  - ~~LFO broken~~
 
 - Allow for automation like Volume to be able have a slide on it
   - for example, to easily make a fadein or fadeout

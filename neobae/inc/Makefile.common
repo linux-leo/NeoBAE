@@ -58,6 +58,8 @@ ifeq ($(ZMF_SUPPORT),1)
 	OPUS_DEC := 1
 	OPUS_ENC := 1
 	LZMA_SUPPORT := 1
+	FIX_SPAN_DC := 1
+	CLASSIC_CHORUS := 1
 endif
 
 # Disable SDL2 if using SDL3

@@ -66,6 +66,7 @@ static FourCharLabel const kLFODestLabels[] = {
 static int const kLFODestCount = (int)(sizeof(kLFODestLabels) / sizeof(kLFODestLabels[0]));
 
 static FourCharLabel const kLFOShapeLabels[] = {
+    {0,                                           "None"},
     {(int32_t)FOUR_CHAR('S','I','N','E'),         "SINE"},
     {(int32_t)FOUR_CHAR('T','R','I','A'),         "TRIANGLE"},
     {(int32_t)FOUR_CHAR('S','Q','U','A'),         "SQUARE"},
@@ -1086,22 +1087,41 @@ public:
             m_adsrFlags[i]->Show(visible);
         }
 
+        /* If the instrument lacks INST_DEFAULT_MOD, the engine auto-generates
+         * a default mod-wheel pitch LFO (see PV_GetEnvelopeData).  Inject it
+         * into the editor's LFO list so the user can see it. */
+        if (!m_extInfo.hasDefaultMod &&
+            m_extInfo.lfoCount < BAE_EDITOR_MAX_LFOS)
+        {
+            BAERmfEditorLFOInfo &lfo = m_extInfo.lfos[m_extInfo.lfoCount];
+            memset(&lfo, 0, sizeof(lfo));
+            lfo.destination = (int32_t)FOUR_CHAR('P','I','T','C');  /* PITCH_LFO */
+            lfo.period      = 180000;
+            lfo.waveShape   = (int32_t)FOUR_CHAR('S','I','N','E');  /* SINE_WAVE */
+            lfo.DC_feed     = 0;
+            lfo.level       = 64;
+            lfo.adsr.stageCount = 1;
+            lfo.adsr.stages[0].level = 65536;
+            lfo.adsr.stages[0].time  = 0;
+            lfo.adsr.stages[0].flags = (int32_t)FOUR_CHAR('L','A','S','T'); /* TERMINATE */
+            m_extInfo.lfoCount++;
+        }
+
         /* LFO */
-        m_lfoCountSpin->SetValue((int)extInfo.lfoCount);
-        if (extInfo.lfoCount > 0) {
+        m_lfoCountSpin->SetValue((int)m_extInfo.lfoCount);
+        if (m_extInfo.lfoCount > 0) {
             m_currentLfoIndex = 0;
             m_lfoSelector->SetSelection(0);
         } else {
             m_currentLfoIndex = -1;
             m_lfoSelector->SetSelection(wxNOT_FOUND);
         }
-        m_loading = false;
-
         if (m_currentLfoIndex >= 0) {
             LoadLFOIntoUI(m_currentLfoIndex);
         } else {
             LoadLFOIntoUI(-1);
         }
+        m_loading = false;
         RefreshADSRGraph();
         RefreshFilterEnvelopeGraph();
         Layout();
@@ -1581,6 +1601,7 @@ private:
             lfoBox->Add(m_lfoAdsrGraph, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4);
 
             m_lfoSelector->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) {
+                if (m_loading) return;
                 int sel = m_lfoSelector->GetSelection();
                 if (m_currentLfoIndex >= 0) SaveLFOFromUI(m_currentLfoIndex);
                 m_currentLfoIndex = sel;
@@ -1592,6 +1613,7 @@ private:
             });
 
             m_lfoCountSpin->Bind(wxEVT_SPINCTRL, [this](wxCommandEvent &) {
+                if (m_loading) return;
                 int count = m_lfoCountSpin->GetValue();
                 if (count <= 0) {
                     m_currentLfoIndex = -1;
@@ -1612,6 +1634,7 @@ private:
             });
 
             auto lfoChanged = [this](wxCommandEvent &) {
+                if (m_loading) return;
                 int sel = (m_currentLfoIndex >= 0) ? m_currentLfoIndex : m_lfoSelector->GetSelection();
                 if (sel >= 0) SaveLFOFromUI(sel);
                 RefreshLFOGraph();
