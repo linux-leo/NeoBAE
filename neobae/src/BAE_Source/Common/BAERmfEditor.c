@@ -8309,10 +8309,20 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                 {
                     decodedFramesForRate = encodedFrames;
                     PV_ForceSndDecodedFrameCount(sndResource, encodedFrames);
-                    PV_RemapLoopPointsToFrameCount(writeWaveform.waveFrames,
-                                                   encodedFrames,
-                                                   &loopStart,
-                                                   &loopEnd);
+                    /* IMA4 encodes in fixed 64-frame blocks; the decoded frame
+                     * count rounds up to a block multiple.  The extra frames
+                     * are zero-padded silence at the tail.  Remapping loop
+                     * points into that enlarged domain would stretch the loop
+                     * region to include the padding, lowering the perceived
+                     * pitch.  Skip the remap for IMA4 — the original loop
+                     * points are always valid within the decoded buffer. */
+                    if (compType != C_IMA4)
+                    {
+                        PV_RemapLoopPointsToFrameCount(writeWaveform.waveFrames,
+                                                       encodedFrames,
+                                                       &loopStart,
+                                                       &loopEnd);
+                    }
                     writeWaveform.startLoop = (uint32_t)loopStart;
                     writeWaveform.endLoop = (uint32_t)loopEnd;
                     BAE_STDERR("[RMF Save] Sample[%u] loop remap srcFrames=%u encFrames=%u -> %u-%u\n",
