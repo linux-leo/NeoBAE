@@ -2151,6 +2151,7 @@ private:
             m_bitrateChoice->SetSelection(0);
             m_bitrateChoice->Enable(false);
             row->Add(m_bitrateChoice, 0);
+            m_bitrateChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) { NotifyParameterChanged(); });
             row->Add(new wxStaticText(this, wxID_ANY, "Opus Mode"), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 8);
             m_opusModeChoice = new wxChoice(this, wxID_ANY);
             m_opusModeChoice->Append("Audio");
@@ -2158,6 +2159,7 @@ private:
             m_opusModeChoice->SetSelection(0);
             m_opusModeChoice->Enable(false);
             row->Add(m_opusModeChoice, 0);
+            m_opusModeChoice->Bind(wxEVT_CHOICE, [this](wxCommandEvent &) { NotifyParameterChanged(); });
             row->AddStretchSpacer();
             m_codecLabel = new wxStaticText(this, wxID_ANY, "");
             row->Add(m_codecLabel, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 12);

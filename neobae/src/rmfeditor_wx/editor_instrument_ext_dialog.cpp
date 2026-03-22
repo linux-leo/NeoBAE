@@ -906,16 +906,21 @@ private:
             wxFD_OPEN | wxFD_FILE_MUST_EXIST);
         if (dialog.ShowModal() != wxID_OK) return;
         uint32_t si = m_sampleIndices[(size_t)m_currentLocalIndex];
+        /* Preserve the user's codec/bitrate selection across the replace,
+         * since the document will reset to the decoded format. */
+        SampleParamsPanelData uiState;
+        m_sampleParamsPanel->SaveToData(uiState);
+
         if (!m_replaceCallback(si, dialog.GetPath())) return;
         BAERmfEditorSampleInfo info;
         if (BAERmfEditorDocument_GetSampleInfo(m_document, si, &info) == BAE_NO_ERROR) {
             EditedSample &s = m_samples[(size_t)m_currentLocalIndex];
             s.sourcePath = info.sourcePath ? wxString::FromUTF8(info.sourcePath) : wxString();
             s.sampleInfo = info.sampleInfo;
-            s.compressionType = info.compressionType;
+            s.compressionType = uiState.compressionType;
             s.hasOriginalData = (info.hasOriginalData == TRUE);
             s.sndStorageType = info.sndStorageType;
-            s.opusMode = info.opusMode;
+            s.opusMode = uiState.opusMode;
         }
         LoadLocalSample(m_currentLocalIndex);
     }

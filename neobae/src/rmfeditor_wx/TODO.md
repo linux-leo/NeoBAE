@@ -20,6 +20,7 @@
 
 # 0.10a
 - Codec bitrate ignored in instrument editor sample dialog?
+- ADPCM wrong pitch (detuned low)
 
 # Future
 - bankrecomp: wtv.hsb recomp prog 100 weirdness
