@@ -46,7 +46,7 @@ ifeq ($(NBSTUDIO),1)
 	CLASSIC_CHORUS := 1
 endif
 
-ifeq ($(ZMF_SUPPORT),1)
+ifneq ($(filter 1,$(ZMF_SUPPORT) $(CREATION_API)),) 
 	# All of these are required for ZMF support
 	OGG_SUPPORT := 1
 	MP3_DEC := 1
@@ -490,30 +490,35 @@ else
 				SRC_BIN	:= $(SRC) src/rmf2mid/rmf2mid.c
 			else
 				ifeq ($(MID2RMF),1)
-					# libNeoBAE srcs + rmf2mid.c
+					# libNeoBAE srcs + mid2rmf.c
 					SRC_BIN	:= $(SRC) src/mid2rmf/mid2rmf.c
 				else
-					ifeq ($(MID2RMI),1)
-						# libNeoBAE srcs + mid2rmi.c
-						SRC_BIN	:= $(SRC) src/mid2rmi/mid2rmi.c
+					ifeq ($(MOD2RMF),1)
+						# libNeoBAE srcs + split mod2rmf sources
+						SRC_BIN	:= $(SRC) src/mod2rmf/mod2rmf.c src/mod2rmf/mod2rmf_mod.c src/mod2rmf/mod2rmf_s3m.c src/mod2rmf/mod2rmf_encoder.c src/mod2rmf/mod2rmf_resampler.c
 					else
-						ifeq ($(BANKRECOMP),1)
-							# libNeoBAE srcs + bankrecomp.c
-							SRC_BIN	:= $(SRC) src/bankrecomp/bankrecomp.c
+						ifeq ($(MID2RMI),1)
+							# libNeoBAE srcs + mid2rmi.c
+							SRC_BIN	:= $(SRC) src/mid2rmi/mid2rmi.c
 						else
-							ifeq ($(NBSTUDIO),1)
-								SRC_BIN := $(SRC) \
-									src/rmfeditor_wx/editor_main.cpp \
-									src/rmfeditor_wx/editor_bank.cpp \
-									src/rmfeditor_wx/editor_instrument_ext_dialog.cpp \
-									src/rmfeditor_wx/editor_metadata_dialog.cpp \
-									src/rmfeditor_wx/editor_pianoroll_panel.cpp \
-									src/rmfeditor_wx/batch_compress_dialog.cpp
-								BAE_FLAGS += $(shell pkg-config --cflags gtk+-3.0) $(shell pkg-config --cflags glib-2.0)
-								BAE_LIBS += -lz $(shell pkg-config --libs gtk+-3.0) $(shell pkg-config --libs glib-2.0)
+							ifeq ($(BANKRECOMP),1)
+								# libNeoBAE srcs + bankrecomp.c
+								SRC_BIN	:= $(SRC) src/bankrecomp/bankrecomp.c
 							else
-								# playbae = libNeoBAE srcs + playbae.c
-								SRC_BIN	:= $(SRC) src/playbae/playbae.c
+								ifeq ($(NBSTUDIO),1)
+									SRC_BIN := $(SRC) \
+										src/rmfeditor_wx/editor_main.cpp \
+										src/rmfeditor_wx/editor_bank.cpp \
+										src/rmfeditor_wx/editor_instrument_ext_dialog.cpp \
+										src/rmfeditor_wx/editor_metadata_dialog.cpp \
+										src/rmfeditor_wx/editor_pianoroll_panel.cpp \
+										src/rmfeditor_wx/batch_compress_dialog.cpp
+									BAE_FLAGS += $(shell pkg-config --cflags gtk+-3.0) $(shell pkg-config --cflags glib-2.0)
+									BAE_LIBS += -lz $(shell pkg-config --libs gtk+-3.0) $(shell pkg-config --libs glib-2.0)
+								else
+									# playbae = libNeoBAE srcs + playbae.c
+									SRC_BIN	:= $(SRC) src/playbae/playbae.c
+								endif
 							endif
 						endif
 					endif

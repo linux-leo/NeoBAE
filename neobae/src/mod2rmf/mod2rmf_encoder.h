@@ -1,0 +1,63 @@
+/* mod2rmf_encoder.h -- Codec/compression helpers for mod2rmf. */
+#ifndef MOD2RMF_ENCODER_H
+#define MOD2RMF_ENCODER_H
+
+#include <NeoBAE.h>
+
+/* ------------------------------------------------------------------ */
+/*  Codec identifiers (used on the command line via --codec)           */
+/* ------------------------------------------------------------------ */
+typedef enum Mod2RmfCodec
+{
+    MOD2RMF_CODEC_PCM       = 0,
+    MOD2RMF_CODEC_ADPCM     = 1,
+    MOD2RMF_CODEC_MP3       = 2,
+    MOD2RMF_CODEC_VORBIS    = 3,
+    MOD2RMF_CODEC_FLAC      = 4,
+    MOD2RMF_CODEC_OPUS      = 5,
+    MOD2RMF_CODEC_OPUS_RT   = 6,
+    MOD2RMF_CODEC_COUNT     = 7
+} Mod2RmfCodec;
+
+/* Parsed compression settings. */
+typedef struct Mod2RmfEncoderSettings
+{
+    Mod2RmfCodec codec;
+    uint32_t     bitrateKbps;   /* 0 = use codec default */
+} Mod2RmfEncoderSettings;
+
+/* Fill *settings with default values (PCM, no bitrate override). */
+void mod2rmf_encoder_defaults(Mod2RmfEncoderSettings *settings);
+
+/* Parse a --codec argument string (e.g. "pcm", "adpcm", "mp3", "vorbis",
+ * "flac", "opus", "opus-rt").  Returns 0 on success, -1 on bad name. */
+int mod2rmf_encoder_parse_codec(const char *name, Mod2RmfCodec *outCodec);
+
+/* Parse a --bitrate argument string.  Accepts plain kbps ("128") or bps
+ * ("128000") and normalises to kbps.  Returns 0 on success, -1 on error. */
+int mod2rmf_encoder_parse_bitrate(const char *str, uint32_t *outKbps);
+
+/* Resolve the parsed settings to a BAERmfEditorCompressionType that can be
+ * passed to BAERmfEditorDocument_SetSampleAssetCompression().
+ * Returns BAE_EDITOR_COMPRESSION_PCM when codec is PCM or on error. */
+BAERmfEditorCompressionType mod2rmf_encoder_resolve(const Mod2RmfEncoderSettings *settings);
+
+/* Return a short human-readable label for the resolved compression type
+ * (e.g. "MP3 128 kbps", "Opus 48 kbps", "ADPCM").  The pointer is to
+ * static storage and must not be freed. */
+const char *mod2rmf_encoder_label(BAERmfEditorCompressionType ct);
+
+/* Apply the chosen compression to every sample in the document.
+ * Logs a summary line to stderr.  Returns 1 on success, 0 on failure. */
+int mod2rmf_encoder_apply(BAERmfEditorDocument *document,
+                          const Mod2RmfEncoderSettings *settings,
+                          BAERmfEditorCompressionType ct);
+
+/* Returns non-zero if the chosen codec requires ZMF container
+ * (Vorbis, FLAC, Opus, Opus-RT). */
+int mod2rmf_encoder_requires_zmf(Mod2RmfCodec codec);
+
+/* Print the list of available codecs and bitrates to stderr. */
+void mod2rmf_encoder_print_codecs(void);
+
+#endif /* MOD2RMF_ENCODER_H */

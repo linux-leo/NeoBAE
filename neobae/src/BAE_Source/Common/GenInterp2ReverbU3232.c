@@ -79,6 +79,30 @@
 
 #if ((REVERB_USED == VARIABLE_REVERB) && (LOOPS_USED == U3232_LOOPS))
 
+// Cubic Hermite (Catmull-Rom) interpolation for NewReverb advanced interpolation mode.
+static inline INT32 PV_CubicHermiteInterpNR(INT32 s0, INT32 s1, INT32 s2, INT32 s3, U32 frac)
+{
+    INT32 t = (INT32)(frac >> 17);
+    INT32 A = -s0 + 3*s1 - 3*s2 + s3;
+    INT32 B = 2*s0 - 5*s1 + 4*s2 - s3;
+    INT32 C = s2 - s0;
+    INT32 r;
+    r = (INT32)(((int64_t)A * t) >> 15) + B;
+    r = (INT32)(((int64_t)r * t) >> 15) + C;
+    r = (INT32)(((int64_t)r * t) >> 16);
+    return s1 + r;
+}
+
+static inline INT32 PV_LoopWrapSampleNR(INT16 *source, INT32 idx, INT32 loopStart, INT32 loopEnd)
+{
+    INT32 loopLen = loopEnd - loopStart;
+    if (idx < loopStart)
+        idx += loopLen;
+    else if (idx >= loopEnd)
+        idx -= loopLen;
+    return (INT32)source[idx];
+}
+
 void PV_ServeU3232FullBufferNewReverb(GM_Voice *this_voice)
 {
     register INT32          *dest;
@@ -157,8 +181,9 @@ void PV_ServeU3232FullBufferNewReverb(GM_Voice *this_voice)
 
                 for (inner = 0; inner < 16; inner++)
                 {
+                    U32 next_wave_i;
                     calculated_source = source + cur_wave_i * 2;
-                    b = calculated_source[0] + calculated_source[1];    // average left & right channels
+                    next_wave_i = cur_wave_i + 1;
                     c = calculated_source[2] + calculated_source[3];
                     sample = ((((INT32)(cur_wave_f >> 16) * (INT32)(c-b)) >> 16) + b - 0x100) >> 1;
                     *dest += sample * amplitude;
@@ -245,10 +270,15 @@ void PV_ServeU3232PartialBufferNewReverb (GM_Voice *this_voice, XBOOL looping)
 
                 for (inner = 0; inner < 4; inner++)
                 {
+                    U32 next_wave_i;
                     THE_CHECK_U3232(UBYTE *);
-                    calculated_source = source + cur_wave_i * 2;
-                    b = calculated_source[0] + calculated_source[1];
-                    c = calculated_source[2] + calculated_source[3];
+                    next_wave_i = cur_wave_i + 1;
+                    if (looping && (next_wave_i >= end_wave))
+                    {
+                        next_wave_i -= wave_adjust;
+                    }
+                    b = source[cur_wave_i * 2] + source[cur_wave_i * 2 + 1];
+                    c = source[next_wave_i * 2] + source[next_wave_i * 2 + 1];
                     sample = ((((INT32)(cur_wave_f >> 16) * (INT32)(c-b)) >> 16) + b - 0x100) >> 1;
                     *dest += sample * amplitude;
                     *destReverb += sample * amplitudeReverb;
@@ -568,72 +598,129 @@ void PV_ServeU3232FullBuffer16NewReverb (GM_Voice *this_voice)
     {
         if (this_voice->channels == 1)
         {
-            for (a = MusicGlobals->Four_Loop; a > 0; --a)
+            if (this_voice->advancedInterpolation)
             {
-                amplitudeReverb = (amplitude >> 7) * this_voice->reverbLevel;
-                amplitudeChorus = (amplitude >> 7) * this_voice->chorusLevel;
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
+                {
+                    amplitudeReverb = (amplitude >> 7) * this_voice->reverbLevel;
+                    amplitudeChorus = (amplitude >> 7) * this_voice->chorusLevel;
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        INT32 pos = (INT32)cur_wave_i;
+                        INT32 s0 = source[(pos > 0) ? pos - 1 : 0];
+                        INT32 s1 = source[pos];
+                        INT32 s2 = source[pos + 1];
+                        INT32 s3 = source[pos + 2];
+                        sample = PV_CubicHermiteInterpNR(s0, s1, s2, s3, cur_wave_f);
+                        dest[inner] += (sample * amplitude) >> 4;
+                        destReverb[inner] += (sample * amplitudeReverb) >> 4;
+                        destChorus[inner] += (sample * amplitudeChorus) >> 4;
+                        ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    }
+                    dest += 4;
+                    destReverb += 4;
+                    destChorus += 4;
+                    amplitude += amplitudeAdjust;
+                }
+            }
+            else
+            {
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
+                {
+                    amplitudeReverb = (amplitude >> 7) * this_voice->reverbLevel;
+                    amplitudeChorus = (amplitude >> 7) * this_voice->chorusLevel;
 
-                b = source[cur_wave_i];
-                c = source[cur_wave_i+1];
-                sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                *dest += (sample * amplitude) >> 4;
-                *destReverb += (sample * amplitudeReverb) >> 4;
-                *destChorus += (sample * amplitudeChorus) >> 4;
-                ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
-            
-                b = source[cur_wave_i];
-                c = source[cur_wave_i+1];
-                sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                dest[1] += (sample * amplitude) >> 4;
-                destReverb[1] += (sample * amplitudeReverb) >> 4;
-                destChorus[1] += (sample * amplitudeChorus) >> 4;
-                ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
-                
-                b = source[cur_wave_i];
-                c = source[cur_wave_i+1];
-                sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                dest[2] += (sample * amplitude) >> 4;
-                destReverb[2] += (sample * amplitudeReverb) >> 4;
-                destChorus[2] += (sample * amplitudeChorus) >> 4;
-                ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
-                            
-                b = source[cur_wave_i];
-                c = source[cur_wave_i+1];
-                sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                dest[3] += (sample * amplitude) >> 4;
-                destReverb[3] += (sample * amplitudeReverb) >> 4;
-                destChorus[3] += (sample * amplitudeChorus) >> 4;
-                ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
-                
-                dest += 4;
-                destReverb += 4;
-                destChorus += 4;
-                amplitude += amplitudeAdjust;
+                    b = source[cur_wave_i];
+                    c = source[cur_wave_i+1];
+                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                    *dest += (sample * amplitude) >> 4;
+                    *destReverb += (sample * amplitudeReverb) >> 4;
+                    *destChorus += (sample * amplitudeChorus) >> 4;
+                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+
+                    b = source[cur_wave_i];
+                    c = source[cur_wave_i+1];
+                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                    dest[1] += (sample * amplitude) >> 4;
+                    destReverb[1] += (sample * amplitudeReverb) >> 4;
+                    destChorus[1] += (sample * amplitudeChorus) >> 4;
+                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+
+                    b = source[cur_wave_i];
+                    c = source[cur_wave_i+1];
+                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                    dest[2] += (sample * amplitude) >> 4;
+                    destReverb[2] += (sample * amplitudeReverb) >> 4;
+                    destChorus[2] += (sample * amplitudeChorus) >> 4;
+                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+
+                    b = source[cur_wave_i];
+                    c = source[cur_wave_i+1];
+                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                    dest[3] += (sample * amplitude) >> 4;
+                    destReverb[3] += (sample * amplitudeReverb) >> 4;
+                    destChorus[3] += (sample * amplitudeChorus) >> 4;
+                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+
+                    dest += 4;
+                    destReverb += 4;
+                    destChorus += 4;
+                    amplitude += amplitudeAdjust;
+                }
             }
         }
         else
         {   // stereo 16 bit instrument
-            for (a = MusicGlobals->Four_Loop; a > 0; --a)
+            if (this_voice->advancedInterpolation)
             {
-                amplitudeReverb = (amplitude >> 7) * this_voice->reverbLevel;
-                amplitudeChorus = (amplitude >> 7) * this_voice->chorusLevel;
-
-                for (inner = 0; inner < 4; inner++)
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
                 {
-                    calculated_source = source + cur_wave_i * 2;
-                    b = calculated_source[0] + calculated_source[1];
-                    c = calculated_source[2] + calculated_source[3];
-                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                    *dest += (sample  * amplitude) >> 5;    // divide extra for summed stereo channels
-                    *destReverb += (sample  * amplitudeReverb) >> 5;    // divide extra for summed stereo channels
-                    *destChorus += (sample  * amplitudeChorus) >> 5;    // divide extra for summed stereo channels
-                    dest++;
-                    destReverb++;
-                    destChorus++;
-                    
-                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    amplitudeReverb = (amplitude >> 7) * this_voice->reverbLevel;
+                    amplitudeChorus = (amplitude >> 7) * this_voice->chorusLevel;
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        INT32 pos = (INT32)cur_wave_i;
+                        INT32 prev_pos = (pos > 0) ? pos - 1 : 0;
+                        INT32 s0 = source[prev_pos*2] + source[prev_pos*2 + 1];
+                        INT32 s1 = source[pos*2] + source[pos*2 + 1];
+                        INT32 s2 = source[(pos+1)*2] + source[(pos+1)*2 + 1];
+                        INT32 s3 = source[(pos+2)*2] + source[(pos+2)*2 + 1];
+                        sample = PV_CubicHermiteInterpNR(s0, s1, s2, s3, cur_wave_f);
+                        *dest += (sample * amplitude) >> 5;
+                        *destReverb += (sample * amplitudeReverb) >> 5;
+                        *destChorus += (sample * amplitudeChorus) >> 5;
+                        dest++;
+                        destReverb++;
+                        destChorus++;
+                        ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    }
+                    amplitude += amplitudeAdjust;
                 }
-                amplitude += amplitudeAdjust;
+            }
+            else
+            {
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
+                {
+                    amplitudeReverb = (amplitude >> 7) * this_voice->reverbLevel;
+                    amplitudeChorus = (amplitude >> 7) * this_voice->chorusLevel;
+
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        calculated_source = source + cur_wave_i * 2;
+                        b = calculated_source[0] + calculated_source[1];
+                        c = calculated_source[2] + calculated_source[3];
+                        sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                        *dest += (sample  * amplitude) >> 5;
+                        *destReverb += (sample  * amplitudeReverb) >> 5;
+                        *destChorus += (sample  * amplitudeChorus) >> 5;
+                        dest++;
+                        destReverb++;
+                        destChorus++;
+
+                        ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    }
+                    amplitude += amplitudeAdjust;
+                }
             }
         }
     }
@@ -682,14 +769,75 @@ void PV_ServeU3232PartialBuffer16NewReverb (GM_Voice *this_voice, XBOOL looping)
     {
         if (this_voice->channels == 1)
         {
-            for (a = MusicGlobals->Four_Loop; a > 0; --a)
+            if (this_voice->advancedInterpolation)
             {
-                amplitudeReverb = (amplitude >> 7) * this_voice->reverbLevel;
-                amplitudeChorus = (amplitude >> 7) * this_voice->chorusLevel;
+                INT32 loopStartIdx = (INT32)(this_voice->NoteLoopPtr - this_voice->NotePtr);
+                INT32 loopEndIdx = (INT32)(this_voice->NoteLoopEnd - this_voice->NotePtr);
+                INT32 totalFrames = (INT32)(this_voice->NotePtrEnd - this_voice->NotePtr);
+
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
+                {
+                    amplitudeReverb = (amplitude >> 7) * this_voice->reverbLevel;
+                    amplitudeChorus = (amplitude >> 7) * this_voice->chorusLevel;
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        THE_CHECK_U3232(INT16 *);
+                        INT32 pos = (INT32)cur_wave_i;
+                        INT32 s1 = source[pos];
+                        INT32 s0, s2, s3;
+                        if (looping)
+                        {
+                            s0 = PV_LoopWrapSampleNR(source, pos - 1, loopStartIdx, loopEndIdx);
+                            s2 = PV_LoopWrapSampleNR(source, pos + 1, loopStartIdx, loopEndIdx);
+                            s3 = PV_LoopWrapSampleNR(source, pos + 2, loopStartIdx, loopEndIdx);
+                        }
+                        else
+                        {
+                            s0 = source[(pos > 0) ? pos - 1 : 0];
+                            s2 = source[(pos + 1 < totalFrames) ? pos + 1 : pos];
+                            s3 = source[(pos + 2 < totalFrames) ? pos + 2 : (pos + 1 < totalFrames) ? pos + 1 : pos];
+                        }
+                        sample = PV_CubicHermiteInterpNR(s0, s1, s2, s3, cur_wave_f);
+                        dest[0] += (sample * amplitude) >> 4;
+                        destReverb[0] += (sample * amplitudeReverb) >> 4;
+                        destChorus[0] += (sample * amplitudeChorus) >> 4;
+                        ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                        dest++;
+                        destReverb++;
+                        destChorus++;
+                    }
+                    amplitude += amplitudeAdjust;
+                }
+            }
+            else
+            {
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
+                {
+                    amplitudeReverb = (amplitude >> 7) * this_voice->reverbLevel;
+                    amplitudeChorus = (amplitude >> 7) * this_voice->chorusLevel;
 
 #if 1   //MOE'S OBSESSIVE FOLLY
-                for (inner = 0; inner < 4; inner++)
-                {
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        U32 next_wave_i;
+                        THE_CHECK_U3232(INT16 *);
+                        next_wave_i = cur_wave_i + 1;
+                        if (looping && (next_wave_i >= end_wave))
+                        {
+                            next_wave_i -= wave_adjust;
+                        }
+                        b = source[cur_wave_i];
+                        c = source[next_wave_i];
+                        sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                        dest[0] += (sample * amplitude) >> 4;
+                        destReverb[0] += (sample * amplitudeReverb) >> 4;
+                        destChorus[0] += (sample * amplitudeChorus) >> 4;
+                        ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                        dest++;
+                        destReverb++;
+                        destChorus++;
+                    }
+#else
                     THE_CHECK_U3232(INT16 *);
                     b = source[cur_wave_i];
                     c = source[cur_wave_i+1];
@@ -698,56 +846,90 @@ void PV_ServeU3232PartialBuffer16NewReverb (GM_Voice *this_voice, XBOOL looping)
                     destReverb[0] += (sample * amplitudeReverb) >> 4;
                     destChorus[0] += (sample * amplitudeChorus) >> 4;
                     ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
-                    dest++;
-                    destReverb++;
-                    destChorus++;
-                }
-#else
-                THE_CHECK_U3232(INT16 *);
-                b = source[cur_wave_i];
-                c = source[cur_wave_i+1];
-                sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                dest[0] += (sample * amplitude) >> 4;
-                destReverb[0] += (sample * amplitudeReverb) >> 4;
-                destChorus[0] += (sample * amplitudeChorus) >> 4;
-                ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
-                        
-                THE_CHECK_U3232(INT16 *);
-                b = source[cur_wave_i];
-                c = source[cur_wave_i+1];
-                sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                dest[1] += (sample * amplitude) >> 4;
-                destReverb[1] += (sample * amplitudeReverb) >> 4;
-                destChorus[1] += (sample * amplitudeChorus) >> 4;
-                ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                            
+                    THE_CHECK_U3232(INT16 *);
+                    b = source[cur_wave_i];
+                    c = source[cur_wave_i+1];
+                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                    dest[1] += (sample * amplitude) >> 4;
+                    destReverb[1] += (sample * amplitudeReverb) >> 4;
+                    destChorus[1] += (sample * amplitudeChorus) >> 4;
+                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
 
-                THE_CHECK_U3232(INT16 *);
-                b = source[cur_wave_i];
-                c = source[cur_wave_i+1];
-                sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                dest[2] += (sample * amplitude) >> 4;
-                destReverb[2] += (sample * amplitudeReverb) >> 4;
-                destChorus[2] += (sample * amplitudeChorus) >> 4;
-                ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    THE_CHECK_U3232(INT16 *);
+                    b = source[cur_wave_i];
+                    c = source[cur_wave_i+1];
+                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                    dest[2] += (sample * amplitude) >> 4;
+                    destReverb[2] += (sample * amplitudeReverb) >> 4;
+                    destChorus[2] += (sample * amplitudeChorus) >> 4;
+                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
 
-                THE_CHECK_U3232(INT16 *);
-                b = source[cur_wave_i];
-                c = source[cur_wave_i+1];
-                sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                dest[3] += (sample * amplitude) >> 4;
-                destReverb[3] += (sample * amplitudeReverb) >> 4;
-                destChorus[3] += (sample * amplitudeChorus) >> 4;
-                ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    THE_CHECK_U3232(INT16 *);
+                    b = source[cur_wave_i];
+                    c = source[cur_wave_i+1];
+                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                    dest[3] += (sample * amplitude) >> 4;
+                    destReverb[3] += (sample * amplitudeReverb) >> 4;
+                    destChorus[3] += (sample * amplitudeChorus) >> 4;
+                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
 
-                dest += 4;
-                destReverb += 4;
-                destChorus += 4;
+                    dest += 4;
+                    destReverb += 4;
+                    destChorus += 4;
 #endif
-                amplitude += amplitudeAdjust;
+                    amplitude += amplitudeAdjust;
+                }
             }
         }
         else
         {
+            if (this_voice->advancedInterpolation)
+            {
+                INT32 loopStartIdx = (INT32)(this_voice->NoteLoopPtr - this_voice->NotePtr);
+                INT32 loopEndIdx = (INT32)(this_voice->NoteLoopEnd - this_voice->NotePtr);
+
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
+                {
+                    amplitudeReverb = (amplitude >> 7) * this_voice->reverbLevel;
+                    amplitudeChorus = (amplitude >> 7) * this_voice->chorusLevel;
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        THE_CHECK_U3232(INT16 *);
+                        INT32 pos = (INT32)cur_wave_i;
+                        INT32 idx0, idx2, idx3;
+                        if (looping)
+                        {
+                            INT32 loopLen = loopEndIdx - loopStartIdx;
+                            idx0 = pos - 1;
+                            if (idx0 < loopStartIdx) idx0 += loopLen;
+                            idx2 = pos + 1;
+                            if (idx2 >= loopEndIdx) idx2 -= loopLen;
+                            idx3 = pos + 2;
+                            if (idx3 >= loopEndIdx) idx3 -= loopLen;
+                        }
+                        else
+                        {
+                            idx0 = (pos > 0) ? pos - 1 : 0;
+                            idx2 = pos + 1;
+                            idx3 = pos + 2;
+                        }
+                        INT32 s0 = source[idx0*2] + source[idx0*2 + 1];
+                        INT32 s1 = source[pos*2] + source[pos*2 + 1];
+                        INT32 s2 = source[idx2*2] + source[idx2*2 + 1];
+                        INT32 s3 = source[idx3*2] + source[idx3*2 + 1];
+                        sample = PV_CubicHermiteInterpNR(s0, s1, s2, s3, cur_wave_f);
+                        *dest += ((sample >> 1) * amplitude) >> 5;
+                        *destReverb += ((sample >> 1) * amplitudeReverb) >> 5;
+                        *destChorus++ += ((sample >> 1) * amplitudeChorus) >> 5;
+                        dest++; destReverb++;
+                        ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    }
+                    amplitude += amplitudeAdjust;
+                }
+            }
+            else
+            {
             for (a = MusicGlobals->Four_Loop; a > 0; --a)
             {
                 amplitudeReverb = (amplitude >> 7) * this_voice->reverbLevel;
@@ -755,10 +937,15 @@ void PV_ServeU3232PartialBuffer16NewReverb (GM_Voice *this_voice, XBOOL looping)
 
                 for (inner = 0; inner < 4; inner++)
                 {
+                    U32 next_wave_i;
                     THE_CHECK_U3232(INT16 *);
-                    calculated_source = source + cur_wave_i * 2;
-                    b = calculated_source[0] + calculated_source[1];
-                    c = calculated_source[2] + calculated_source[3];
+                    next_wave_i = cur_wave_i + 1;
+                        if (looping && (next_wave_i >= end_wave))
+                        {
+                            next_wave_i -= wave_adjust;
+                        }
+                        b = source[cur_wave_i * 2] + source[cur_wave_i * 2 + 1];
+                        c = source[next_wave_i * 2] + source[next_wave_i * 2 + 1];
                     sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
                     *dest += ((sample >> 1) * amplitude) >> 5;
                     *destReverb += ((sample >> 1) * amplitudeReverb) >> 5;
@@ -767,6 +954,7 @@ void PV_ServeU3232PartialBuffer16NewReverb (GM_Voice *this_voice, XBOOL looping)
                     ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
                 }
                 amplitude += amplitudeAdjust;
+            }
             }
         }
     }
@@ -819,84 +1007,152 @@ void PV_ServeU3232StereoFullBuffer16NewReverb (GM_Voice *this_voice)
     {
         if (this_voice->channels == 1)
         {   // mono instrument
-            for (a = MusicGlobals->Four_Loop; a > 0; --a)
+            if (this_voice->advancedInterpolation)
             {
-                amplitudeReverb = ((amplitudeL + amplitudeR) >> 8) * this_voice->reverbLevel;
-                amplitudeChorus = ((amplitudeL + amplitudeR) >> 8) * this_voice->chorusLevel;
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
+                {
+                    amplitudeReverb = ((amplitudeL + amplitudeR) >> 8) * this_voice->reverbLevel;
+                    amplitudeChorus = ((amplitudeL + amplitudeR) >> 8) * this_voice->chorusLevel;
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        INT32 pos = (INT32)cur_wave_i;
+                        INT32 s0 = source[(pos > 0) ? pos - 1 : 0];
+                        INT32 s1 = source[pos];
+                        INT32 s2 = source[pos + 1];
+                        INT32 s3 = source[pos + 2];
+                        sample = PV_CubicHermiteInterpNR(s0, s1, s2, s3, cur_wave_f);
+                        destL[0] += (sample * amplitudeL) >> 4;
+                        destL[1] += (sample * amplitudeR) >> 4;
+                        *destReverb += (sample * amplitudeReverb) >> 4;
+                        *destChorus += (sample * amplitudeChorus) >> 4;
+                        destL += 2;
+                        destReverb++;
+                        destChorus++;
+                        ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    }
+                    amplitudeL += amplitudeLincrement;
+                    amplitudeR += amplitudeRincrement;
+                }
+            }
+            else
+            {
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
+                {
+                    amplitudeReverb = ((amplitudeL + amplitudeR) >> 8) * this_voice->reverbLevel;
+                    amplitudeChorus = ((amplitudeL + amplitudeR) >> 8) * this_voice->chorusLevel;
 
-                b = source[cur_wave_i];
-                c = source[cur_wave_i+1];
-                sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                destL[0] += (sample * amplitudeL) >> 4;
-                destL[1] += (sample * amplitudeR) >> 4;
-                destReverb[0] += (sample * amplitudeReverb) >> 4;
-                destChorus[0] += (sample * amplitudeChorus) >> 4;
-                ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    b = source[cur_wave_i];
+                    c = source[cur_wave_i+1];
+                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                    destL[0] += (sample * amplitudeL) >> 4;
+                    destL[1] += (sample * amplitudeR) >> 4;
+                    destReverb[0] += (sample * amplitudeReverb) >> 4;
+                    destChorus[0] += (sample * amplitudeChorus) >> 4;
+                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
 
-                b = source[cur_wave_i];
-                c = source[cur_wave_i+1];
-                sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                destL[2] += (sample * amplitudeL) >> 4;
-                destL[3] += (sample * amplitudeR) >> 4;
-                destReverb[1] += (sample * amplitudeReverb) >> 4;
-                destChorus[1] += (sample * amplitudeChorus) >> 4;
-                ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    b = source[cur_wave_i];
+                    c = source[cur_wave_i+1];
+                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                    destL[2] += (sample * amplitudeL) >> 4;
+                    destL[3] += (sample * amplitudeR) >> 4;
+                    destReverb[1] += (sample * amplitudeReverb) >> 4;
+                    destChorus[1] += (sample * amplitudeChorus) >> 4;
+                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
 
-                b = source[cur_wave_i];
-                c = source[cur_wave_i+1];
-                sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                destL[4] += (sample * amplitudeL) >> 4;
-                destL[5] += (sample * amplitudeR) >> 4;
-                destReverb[2] += (sample * amplitudeReverb) >> 4;
-                destChorus[2] += (sample * amplitudeChorus) >> 4;
-                ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    b = source[cur_wave_i];
+                    c = source[cur_wave_i+1];
+                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                    destL[4] += (sample * amplitudeL) >> 4;
+                    destL[5] += (sample * amplitudeR) >> 4;
+                    destReverb[2] += (sample * amplitudeReverb) >> 4;
+                    destChorus[2] += (sample * amplitudeChorus) >> 4;
+                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
 
-                b = source[cur_wave_i];
-                c = source[cur_wave_i+1];
-                sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                destL[6] += (sample * amplitudeL) >> 4;
-                destL[7] += (sample * amplitudeR) >> 4;
-                destReverb[3] += (sample * amplitudeReverb) >> 4;
-                destChorus[3] += (sample * amplitudeChorus) >> 4;
-                destL += 8;
-                destReverb += 4;
-                destChorus += 4;
+                    b = source[cur_wave_i];
+                    c = source[cur_wave_i+1];
+                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                    destL[6] += (sample * amplitudeL) >> 4;
+                    destL[7] += (sample * amplitudeR) >> 4;
+                    destReverb[3] += (sample * amplitudeReverb) >> 4;
+                    destChorus[3] += (sample * amplitudeChorus) >> 4;
+                    destL += 8;
+                    destReverb += 4;
+                    destChorus += 4;
 
-                ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
-                amplitudeL += amplitudeLincrement;
-                amplitudeR += amplitudeRincrement;
+                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    amplitudeL += amplitudeLincrement;
+                    amplitudeR += amplitudeRincrement;
+                }
             }
         }
         else
         {   // stereo 16 bit instrument
-            for (a = MusicGlobals->Four_Loop; a > 0; --a)
+            if (this_voice->advancedInterpolation)
             {
-                amplitudeReverb = ((amplitudeL + amplitudeR) >> 8) * this_voice->reverbLevel;
-                amplitudeChorus = ((amplitudeL + amplitudeR) >> 8) * this_voice->chorusLevel;
-
-                for (inner = 0; inner < 4; inner++)
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
                 {
-                    calculated_source = source + cur_wave_i * 2;
-                    b = calculated_source[0];
-                    c = calculated_source[2];
-                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                    destL[0] += (sample * amplitudeL) >> 4;
-                    *destReverb += (sample * amplitudeReverb) >> 5;
-                    *destChorus += (sample * amplitudeChorus) >> 5;
-                    b = calculated_source[1];
-                    c = calculated_source[3];
-                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                    destL[1] += (sample * amplitudeR) >> 4;
-                    *destReverb += (sample * amplitudeReverb) >> 5;
-                    *destChorus += (sample * amplitudeChorus) >> 5;
-                    destL += 2;
-                    destReverb++;
-                    destChorus++;
-            
-                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    amplitudeReverb = ((amplitudeL + amplitudeR) >> 8) * this_voice->reverbLevel;
+                    amplitudeChorus = ((amplitudeL + amplitudeR) >> 8) * this_voice->chorusLevel;
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        INT32 pos = (INT32)cur_wave_i;
+                        INT32 prev_pos = (pos > 0) ? pos - 1 : 0;
+                        INT32 sL0 = source[prev_pos*2];
+                        INT32 sL1 = source[pos*2];
+                        INT32 sL2 = source[(pos+1)*2];
+                        INT32 sL3 = source[(pos+2)*2];
+                        INT32 sampleL = PV_CubicHermiteInterpNR(sL0, sL1, sL2, sL3, cur_wave_f);
+                        destL[0] += (sampleL * amplitudeL) >> 4;
+                        *destReverb += (sampleL * amplitudeReverb) >> 5;
+                        *destChorus += (sampleL * amplitudeChorus) >> 5;
+                        INT32 sR0 = source[prev_pos*2 + 1];
+                        INT32 sR1 = source[pos*2 + 1];
+                        INT32 sR2 = source[(pos+1)*2 + 1];
+                        INT32 sR3 = source[(pos+2)*2 + 1];
+                        INT32 sampleR = PV_CubicHermiteInterpNR(sR0, sR1, sR2, sR3, cur_wave_f);
+                        destL[1] += (sampleR * amplitudeR) >> 4;
+                        *destReverb += (sampleR * amplitudeReverb) >> 5;
+                        *destChorus += (sampleR * amplitudeChorus) >> 5;
+                        destL += 2;
+                        destReverb++;
+                        destChorus++;
+                        ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    }
+                    amplitudeL += amplitudeLincrement;
+                    amplitudeR += amplitudeRincrement;
                 }
-                amplitudeL += amplitudeLincrement;
-                amplitudeR += amplitudeRincrement;
+            }
+            else
+            {
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
+                {
+                    amplitudeReverb = ((amplitudeL + amplitudeR) >> 8) * this_voice->reverbLevel;
+                    amplitudeChorus = ((amplitudeL + amplitudeR) >> 8) * this_voice->chorusLevel;
+
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        calculated_source = source + cur_wave_i * 2;
+                        b = calculated_source[0];
+                        c = calculated_source[2];
+                        sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                        destL[0] += (sample * amplitudeL) >> 4;
+                        *destReverb += (sample * amplitudeReverb) >> 5;
+                        *destChorus += (sample * amplitudeChorus) >> 5;
+                        b = calculated_source[1];
+                        c = calculated_source[3];
+                        sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                        destL[1] += (sample * amplitudeR) >> 4;
+                        *destReverb += (sample * amplitudeReverb) >> 5;
+                        *destChorus += (sample * amplitudeChorus) >> 5;
+                        destL += 2;
+                        destReverb++;
+                        destChorus++;
+
+                        ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    }
+                    amplitudeL += amplitudeLincrement;
+                    amplitudeR += amplitudeRincrement;
+                }
             }
         }
     }
@@ -956,60 +1212,174 @@ void PV_ServeU3232StereoPartialBuffer16NewReverb (GM_Voice *this_voice, XBOOL lo
     {
         if (this_voice->channels == 1)
         {   // mono instrument
-            for (a = MusicGlobals->Four_Loop; a > 0; --a)
+            if (this_voice->advancedInterpolation)
             {
-                amplitudeReverb = ((amplitudeL + amplitudeR) >> 8) * this_voice->reverbLevel;
-                amplitudeChorus = ((amplitudeL + amplitudeR) >> 8) * this_voice->chorusLevel;
+                INT32 loopStartIdx = (INT32)(this_voice->NoteLoopPtr - this_voice->NotePtr);
+                INT32 loopEndIdx = (INT32)(this_voice->NoteLoopEnd - this_voice->NotePtr);
+                INT32 totalFrames = (INT32)(this_voice->NotePtrEnd - this_voice->NotePtr);
 
-                for (inner = 0; inner < 4; inner++)
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
                 {
-                    THE_CHECK_U3232(INT16 *);
-                    b = source[cur_wave_i];
-                    c = source[cur_wave_i+1];
-                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                    destL[0] += (sample * amplitudeL) >> 4;
-                    destL[1] += (sample * amplitudeR) >> 4;
-                    *destReverb += (sample * amplitudeReverb) >> 4;
-                    *destChorus += (sample * amplitudeChorus) >> 4;
-                    destL += 2;
-                    destReverb++;
-                    destChorus++;
-                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    amplitudeReverb = ((amplitudeL + amplitudeR) >> 8) * this_voice->reverbLevel;
+                    amplitudeChorus = ((amplitudeL + amplitudeR) >> 8) * this_voice->chorusLevel;
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        THE_CHECK_U3232(INT16 *);
+                        INT32 pos = (INT32)cur_wave_i;
+                        INT32 s1 = source[pos];
+                        INT32 s0, s2, s3;
+                        if (looping)
+                        {
+                            s0 = PV_LoopWrapSampleNR(source, pos - 1, loopStartIdx, loopEndIdx);
+                            s2 = PV_LoopWrapSampleNR(source, pos + 1, loopStartIdx, loopEndIdx);
+                            s3 = PV_LoopWrapSampleNR(source, pos + 2, loopStartIdx, loopEndIdx);
+                        }
+                        else
+                        {
+                            s0 = source[(pos > 0) ? pos - 1 : 0];
+                            s2 = source[(pos + 1 < totalFrames) ? pos + 1 : pos];
+                            s3 = source[(pos + 2 < totalFrames) ? pos + 2 : (pos + 1 < totalFrames) ? pos + 1 : pos];
+                        }
+                        sample = PV_CubicHermiteInterpNR(s0, s1, s2, s3, cur_wave_f);
+                        destL[0] += (sample * amplitudeL) >> 4;
+                        destL[1] += (sample * amplitudeR) >> 4;
+                        *destReverb += (sample * amplitudeReverb) >> 4;
+                        *destChorus += (sample * amplitudeChorus) >> 4;
+                        destL += 2;
+                        destReverb++;
+                        destChorus++;
+                        ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    }
+                    amplitudeL += amplitudeLincrement;
+                    amplitudeR += amplitudeRincrement;
                 }
-                amplitudeL += amplitudeLincrement;
-                amplitudeR += amplitudeRincrement;
+            }
+            else
+            {
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
+                {
+                    amplitudeReverb = ((amplitudeL + amplitudeR) >> 8) * this_voice->reverbLevel;
+                    amplitudeChorus = ((amplitudeL + amplitudeR) >> 8) * this_voice->chorusLevel;
+
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        U32 next_wave_i;
+                        THE_CHECK_U3232(INT16 *);
+                        next_wave_i = cur_wave_i + 1;
+                        if (looping && (next_wave_i >= end_wave))
+                        {
+                            next_wave_i -= wave_adjust;
+                        }
+                        b = source[cur_wave_i];
+                        c = source[next_wave_i];
+                        sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                        destL[0] += (sample * amplitudeL) >> 4;
+                        destL[1] += (sample * amplitudeR) >> 4;
+                        *destReverb += (sample * amplitudeReverb) >> 4;
+                        *destChorus += (sample * amplitudeChorus) >> 4;
+                        destL += 2;
+                        destReverb++;
+                        destChorus++;
+                        ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    }
+                    amplitudeL += amplitudeLincrement;
+                    amplitudeR += amplitudeRincrement;
+                }
             }
         }
         else
         {   // Stereo 16 bit instrument
-            for (a = MusicGlobals->Four_Loop; a > 0; --a)
+            if (this_voice->advancedInterpolation)
             {
-                amplitudeReverb = ((amplitudeL + amplitudeR) >> 8) * this_voice->reverbLevel;
-                amplitudeChorus = ((amplitudeL + amplitudeR) >> 8) * this_voice->chorusLevel;
+                INT32 loopStartIdx = (INT32)(this_voice->NoteLoopPtr - this_voice->NotePtr);
+                INT32 loopEndIdx = (INT32)(this_voice->NoteLoopEnd - this_voice->NotePtr);
 
-                for (inner = 0; inner < 4; inner++)
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
                 {
-                    THE_CHECK_U3232(INT16 *);
-                    calculated_source = source + cur_wave_i * 2;
-                    b = calculated_source[0];
-                    c = calculated_source[2];
-                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                    destL[0] += (sample * amplitudeL) >> 4;
-                    *destReverb += (sample * amplitudeReverb) >> 5;
-                    *destChorus += (sample * amplitudeChorus) >> 5;
-                    b = calculated_source[1];
-                    c = calculated_source[3];
-                    sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
-                    destL[1] += (sample * amplitudeR) >> 4;
-                    *destReverb += (sample * amplitudeReverb) >> 5;
-                    *destChorus += (sample * amplitudeChorus) >> 5;
-                    destL += 2;
-                    destReverb++;
-                    destChorus++;
-                    ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    amplitudeReverb = ((amplitudeL + amplitudeR) >> 8) * this_voice->reverbLevel;
+                    amplitudeChorus = ((amplitudeL + amplitudeR) >> 8) * this_voice->chorusLevel;
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        THE_CHECK_U3232(INT16 *);
+                        INT32 pos = (INT32)cur_wave_i;
+                        INT32 idx0, idx2, idx3;
+                        if (looping)
+                        {
+                            INT32 loopLen = loopEndIdx - loopStartIdx;
+                            idx0 = pos - 1;
+                            if (idx0 < loopStartIdx) idx0 += loopLen;
+                            idx2 = pos + 1;
+                            if (idx2 >= loopEndIdx) idx2 -= loopLen;
+                            idx3 = pos + 2;
+                            if (idx3 >= loopEndIdx) idx3 -= loopLen;
+                        }
+                        else
+                        {
+                            idx0 = (pos > 0) ? pos - 1 : 0;
+                            idx2 = pos + 1;
+                            idx3 = pos + 2;
+                        }
+                        INT32 sL0 = source[idx0*2];
+                        INT32 sL1 = source[pos*2];
+                        INT32 sL2 = source[idx2*2];
+                        INT32 sL3 = source[idx3*2];
+                        INT32 sampleL = PV_CubicHermiteInterpNR(sL0, sL1, sL2, sL3, cur_wave_f);
+                        destL[0] += (sampleL * amplitudeL) >> 4;
+                        *destReverb += (sampleL * amplitudeReverb) >> 5;
+                        *destChorus += (sampleL * amplitudeChorus) >> 5;
+                        INT32 sR0 = source[idx0*2 + 1];
+                        INT32 sR1 = source[pos*2 + 1];
+                        INT32 sR2 = source[idx2*2 + 1];
+                        INT32 sR3 = source[idx3*2 + 1];
+                        INT32 sampleR = PV_CubicHermiteInterpNR(sR0, sR1, sR2, sR3, cur_wave_f);
+                        destL[1] += (sampleR * amplitudeR) >> 4;
+                        *destReverb += (sampleR * amplitudeReverb) >> 5;
+                        *destChorus += (sampleR * amplitudeChorus) >> 5;
+                        destL += 2;
+                        destReverb++;
+                        destChorus++;
+                        ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    }
+                    amplitudeL += amplitudeLincrement;
+                    amplitudeR += amplitudeRincrement;
                 }
-                amplitudeL += amplitudeLincrement;
-                amplitudeR += amplitudeRincrement;
+            }
+            else
+            {
+                for (a = MusicGlobals->Four_Loop; a > 0; --a)
+                {
+                    amplitudeReverb = ((amplitudeL + amplitudeR) >> 8) * this_voice->reverbLevel;
+                    amplitudeChorus = ((amplitudeL + amplitudeR) >> 8) * this_voice->chorusLevel;
+
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        U32 next_wave_i;
+                        THE_CHECK_U3232(INT16 *);
+                        next_wave_i = cur_wave_i + 1;
+                        if (looping && (next_wave_i >= end_wave))
+                        {
+                            next_wave_i -= wave_adjust;
+                        }
+                        b = source[cur_wave_i * 2];
+                        c = source[next_wave_i * 2];
+                        sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                        destL[0] += (sample * amplitudeL) >> 4;
+                        *destReverb += (sample * amplitudeReverb) >> 5;
+                        *destChorus += (sample * amplitudeChorus) >> 5;
+                        b = source[cur_wave_i * 2 + 1];
+                        c = source[next_wave_i * 2 + 1];
+                        sample = (((INT32)(cur_wave_f >> 17) * (INT32)(c-b)) >> 15) + b;
+                        destL[1] += (sample * amplitudeR) >> 4;
+                        *destReverb += (sample * amplitudeReverb) >> 5;
+                        *destChorus += (sample * amplitudeChorus) >> 5;
+                        destL += 2;
+                        destReverb++;
+                        destChorus++;
+                        ADD_U3232(cur_wave_i, cur_wave_f, wave_increment);
+                    }
+                    amplitudeL += amplitudeLincrement;
+                    amplitudeR += amplitudeRincrement;
+                }
             }
         }
     }

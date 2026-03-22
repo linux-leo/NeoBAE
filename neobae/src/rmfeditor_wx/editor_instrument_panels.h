@@ -1063,6 +1063,7 @@ public:
         m_chkInterpolate->SetValue((extInfo.flags1 & 0x80) != 0);
         m_chkAvoidReverb->SetValue((extInfo.flags1 & 0x01) != 0);
         m_chkSampleAndHold->SetValue((extInfo.flags1 & 0x04) != 0);
+        m_chkAdvancedInterpolation->SetValue((extInfo.flags2 & 0x80) != 0);
         m_chkPlayAtSampledFreq->SetValue((extInfo.flags2 & 0x40) != 0);
         m_chkNotPolyphonic->SetValue((extInfo.flags2 & 0x04) != 0);
 
@@ -1137,6 +1138,7 @@ public:
         m_chkInterpolate->SetValue(false);
         m_chkAvoidReverb->SetValue(false);
         m_chkSampleAndHold->SetValue(false);
+        m_chkAdvancedInterpolation->SetValue(false);
         m_chkPlayAtSampledFreq->SetValue(false);
         m_chkNotPolyphonic->SetValue(false);
         m_lpfFrequency->SetValue(0);
@@ -1173,7 +1175,8 @@ public:
         if (m_chkInterpolate->GetValue()) extInfo.flags1 |= 0x80;
         if (m_chkAvoidReverb->GetValue()) extInfo.flags1 |= 0x01;
         if (m_chkSampleAndHold->GetValue()) extInfo.flags1 |= 0x04;
-        extInfo.flags2 &= ~(0x40 | 0x04);
+        extInfo.flags2 &= ~(0x80 | 0x40 | 0x04);
+        if (m_chkAdvancedInterpolation->GetValue()) extInfo.flags2 |= 0x80;
         if (m_chkPlayAtSampledFreq->GetValue()) extInfo.flags2 |= 0x40;
         if (m_chkNotPolyphonic->GetValue()) extInfo.flags2 |= 0x04;
 
@@ -1225,6 +1228,7 @@ private:
     wxCheckBox *m_chkInterpolate;
     wxCheckBox *m_chkAvoidReverb;
     wxCheckBox *m_chkSampleAndHold;
+    wxCheckBox *m_chkAdvancedInterpolation;
     wxCheckBox *m_chkPlayAtSampledFreq;
     wxCheckBox *m_chkNotPolyphonic;
     wxSpinCtrl *m_panPlacementSpin;
@@ -1447,17 +1451,31 @@ private:
             row1->Add(m_chkSampleAndHold, 0);
             box->Add(row1, 0, wxALL, 4);
             wxBoxSizer *row2 = new wxBoxSizer(wxHORIZONTAL);
+            m_chkAdvancedInterpolation = new wxCheckBox(box->GetStaticBox(), wxID_ANY, "Advanced Interpolation (ZMF)");
             m_chkPlayAtSampledFreq = new wxCheckBox(box->GetStaticBox(), wxID_ANY, "Play at Sampled Freq");
             m_chkNotPolyphonic = new wxCheckBox(box->GetStaticBox(), wxID_ANY, "Not Polyphonic");
+            m_chkAdvancedInterpolation->SetToolTip("Stores the advanced interpolation SND flag. Requires ZMF format.");
+            row2->Add(m_chkAdvancedInterpolation, 0, wxRIGHT, 15);
             row2->Add(m_chkPlayAtSampledFreq, 0, wxRIGHT, 15);
             row2->Add(m_chkNotPolyphonic, 0);
             box->Add(row2, 0, wxALL, 4);
             sizer->Add(box, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
             auto flagChanged = [this](wxCommandEvent &) { NotifyParameterChanged(); };
-            m_chkInterpolate->Bind(wxEVT_CHECKBOX, flagChanged);
+            m_chkInterpolate->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &event) {
+                if (event.IsChecked()) {
+                    m_chkAdvancedInterpolation->SetValue(false);
+                }
+                NotifyParameterChanged();
+            });
             m_chkAvoidReverb->Bind(wxEVT_CHECKBOX, flagChanged);
             m_chkSampleAndHold->Bind(wxEVT_CHECKBOX, flagChanged);
+            m_chkAdvancedInterpolation->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &event) {
+                if (event.IsChecked()) {
+                    m_chkInterpolate->SetValue(false);
+                }
+                NotifyParameterChanged();
+            });
             m_chkPlayAtSampledFreq->Bind(wxEVT_CHECKBOX, flagChanged);
             m_chkNotPolyphonic->Bind(wxEVT_CHECKBOX, flagChanged);
         }

@@ -3041,6 +3041,7 @@ typedef struct BAERmfEditorInstrumentExtInfo
     unsigned char flags2;  /* ZBF_ bitmask from InstrumentResource flags2 */
     char panPlacement;     /* stereo pan from INST header */
     int16_t midiRootKey;   /* master root key from INST header */
+    int16_t miscParameter1; /* offset high-word when ZBF_enableSampleOffsetStart is set in flags2 */
     int16_t miscParameter2; /* volume level (100 = default) */
     BAE_BOOL hasDefaultMod; /* TRUE if INST_DEFAULT_MOD present (disables auto mod-wheel curve) */
     int32_t LPF_frequency;
@@ -3209,6 +3210,16 @@ BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *docum
                                                      uint32_t sampleIndex,
                                                      BAEPathName filePath,
                                                      BAESampleInfo *outSampleInfo);
+BAEResult BAERmfEditorDocument_ReplaceSampleFromPCM(BAERmfEditorDocument *document,
+                                                    uint32_t sampleIndex,
+                                                    void const *pcmData,
+                                                    uint32_t frameCount,
+                                                    uint16_t bitSize,
+                                                    uint16_t channels,
+                                                    BAE_UNSIGNED_FIXED sampledRate,
+                                                    uint32_t startLoop,
+                                                    uint32_t endLoop,
+                                                    BAESampleInfo *outSampleInfo);
 BAEResult BAERmfEditorDocument_PropagateReplacementToAsset(BAERmfEditorDocument *document,
                                                            uint32_t sourceSampleIndex);
 BAEResult BAERmfEditorDocument_GetSampleWaveformData(BAERmfEditorDocument const *document,

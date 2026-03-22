@@ -375,11 +375,13 @@ typedef struct X_PACKBY1
 // Index into unused[] array:
 #define SONG_CONFIG_UNUSED_INDEX        0
 // Presence bits (song defines this setting):
-#define SONG_CONFIG_HAS_CLASSIC_CHORUS  0x01
-#define SONG_CONFIG_HAS_PANFIX          0x04
+#define SONG_CONFIG_HAS_CLASSIC_CHORUS          0x01
+#define SONG_CONFIG_HAS_PANFIX                  0x04
+#define SONG_CONFIG_HAS_SAMPLE_OFFSET_START     0x10  // ZMF-only: instrument start-offset metadata is meaningful
 // Value bits (meaningful only when corresponding presence bit is set):
-#define SONG_CONFIG_CLASSIC_CHORUS_ON   0x02
-#define SONG_CONFIG_PANFIX_ON           0x08
+#define SONG_CONFIG_CLASSIC_CHORUS_ON           0x02
+#define SONG_CONFIG_PANFIX_ON                   0x08
+#define SONG_CONFIG_SAMPLE_OFFSET_START_ON      0x20
 
 // bits for SongResource_RMF_Linear flags
 #define XBFL_disableLoops               0x80
@@ -518,9 +520,11 @@ typedef struct X_PACKBY1
 #define ZBF_extendedFormat              0x02
 #define ZBF_avoidReverb                 0x01    // this is a default enable switch to send to the mix buss. TRUE is off.
 // bits for Instrument flags2
-#define ZBF_reserved_0                  0x80
+#define ZBF_advancedInterpolation       0x80    // ZMF-only: emit XSOUND_ADVANCED_INTERPOLATION on SND save
+#define ZBF_reserved_0                  ZBF_advancedInterpolation
 #define ZBF_playAtSampledFreq           0x40
 #define ZBF_fitKeySplits                0x20    // not used
+#define ZBF_enableSampleOffsetStart     ZBF_fitKeySplits  // ZMF-only: miscParameter1/2 store 32-bit start frame offset
 #define ZBF_enableSoundModifier         0x10
 #define ZBF_useSoundModifierAsRootKey   0x08
 #define ZBF_notPolyphonic               0x04    // not used
@@ -674,6 +678,7 @@ enum
 
 // XSoundHeader3 reserved2[0] flag bits
 #define XSOUND_OPUS_ROUNDTRIP_RESAMPLE  0x01  // Opus round-trip resampling: store source rate, decode at 48kHz and time-stretch
+#define XSOUND_ADVANCED_INTERPOLATION    0x02  // Prefer higher-resolution interpolation for this sample (ZREZ/ZMF authoring)
 
 // This is the third sample format support by Beatnik.
 //
@@ -862,7 +867,7 @@ typedef enum SndCompressionType
     C_ALAW              = FOUR_CHAR('a','l','a','w'),   // 'ulaw'   aLaw; 2 to 1
 
     // FLAC lossless compression
-#if USE_FLAC_DECODER == TRUE
+#if USE_FLAC_DECODER == TRUE || USE_FLAC_ENCODER == TRUE
     C_FLAC              = FOUR_CHAR('f','L','a','C'),   // 'flac'   FLAC lossless
 #endif
 
@@ -870,7 +875,7 @@ typedef enum SndCompressionType
     C_OGG               = FOUR_CHAR('O','g','g','S'),   // 'ogg '   Ogg container, need to detect codec
 #endif
 
-#if USE_VORBIS_DECODER == TRUE
+#if USE_VORBIS_DECODER == TRUE || USE_VORBIS_ENCODER == TRUE
     C_VORBIS            = FOUR_CHAR('O','g','g','V'),   // 'OggV'   Ogg Vorbis audio
 #endif
 
@@ -961,6 +966,7 @@ typedef struct
     int16_t           baseKey;            // base sample key
     XShortResourceID    theID;              // sample ID if required
     XResourceType       compressionType;    // compression type
+    XDWORD              sndFlags;           // XSoundHeader3 reserved2[0] flags (0 for non-type3 headers)
     void                *pMasterPtr;        // master pointer if required
                                             //MOE: This field needs documenting!
 } SampleDataInfo;
@@ -1047,6 +1053,11 @@ int16_t XGetSoundBaseKey(XPTR pRes);
 void XSetSoundOpusRoundTripFlag(XPTR pRes, XBOOL enabled);
 /* Return TRUE if the XSOUND_OPUS_ROUNDTRIP_RESAMPLE bit is set. */
 XBOOL XGetSoundOpusRoundTripFlag(XPTR pRes);
+
+/* Set or clear the XSOUND_ADVANCED_INTERPOLATION bit in reserved2[0] (XType3Header only). */
+void XSetSoundAdvancedInterpolationFlag(XPTR pRes, XBOOL enabled);
+/* Return TRUE if the XSOUND_ADVANCED_INTERPOLATION bit is set. */
+XBOOL XGetSoundAdvancedInterpolationFlag(XPTR pRes);
 
 XBOOL XGetSoundEmbeddedStatus(XPTR pRes);
 void XSetSoundEmbeddedStatus(XPTR pRes, XBOOL soundEmbedded);

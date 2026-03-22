@@ -99,6 +99,38 @@
 #include "GenPriv.h"
 #include <stdint.h>
 
+// Cubic Hermite (Catmull-Rom) interpolation for advanced interpolation mode.
+// Takes 4 consecutive sample values and a fractional position (0..STEP_FULL_RANGE).
+// Returns the interpolated sample value with smooth C1-continuous curve.
+static inline INT32 PV_CubicHermiteInterp(INT32 s0, INT32 s1, INT32 s2, INT32 s3, INT32 frac)
+{
+    // Catmull-Rom coefficients (scaled by 2 to eliminate fractions):
+    //   A = -s0 + 3*s1 - 3*s2 + s3
+    //   B = 2*s0 - 5*s1 + 4*s2 - s3
+    //   C = s2 - s0
+    // result = (((A*t + B)*t + C)*t) / 2 + s1   (Horner form, t in [0,1))
+    INT32 A = -s0 + 3*s1 - 3*s2 + s3;
+    INT32 B = 2*s0 - 5*s1 + 4*s2 - s3;
+    INT32 C = s2 - s0;
+    INT32 r;
+    r = (INT32)(((int64_t)A * frac) >> STEP_BIT_RANGE) + B;
+    r = (INT32)(((int64_t)r * frac) >> STEP_BIT_RANGE) + C;
+    r = (INT32)(((int64_t)r * frac) >> (STEP_BIT_RANGE + 1));
+    return s1 + r;
+}
+
+// Fetch a sample with loop-wrapping for cubic Hermite boundary cases.
+// idx is the sample index to fetch, which may be outside [loopStart, loopEnd).
+static inline INT32 PV_LoopWrapSample16(INT16 *source, INT32 idx, INT32 loopStart, INT32 loopEnd)
+{
+    INT32 loopLen = loopEnd - loopStart;
+    if (idx < loopStart)
+        idx += loopLen;
+    else if (idx >= loopEnd)
+        idx -= loopLen;
+    return (INT32)source[idx];
+}
+
 #if LOOPS_USED == LIMITED_LOOPS
 
 #if WRITE_LOOPS == TRUE
@@ -361,47 +393,92 @@ void PV_ServeInterp2FullBuffer16 (GM_Voice *this_voice)
 
     if (this_voice->channels == 1)
     {
-        for (a = MusicGlobals->Four_Loop; a > 0; --a)
+        if (this_voice->advancedInterpolation)
         {
-            b = source[cur_wave>>STEP_BIT_RANGE];
-            c = source[(cur_wave>>STEP_BIT_RANGE)+1];
-            *dest += (((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+            for (a = MusicGlobals->Four_Loop; a > 0; --a)
+            {
+                for (inner = 0; inner < 4; inner++)
+                {
+                    INT32 pos = cur_wave >> STEP_BIT_RANGE;
+                    INT32 frac = cur_wave & STEP_FULL_RANGE;
+                    INT32 s0 = source[(pos > 0) ? pos - 1 : 0];
+                    INT32 s1 = source[pos];
+                    INT32 s2 = source[pos + 1];
+                    INT32 s3 = source[pos + 2];
+                    dest[inner] += (PV_CubicHermiteInterp(s0, s1, s2, s3, frac) * amplitude) >> 4;
+                    cur_wave += wave_increment;
+                }
+                dest += 4;
+                amplitude += amplitudeAdjust;
+            }
+        }
+        else
+        {
+            for (a = MusicGlobals->Four_Loop; a > 0; --a)
+            {
+                b = source[cur_wave>>STEP_BIT_RANGE];
+                c = source[(cur_wave>>STEP_BIT_RANGE)+1];
+                *dest += ((((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b)))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
 
-            cur_wave += wave_increment;
-            b = source[cur_wave>>STEP_BIT_RANGE];
-            c = source[(cur_wave>>STEP_BIT_RANGE)+1];
-            dest[1] += (((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+                cur_wave += wave_increment;
+                b = source[cur_wave>>STEP_BIT_RANGE];
+                c = source[(cur_wave>>STEP_BIT_RANGE)+1];
+                dest[1] += ((((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b)))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
 
-            cur_wave += wave_increment;
-            b = source[cur_wave>>STEP_BIT_RANGE];
-            c = source[(cur_wave>>STEP_BIT_RANGE)+1];
-            dest[2] += (((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+                cur_wave += wave_increment;
+                b = source[cur_wave>>STEP_BIT_RANGE];
+                c = source[(cur_wave>>STEP_BIT_RANGE)+1];
+                dest[2] += ((((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b)))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
 
-            cur_wave += wave_increment;
-            b = source[cur_wave>>STEP_BIT_RANGE];
-            c = source[(cur_wave>>STEP_BIT_RANGE)+1];
-            dest[3] += (((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
-            dest += 4;
-            cur_wave += wave_increment;
-            amplitude += amplitudeAdjust;
+                cur_wave += wave_increment;
+                b = source[cur_wave>>STEP_BIT_RANGE];
+                c = source[(cur_wave>>STEP_BIT_RANGE)+1];
+                dest[3] += ((((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b)))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+                dest += 4;
+                cur_wave += wave_increment;
+                amplitude += amplitudeAdjust;
+            }
         }
     }
     else
     {   // stereo 16 bit instrument
-        for (a = MusicGlobals->Four_Loop; a > 0; --a)
+        if (this_voice->advancedInterpolation)
         {
-            for (inner = 0; inner < 4; inner++)
+            for (a = MusicGlobals->Four_Loop; a > 0; --a)
             {
-                calculated_source = source + ((cur_wave>> STEP_BIT_RANGE) * 2);
-                b = calculated_source[0] + calculated_source[1];
-                c = calculated_source[2] + calculated_source[3];
-                sample = (((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b;
-                *dest += (sample  * amplitude) >> 5;    // divide extra for summed stereo channels
-                dest++;
-
-                cur_wave += wave_increment;
+                for (inner = 0; inner < 4; inner++)
+                {
+                    INT32 pos = cur_wave >> STEP_BIT_RANGE;
+                    INT32 frac = cur_wave & STEP_FULL_RANGE;
+                    INT32 prev_pos = (pos > 0) ? pos - 1 : 0;
+                    INT32 s0 = source[prev_pos*2] + source[prev_pos*2 + 1];
+                    INT32 s1 = source[pos*2] + source[pos*2 + 1];
+                    INT32 s2 = source[(pos+1)*2] + source[(pos+1)*2 + 1];
+                    INT32 s3 = source[(pos+2)*2] + source[(pos+2)*2 + 1];
+                    sample = PV_CubicHermiteInterp(s0, s1, s2, s3, frac);
+                    *dest += (sample * amplitude) >> 5;
+                    dest++;
+                    cur_wave += wave_increment;
+                }
+                amplitude += amplitudeAdjust;
             }
-            amplitude += amplitudeAdjust;
+        }
+        else
+        {
+            for (a = MusicGlobals->Four_Loop; a > 0; --a)
+            {
+                for (inner = 0; inner < 4; inner++)
+                {
+                    calculated_source = source + ((cur_wave>> STEP_BIT_RANGE) * 2);
+                    b = calculated_source[0] + calculated_source[1];
+                    c = calculated_source[2] + calculated_source[3];
+                    sample = ((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b;
+                    *dest += (sample  * amplitude) >> 5;    // divide extra for summed stereo channels
+                    dest++;
+                    cur_wave += wave_increment;
+                }
+                amplitude += amplitudeAdjust;
+            }
         }
     }
 
@@ -484,80 +561,183 @@ void PV_ServeInterp2PartialBuffer16 (GM_Voice *this_voice, XBOOL looping)
 
     if (this_voice->channels == 1)
     {
-        for (a = MusicGlobals->Four_Loop; a > 0; --a)
+        if (this_voice->advancedInterpolation)
         {
-            if (cur_wave + (wave_increment << 2) >= end_wave)
+            // Cubic Hermite interpolation with loop-aware boundary handling
+            INT32 loopStartIdx = (INT32)(this_voice->NoteLoopPtr - this_voice->NotePtr);
+            INT32 loopEndIdx = (INT32)(this_voice->NoteLoopEnd - this_voice->NotePtr);
+            INT32 totalFrames = (INT32)(this_voice->NotePtrEnd - this_voice->NotePtr);
+
+            for (a = MusicGlobals->Four_Loop; a > 0; --a)
             {
-                THE_CHECK(INT16 *);
-                calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
-                b = *calculated_source;
-                c = calculated_source[1];
-                *dest += (((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
-                cur_wave += wave_increment;
-                THE_CHECK(INT16 *);
-                calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
-                b = *calculated_source;
-                c = calculated_source[1];
-                dest[1] += (((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
-                cur_wave += wave_increment;
-                THE_CHECK(INT16 *);
-                calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
-                b = *calculated_source;
-                c = calculated_source[1];
-                dest[2] += (((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
-                cur_wave += wave_increment;
-                THE_CHECK(INT16 *);
-                calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
-                b = *calculated_source;
-                c = calculated_source[1];
-                dest[3] += (((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+                if (cur_wave + (wave_increment << 2) >= end_wave)
+                {
+                    // Slow path: near boundary, check each sample
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        THE_CHECK(INT16 *);
+                        INT32 pos = cur_wave >> STEP_BIT_RANGE;
+                        INT32 frac = cur_wave & STEP_FULL_RANGE;
+                        INT32 s1 = source[pos];
+                        INT32 s0, s2, s3;
+                        if (looping)
+                        {
+                            s0 = PV_LoopWrapSample16(source, pos - 1, loopStartIdx, loopEndIdx);
+                            s2 = PV_LoopWrapSample16(source, pos + 1, loopStartIdx, loopEndIdx);
+                            s3 = PV_LoopWrapSample16(source, pos + 2, loopStartIdx, loopEndIdx);
+                        }
+                        else
+                        {
+                            s0 = source[(pos > 0) ? pos - 1 : 0];
+                            s2 = source[(pos + 1 < totalFrames) ? pos + 1 : pos];
+                            s3 = source[(pos + 2 < totalFrames) ? pos + 2 : (pos + 1 < totalFrames) ? pos + 1 : pos];
+                        }
+                        dest[inner] += (PV_CubicHermiteInterp(s0, s1, s2, s3, frac) * amplitude) >> 4;
+                        cur_wave += wave_increment;
+                    }
+                }
+                else
+                {
+                    // Fast path: no boundary in next 4 samples
+                    for (inner = 0; inner < 4; inner++)
+                    {
+                        INT32 pos = cur_wave >> STEP_BIT_RANGE;
+                        INT32 frac = cur_wave & STEP_FULL_RANGE;
+                        INT32 s0 = source[(pos > 0) ? pos - 1 : 0];
+                        INT32 s1 = source[pos];
+                        INT32 s2 = source[pos + 1];
+                        INT32 s3 = source[pos + 2];
+                        dest[inner] += (PV_CubicHermiteInterp(s0, s1, s2, s3, frac) * amplitude) >> 4;
+                        cur_wave += wave_increment;
+                    }
+                }
+                dest += 4;
+                amplitude += amplitudeAdjust;
             }
-            else
+        }
+        else
+        {
+            // Standard linear interpolation
+            for (a = MusicGlobals->Four_Loop; a > 0; --a)
             {
-                calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
-                b = *calculated_source;
-                c = calculated_source[1];
-                *dest += (((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
-                cur_wave += wave_increment;
+                if (cur_wave + (wave_increment << 2) >= end_wave)
+                {
+                    THE_CHECK(INT16 *);
+                    calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
+                    b = *calculated_source;
+                    c = calculated_source[1];
+                    *dest += ((((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b)))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+                    cur_wave += wave_increment;
+                    THE_CHECK(INT16 *);
+                    calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
+                    b = *calculated_source;
+                    c = calculated_source[1];
+                    dest[1] += ((((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b)))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+                    cur_wave += wave_increment;
+                    THE_CHECK(INT16 *);
+                    calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
+                    b = *calculated_source;
+                    c = calculated_source[1];
+                    dest[2] += ((((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b)))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+                    cur_wave += wave_increment;
+                    THE_CHECK(INT16 *);
+                    calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
+                    b = *calculated_source;
+                    c = calculated_source[1];
+                    dest[3] += ((((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b)))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+                }
+                else
+                {
+                    calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
+                    b = *calculated_source;
+                    c = calculated_source[1];
+                    *dest += ((((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b)))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+                    cur_wave += wave_increment;
 
-                calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
-                b = *calculated_source;
-                c = calculated_source[1];
-                dest[1] += (((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
-                cur_wave += wave_increment;
+                    calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
+                    b = *calculated_source;
+                    c = calculated_source[1];
+                    dest[1] += ((((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b)))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+                    cur_wave += wave_increment;
 
-                calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
-                b = *calculated_source;
-                c = calculated_source[1];
-                dest[2] += (((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
-                cur_wave += wave_increment;
+                    calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
+                    b = *calculated_source;
+                    c = calculated_source[1];
+                    dest[2] += ((((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b)))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+                    cur_wave += wave_increment;
 
-                calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
-                b = *calculated_source;
-                c = calculated_source[1];
-                dest[3] += (((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+                    calculated_source = source + (cur_wave>> STEP_BIT_RANGE);
+                    b = *calculated_source;
+                    c = calculated_source[1];
+                    dest[3] += ((((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b)))>>STEP_BIT_RANGE) + b) * amplitude) >> 4;
+                }
+                dest += 4;
+                cur_wave += wave_increment;
+                amplitude += amplitudeAdjust;
             }
-            dest += 4;
-            cur_wave += wave_increment;
-            amplitude += amplitudeAdjust;
         }
     }
     else
     {
-        for (a = MusicGlobals->Four_Loop; a > 0; --a)
+        if (this_voice->advancedInterpolation)
         {
-            for (inner = 0; inner < 4; inner++)
+            // Cubic Hermite for stereo with loop-aware boundary handling
+            INT32 loopStartIdx = (INT32)(this_voice->NoteLoopPtr - this_voice->NotePtr);
+            INT32 loopEndIdx = (INT32)(this_voice->NoteLoopEnd - this_voice->NotePtr);
+
+            for (a = MusicGlobals->Four_Loop; a > 0; --a)
             {
-                THE_CHECK(INT16 *);
-                calculated_source = source + ((cur_wave>> STEP_BIT_RANGE) * 2);
-                b = calculated_source[0] + calculated_source[1];
-                c = calculated_source[2] + calculated_source[3];
-                sample = (((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b;
-                *dest += ((sample >> 1) * amplitude) >> 5;
-                dest++;
-                cur_wave += wave_increment;
+                for (inner = 0; inner < 4; inner++)
+                {
+                    THE_CHECK(INT16 *);
+                    INT32 pos = cur_wave >> STEP_BIT_RANGE;
+                    INT32 frac = cur_wave & STEP_FULL_RANGE;
+                    INT32 idx0, idx2, idx3;
+                    if (looping)
+                    {
+                        INT32 loopLen = loopEndIdx - loopStartIdx;
+                        idx0 = pos - 1;
+                        if (idx0 < loopStartIdx) idx0 += loopLen;
+                        idx2 = pos + 1;
+                        if (idx2 >= loopEndIdx) idx2 -= loopLen;
+                        idx3 = pos + 2;
+                        if (idx3 >= loopEndIdx) idx3 -= loopLen;
+                    }
+                    else
+                    {
+                        idx0 = (pos > 0) ? pos - 1 : 0;
+                        idx2 = pos + 1;
+                        idx3 = pos + 2;
+                    }
+                    INT32 s0 = source[idx0*2] + source[idx0*2 + 1];
+                    INT32 s1 = source[pos*2] + source[pos*2 + 1];
+                    INT32 s2 = source[idx2*2] + source[idx2*2 + 1];
+                    INT32 s3 = source[idx3*2] + source[idx3*2 + 1];
+                    sample = PV_CubicHermiteInterp(s0, s1, s2, s3, frac);
+                    *dest += ((sample >> 1) * amplitude) >> 5;
+                    dest++;
+                    cur_wave += wave_increment;
+                }
+                amplitude += amplitudeAdjust;
             }
-            amplitude += amplitudeAdjust;
+        }
+        else
+        {
+            for (a = MusicGlobals->Four_Loop; a > 0; --a)
+            {
+                for (inner = 0; inner < 4; inner++)
+                {
+                    THE_CHECK(INT16 *);
+                    calculated_source = source + ((cur_wave>> STEP_BIT_RANGE) * 2);
+                    b = calculated_source[0] + calculated_source[1];
+                    c = calculated_source[2] + calculated_source[3];
+                    sample = ((((INT32) (cur_wave & STEP_FULL_RANGE) * (c-b))>>STEP_BIT_RANGE) + b;
+                    *dest += ((sample >> 1) * amplitude) >> 5;
+                    dest++;
+                    cur_wave += wave_increment;
+                }
+                amplitude += amplitudeAdjust;
+            }
         }
     }
 

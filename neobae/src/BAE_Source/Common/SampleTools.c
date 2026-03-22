@@ -533,6 +533,49 @@ XBOOL XGetSoundOpusRoundTripFlag(XPTR pRes)
     return FALSE;
 }
 
+/* Set or clear the XSOUND_ADVANCED_INTERPOLATION bit in reserved2[0].
+ * Only has effect on XType3Header SND resources. */
+void XSetSoundAdvancedInterpolationFlag(XPTR pRes, XBOOL enabled)
+{
+    int16_t encode;
+    register XSoundHeader3      *pType3Buffer;
+
+    if (!pRes)
+    {
+        return;
+    }
+    pType3Buffer = (XSoundHeader3 *)PV_GetSoundHeaderPtr(pRes, &encode);
+    if (pType3Buffer && encode == XType3Header)
+    {
+        if (enabled)
+        {
+            pType3Buffer->reserved2[0] |= XSOUND_ADVANCED_INTERPOLATION;
+        }
+        else
+        {
+            pType3Buffer->reserved2[0] &= (unsigned char)~XSOUND_ADVANCED_INTERPOLATION;
+        }
+    }
+}
+
+/* Return TRUE if the XSOUND_ADVANCED_INTERPOLATION bit is set. */
+XBOOL XGetSoundAdvancedInterpolationFlag(XPTR pRes)
+{
+    int16_t encode;
+    register XSoundHeader3      *pType3Buffer;
+
+    if (!pRes)
+    {
+        return FALSE;
+    }
+    pType3Buffer = (XSoundHeader3 *)PV_GetSoundHeaderPtr(pRes, &encode);
+    if (pType3Buffer && encode == XType3Header)
+    {
+        return (pType3Buffer->reserved2[0] & XSOUND_ADVANCED_INTERPOLATION) ? TRUE : FALSE;
+    }
+    return FALSE;
+}
+
 #endif  // USE_CREATION_API == TRUE
 
 //MOE: should probably eliminate "encodedData" and "encodedBytes" and take
@@ -731,6 +774,7 @@ XERR XGetSampleInfoFromSnd(XPTR pResource, SampleDataInfo *pOutInfo)
         pOutInfo->bitSize = 8;
         pOutInfo->channels = 1;
         pOutInfo->compressionType = C_NONE;
+        pOutInfo->sndFlags = 0;
         pOutInfo->pMasterPtr = NULL;
 
         header = (XSoundHeader*)PV_GetSoundHeaderPtr(pResource, &headerType);
@@ -835,6 +879,7 @@ XERR XGetSampleInfoFromSnd(XPTR pResource, SampleDataInfo *pOutInfo)
                     pOutInfo->loopEnd = XGetLong(&header3->loopEnd[0]);
                     pOutInfo->baseKey = header3->baseKey;
                     pOutInfo->compressionType = XGetLong(&header3->subType);
+                    pOutInfo->sndFlags = header3->reserved2[0];
 
                     switch (pOutInfo->compressionType)
                     {
@@ -844,7 +889,7 @@ XERR XGetSampleInfoFromSnd(XPTR pResource, SampleDataInfo *pOutInfo)
                     case C_IMA4:        // IMA 4:1
                         BAE_ASSERT(FALSE);  // nothing wrong, but we should look the first time this happens
                         break;
-            #if USE_MPEG_DECODER != 0
+            #if USE_MPEG_DECODER != 0 || USE_MPEG_ENCODER != 0
                     case C_MPEG_32:
                     case C_MPEG_40:
                     case C_MPEG_48:
@@ -861,7 +906,7 @@ XERR XGetSampleInfoFromSnd(XPTR pResource, SampleDataInfo *pOutInfo)
                     case C_MPEG_320:
                         BAE_ASSERT(pOutInfo->bitSize == 16);    //MOE: shouldn't it already be set thus?
                         pOutInfo->bitSize = 16;
-                        
+
                         // header's "frameCount" is garbage (was once MPEG block count) recalculate
                         pOutInfo->frames = (XDWORD)XGetLong(&header3->decodedBytes) / pOutInfo->channels / 2;
                         break;
@@ -972,6 +1017,7 @@ XDWORD              roundTripSavedRate;  /* non-zero if XSOUND_OPUS_ROUNDTRIP_RE
     info->bitSize = 8;
     info->channels = 1;
     info->compressionType = C_NONE;
+    info->sndFlags = 0;
     info->pMasterPtr = pRes;
 
     header = (XSoundHeader*)PV_GetSoundHeaderPtr(pRes, &headerType);
@@ -1110,6 +1156,7 @@ XDWORD              roundTripSavedRate;  /* non-zero if XSOUND_OPUS_ROUNDTRIP_RE
         info->loopEnd = XGetLong(&header3->loopEnd[0]);
         info->baseKey = header3->baseKey;
         info->compressionType = XGetLong(&header3->subType);
+        info->sndFlags = header3->reserved2[0];
         BAE_PRINTF("[XGetSamplePtrFromSnd] Type3: rate=0x%08lx baseKey=%d ch=%d bits=%d frames=%lu subType=%ld\n",
                    (unsigned long)info->rate, (int)info->baseKey,
                    (int)info->channels, (int)info->bitSize,
@@ -1126,7 +1173,7 @@ XDWORD              roundTripSavedRate;  /* non-zero if XSOUND_OPUS_ROUNDTRIP_RE
         case C_IMA4:        // IMA 4:1
             BAE_ASSERT(FALSE);  // nothing wrong, but we should look the first time this happens
             break;
-#if USE_MPEG_DECODER != 0
+#if USE_MPEG_DECODER != 0 || USE_MPEG_ENCODER != 0
         case C_MPEG_32:
         case C_MPEG_40:
         case C_MPEG_48:
@@ -2130,7 +2177,7 @@ XSoundFormat1*      header;
     }
 #endif
 
-#if USE_FLAC_ENCODER != FALSE
+#if USE_FLAC_ENCODER == TRUE || USE_FLAC_DECODER == TRUE
     case C_FLAC:
     {
     XPTR        encodedData;
@@ -2186,7 +2233,7 @@ XSoundFormat1*      header;
     }
 #endif
 
-#if USE_VORBIS_ENCODER == TRUE
+#if USE_VORBIS_ENCODER == TRUE || USE_VORBIS_DECODER == TRUE
     case C_VORBIS:
     {
     XPTR        encodedData;

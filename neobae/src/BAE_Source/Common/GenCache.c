@@ -270,6 +270,7 @@ GM_SampleCacheEntry * GMCache_BuildSampleCacheEntry(GM_Mixer * pMixer,
                 pCache->baseKey = newSoundInfo.baseKey;
                 pCache->bitSize = (char)newSoundInfo.bitSize;
                 pCache->channels = (char)newSoundInfo.channels;
+                pCache->sndFlags = (XBYTE)(newSoundInfo.sndFlags & 0xFFu);
                 pCache->rate = newSoundInfo.rate;
                 pCache->pSampleData = thePreSound;
                 pCache->pMasterPtr = newSoundInfo.pMasterPtr;

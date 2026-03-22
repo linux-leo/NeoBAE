@@ -1044,6 +1044,8 @@ typedef int32_t UNIT_TYPE;
         XBOOL extendedFormat; // extended format instrument
         XBOOL sampleAndHold;
         XBOOL useSampleRate; // factor in sample rate into pitch calculation
+        XBOOL advancedInterpolation; // sample flagged for higher-resolution interpolation
+        XBOOL sampleOffsetStartEnabled; // if TRUE, start note at sampleOffsetStartFrames
 
         XBOOL processingSlice;
         XBOOL useSoundModifierAsRootKey;
@@ -1056,6 +1058,7 @@ typedef int32_t UNIT_TYPE;
         XBYTE curveRecordCount;
 
         XSWORD panPlacement; // inital stereo pan placement of this instrument
+        XDWORD sampleOffsetStartFrames; // note-on start offset in frames when sampleOffsetStartEnabled is TRUE
 
         XSDWORD LPF_frequency;
         XSDWORD LPF_resonance;

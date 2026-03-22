@@ -3275,6 +3275,7 @@ void PV_StartMIDINote(GM_Song *pSong, INT16 the_instrument,
     INT16 newPitch, playPitch;
     UINT16 splitCount;
     UINT32 loopstart, loopend;
+    UINT32 noteStartOffsetFrames;
     register INT32 i, j;
     INT32 volume32;
     INT32 sampleNumber;
@@ -3294,6 +3295,7 @@ void PV_StartMIDINote(GM_Song *pSong, INT16 the_instrument,
     playPitch = notePitch;
     pInstrument = NULL;
     sampleNumber = 0;
+    noteStartOffsetFrames = 0;
     theI = pSong->instrumentData[pSong->remapArray[the_instrument]];
     if (theI)
     {
@@ -3387,6 +3389,16 @@ void PV_StartMIDINote(GM_Song *pSong, INT16 the_instrument,
                    the_instrument, the_track, the_channel, notePitch);
         return;
     }
+
+    if (pInstrument->sampleOffsetStartEnabled)
+    {
+        noteStartOffsetFrames = pInstrument->sampleOffsetStartFrames;
+        if (noteStartOffsetFrames >= pInstrument->u.w.waveFrames)
+        {
+            noteStartOffsetFrames = 0;
+        }
+    }
+
     loopstart = pInstrument->u.w.startLoop;
     loopend = pInstrument->u.w.endLoop;
     if ((pInstrument->disableSndLooping) ||
@@ -3399,8 +3411,22 @@ void PV_StartMIDINote(GM_Song *pSong, INT16 the_instrument,
         loopend = 0;
     }
 
-    // NOTE: This the only place we work with the scaleBackAmount. I'm not sure this is the right place for
-    // this!!!
+    // If sample-offset-start is active, clamp loop points so they are not
+    // before the start offset (they are stored relative to the full waveform).
+    if (noteStartOffsetFrames > 0)
+    {
+        if (loopstart < noteStartOffsetFrames)
+        {
+            loopstart = noteStartOffsetFrames;
+        }
+        if (loopend <= loopstart + MIN_LOOP_SIZE)
+        {
+            loopstart = 0;
+            loopend = 0;
+        }
+    }
+
+    // NOTE: This the only place we work with the scaleBackAmount.
     volume32 = (Volume * pMixer->scaleBackAmount) >> 8;
 
     // get the inital note volume based upon song and channel volume
@@ -3448,6 +3474,7 @@ void PV_StartMIDINote(GM_Song *pSong, INT16 the_instrument,
 
         // copy the sample-and-hold flag
         the_entry->sampleAndHold = pInstrument->sampleAndHold;
+        the_entry->advancedInterpolation = pInstrument->advancedInterpolation ? 1 : 0;
 
         // Copy the LFO record count
         the_entry->LFORecordCount = pInstrument->LFORecordCount;
@@ -3517,6 +3544,10 @@ void PV_StartMIDINote(GM_Song *pSong, INT16 the_instrument,
         the_entry->NoteDecay = 8;    // default note decay
         the_entry->NoteNextSize = 0; // recalculate next size
         the_entry->NoteWave = 0;     // starting sample position
+        if (noteStartOffsetFrames > 0)
+        {
+            PV_SetPositionFromVoice(the_entry, noteStartOffsetFrames);
+        }
 
         the_entry->NoteProgram = the_instrument;
         the_entry->NoteMIDIPitch = (SBYTE)notePitch; // save note pitch unprocessed

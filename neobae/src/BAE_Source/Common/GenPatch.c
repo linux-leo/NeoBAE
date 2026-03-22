@@ -852,6 +852,8 @@ GM_Instrument * PV_GetInstrument(GM_Mixer *pMixer, GM_Song *pSong,
 #endif
                     theI->useSampleRate = TEST_FLAG_VALUE(header.flags1, ZBF_useSampleRate);
                     theI->sampleAndHold = TEST_FLAG_VALUE(header.flags1, ZBF_sampleAndHold);
+                    theI->advancedInterpolation = TEST_FLAG_VALUE(sndInfo->sndFlags, XSOUND_ADVANCED_INTERPOLATION);
+                    theI->sampleOffsetStartEnabled = TEST_FLAG_VALUE(header.flags2, ZBF_enableSampleOffsetStart);
                     theI->useSoundModifierAsRootKey = TEST_FLAG_VALUE(header.flags2, ZBF_useSoundModifierAsRootKey);
                     PV_GetEnvelopeData(theX, theI, patchSize);
                     theI->u.w.bitSize = sndInfo->bitSize;
@@ -867,6 +869,12 @@ GM_Instrument * PV_GetInstrument(GM_Mixer *pMixer, GM_Song *pSong,
                     theI->u.w.sampledRate = sndInfo->rate;
                     theI->miscParameter1 = header.miscParameter1;
                     theI->miscParameter2 = header.miscParameter2;
+                    if (theI->sampleOffsetStartEnabled)
+                    {
+                        theI->sampleOffsetStartFrames =
+                            (((XDWORD)(uint16_t)theI->miscParameter1) << 16) |
+                            (XDWORD)(uint16_t)theI->miscParameter2;
+                    }
                     if (theI->useSoundModifierAsRootKey)
                     {
                         theI->enableSoundModifier = FALSE;
@@ -908,6 +916,7 @@ GM_Instrument * PV_GetInstrument(GM_Mixer *pMixer, GM_Song *pSong,
                 theI->useSampleRate = TEST_FLAG_VALUE(header.flags1, ZBF_useSampleRate);
                 theI->sampleAndHold = TEST_FLAG_VALUE(header.flags1, ZBF_sampleAndHold);
                 theI->playAtSampledFreq = TEST_FLAG_VALUE(header.flags2, ZBF_playAtSampledFreq);
+                theI->sampleOffsetStartEnabled = TEST_FLAG_VALUE(header.flags2, ZBF_enableSampleOffsetStart);
                 theI->useSoundModifierAsRootKey = TEST_FLAG_VALUE(header.flags2, ZBF_useSoundModifierAsRootKey);
                 PV_GetEnvelopeData(theX, theI, patchSize);
                 theI->u.k.KeymapSplitCount = header.keySplitCount;
@@ -916,6 +925,12 @@ GM_Instrument * PV_GetInstrument(GM_Mixer *pMixer, GM_Song *pSong,
                 theI->panPlacement = header.panPlacement;
                 theI->miscParameter1 = header.miscParameter1;
                 theI->miscParameter2 = header.miscParameter2;
+                if (theI->sampleOffsetStartEnabled)
+                {
+                    theI->sampleOffsetStartFrames =
+                        (((XDWORD)(uint16_t)theI->miscParameter1) << 16) |
+                        (XDWORD)(uint16_t)theI->miscParameter2;
+                }
                 if (theI->useSoundModifierAsRootKey)
                 {
                     theI->enableSoundModifier = FALSE;
@@ -941,9 +956,16 @@ GM_Instrument * PV_GetInstrument(GM_Mixer *pMixer, GM_Song *pSong,
                         if (theS)
                         {
                             theS->useSoundModifierAsRootKey = theI->useSoundModifierAsRootKey;
+                            theS->sampleOffsetStartEnabled = theI->sampleOffsetStartEnabled;
                             theS->miscParameter1 = theXSplit.miscParameter1;
                             if (theS->useSoundModifierAsRootKey && (theXSplit.miscParameter2 == 0)) { theXSplit.miscParameter2 = 100; }
                             theS->miscParameter2 = theXSplit.miscParameter2;
+                            if (theS->sampleOffsetStartEnabled)
+                            {
+                                theS->sampleOffsetStartFrames =
+                                    (((XDWORD)(uint16_t)theS->miscParameter1) << 16) |
+                                    (XDWORD)(uint16_t)theS->miscParameter2;
+                            }
                             theS->masterRootKey = theI->masterRootKey;
                             theS->panPlacement = theI->panPlacement;
 #if REVERB_USED != REVERB_DISABLED

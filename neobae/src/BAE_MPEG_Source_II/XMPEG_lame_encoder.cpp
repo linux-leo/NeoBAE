@@ -268,27 +268,126 @@ extern "C" void MPG_EncodeFreeStream(void *stream){
 }
 
 #if USE_MPEG_DECODER == 0
+/* ------------------------------------------------------------------ */
+/*  Lightweight MPEG frame-header parser for encoder-only builds.      */
+/*  Extracts sample rate, channels, bitrate and frame geometry from    */
+/*  the first valid frame header so the SND metadata is correct.       */
+/* ------------------------------------------------------------------ */
+
+/* MPEG sample-rate tables indexed by [version][sr_index].
+ * version: 0 = MPEG-2.5, 1 = reserved, 2 = MPEG-2, 3 = MPEG-1 */
+static const uint32_t sMpegSampleRates[4][3] = {
+    { 11025, 12000,  8000 },  /* MPEG-2.5 */
+    {     0,     0,     0 },  /* reserved  */
+    { 22050, 24000, 16000 },  /* MPEG-2   */
+    { 44100, 48000, 32000 },  /* MPEG-1   */
+};
+
+/* MPEG bitrate tables indexed by [version_group][layer_index][br_index].
+ * version_group: 0 = MPEG-1, 1 = MPEG-2/2.5
+ * layer_index:   0 = Layer I, 1 = Layer II, 2 = Layer III */
+static const uint16_t sMpegBitrates[2][3][15] = {
+    { /* MPEG-1 */
+        { 0,32,64,96,128,160,192,224,256,288,320,352,384,416,448 },  /* Layer I   */
+        { 0,32,48,56, 64, 80, 96,112,128,160,192,224,256,320,384 },  /* Layer II  */
+        { 0,32,40,48, 56, 64, 80, 96,112,128,160,192,224,256,320 },  /* Layer III */
+    },
+    { /* MPEG-2 / MPEG-2.5 */
+        { 0,32,48,56,64,80,96,112,128,144,160,176,192,224,256 },     /* Layer I   */
+        { 0, 8,16,24,32,40,48, 56, 64, 80, 96,112,128,144,160 },    /* Layer II  */
+        { 0, 8,16,24,32,40,48, 56, 64, 80, 96,112,128,144,160 },    /* Layer III */
+    },
+};
+
+/* Samples per MPEG frame indexed by [version_group][layer_index]. */
+static const uint32_t sMpegSamplesPerFrame[2][3] = {
+    { 384, 1152, 1152 },  /* MPEG-1 */
+    { 384, 1152,  576 },  /* MPEG-2 / MPEG-2.5 */
+};
+
+/* Find and parse the first valid MPEG sync-word in the buffer.
+ * Returns TRUE on success, filling the out-parameters. */
+static XBOOL PV_ParseFirstMpegFrame(const uint8_t *buf, uint32_t bufSize,
+                                     uint32_t *outSampleRate, uint32_t *outChannels,
+                                     uint32_t *outBitrateKbps, uint32_t *outSamplesPerFrame,
+                                     uint32_t *outFrameBytes)
+{
+    uint32_t i;
+    for (i = 0; i + 3 < bufSize; ++i)
+    {
+        uint32_t hdr, ver, layer, brIdx, srIdx, pad, mode;
+        uint32_t vg; /* version group: 0 = MPEG-1, 1 = MPEG-2/2.5 */
+        uint32_t li; /* layer index:   0 = I, 1 = II, 2 = III */
+        uint32_t sr, br, spf, frameBytes;
+
+        if (buf[i] != 0xFF || (buf[i+1] & 0xE0) != 0xE0)
+            continue;
+
+        hdr   = ((uint32_t)buf[i] << 24) | ((uint32_t)buf[i+1] << 16) |
+                ((uint32_t)buf[i+2] << 8) | (uint32_t)buf[i+3];
+        ver   = (hdr >> 19) & 0x03;
+        layer = (hdr >> 17) & 0x03;
+        brIdx = (hdr >> 12) & 0x0F;
+        srIdx = (hdr >> 10) & 0x03;
+        pad   = (hdr >>  9) & 0x01;
+        mode  = (hdr >>  6) & 0x03;
+
+        if (ver == 1 || layer == 0 || brIdx == 0 || brIdx == 15 || srIdx == 3)
+            continue; /* reserved / free-format / bad index */
+
+        li = 3 - layer;  /* layer field: 3=I, 2=II, 1=III → index 0,1,2 */
+        vg = (ver == 3) ? 0 : 1;
+
+        sr = sMpegSampleRates[ver][srIdx];
+        br = (uint32_t)sMpegBitrates[vg][li][brIdx];
+        spf = sMpegSamplesPerFrame[vg][li];
+
+        if (sr == 0 || br == 0)
+            continue;
+
+        if (li == 0) /* Layer I */
+            frameBytes = (12 * br * 1000 / sr + pad) * 4;
+        else
+            frameBytes = 144 * br * 1000 / sr + pad;
+
+        *outSampleRate = sr;
+        *outChannels = (mode == 3) ? 1 : 2; /* mode 3 = mono */
+        *outBitrateKbps = br;
+        *outSamplesPerFrame = spf;
+        *outFrameBytes = frameBytes;
+        return TRUE;
+    }
+    return FALSE;
+}
+
 // Provide stub implementations of decoder functions needed by encoder code
-// when decoder is disabled. These are used just to get buffer size estimates.
+// when decoder is disabled. These are used to get metadata from the encoded
+// stream so that the SND header is written with correct values.
 extern "C" XMPEGDecodedData * XOpenMPEGStreamFromMemory(XPTR pBlock, uint32_t blockSize, OPErr *pErr) {
-    // Simple stub: create a minimal structure with reasonable estimates
     XMPEGDecodedData *stream = (XMPEGDecodedData*)XNewPtr(sizeof(XMPEGDecodedData));
     if (!stream) {
         if (pErr) *pErr = MEMORY_ERR;
         return NULL;
     }
-    
-    // Provide reasonable defaults for buffer sizing
-    stream->frameBufferSize = 1152 * 2 * 2; // 1152 samples * 2 channels * 2 bytes (16-bit)
-    stream->maxFrameBuffers = (blockSize / (stream->frameBufferSize / 8)) + 2; // Rough estimate + padding
-    stream->sampleRate = 44100; // Common default
+
+    uint32_t sr = 44100, ch = 2, br = 128, spf = 1152, frameBytes = 417;
+
+    if (pBlock && blockSize >= 4)
+    {
+        PV_ParseFirstMpegFrame((const uint8_t *)pBlock, blockSize < 2048 ? blockSize : 2048,
+                               &sr, &ch, &br, &spf, &frameBytes);
+    }
+
+    stream->sampleRate = UNSIGNED_LONG_TO_XFIXED(sr);
     stream->bitSize = 16;
-    stream->channels = 2;
-    stream->bitrate = 128000; // 128 kbps default
-    stream->lengthInBytes = stream->frameBufferSize * stream->maxFrameBuffers;
-    stream->lengthInSamples = stream->lengthInBytes / (stream->channels * 2);
-    stream->stream = NULL; // No actual decoder stream
-    
+    stream->channels = (uint8_t)ch;
+    stream->bitrate = br * 1000;
+    stream->frameBufferSize = spf * ch * 2; /* decoded PCM bytes per MPEG frame */
+    stream->maxFrameBuffers = (frameBytes > 0) ? (blockSize / frameBytes) : 1;
+    stream->lengthInSamples = stream->maxFrameBuffers * spf;
+    stream->lengthInBytes = stream->lengthInSamples * ch * 2;
+    stream->stream = NULL;
+
     if (pErr) *pErr = NO_ERR;
     return stream;
 }

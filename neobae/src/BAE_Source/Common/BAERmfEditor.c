@@ -510,6 +510,7 @@ typedef struct BAERmfEditorInstrumentExt
     unsigned char   flags2;           /* ZBF_ bitmask from InstrumentResource */
     char            panPlacement;     /* stereo pan from INST header */
     int16_t         midiRootKey;      /* master root key from INST header */
+    int16_t         miscParameter1;   /* offset high-word when ZBF_enableSampleOffsetStart, else root key or 0 */
     int16_t         miscParameter2;   /* volume level (100 = default) */
     XBOOL           hasDefaultMod;    /* TRUE if INST_DEFAULT_MOD unit was present */
     int32_t         LPF_frequency;
@@ -7580,6 +7581,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
         XResourceType writeSndType;
         int32_t roundTripSourceRate;  /* non-zero when encoding Opus round-trip */
         XBOOL samplePlayAtSampledFreq;
+        XBOOL sampleAdvancedInterpolation;
         XBOOL sampleWasEncodedOpus;
         XBOOL sampleWasEncodedMpeg;
         uint32_t decodedFramesForRate;
@@ -7588,6 +7590,7 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
         sample = &document->samples[index];
         roundTripSourceRate = 0;
         samplePlayAtSampledFreq = FALSE;
+        sampleAdvancedInterpolation = FALSE;
         sampleWasEncodedOpus = FALSE;
         sampleWasEncodedMpeg = FALSE;
         decodedFramesForRate = 0;
@@ -7602,6 +7605,10 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             if (sampleExt && TEST_FLAG_VALUE(sampleExt->flags2, ZBF_playAtSampledFreq))
             {
                 samplePlayAtSampledFreq = TRUE;
+            }
+            if (sampleExt && TEST_FLAG_VALUE(sampleExt->flags2, ZBF_advancedInterpolation))
+            {
+                sampleAdvancedInterpolation = TRUE;
             }
         }
 
@@ -8176,6 +8183,44 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
             }
 #endif
 
+            /* MPEG encoders only support a fixed set of sample rates.
+             * If the source rate isn't one of those (e.g. 8287 Hz from
+             * a MOD file), LAME will silently downsample to the nearest
+             * valid rate, causing a pitch shift.  Resample the PCM to
+             * the codec-compatible rate first so content and metadata
+             * stay in agreement. */
+            if (sampleWasEncodedMpeg)
+            {
+                BAE_UNSIGNED_FIXED sourceRate;
+                BAE_UNSIGNED_FIXED targetRate;
+
+                sourceRate = PV_NormalizeSampleRateForSave((BAE_UNSIGNED_FIXED)writeWaveform.sampledRate);
+                targetRate = PV_ChooseCodecRateFromSourceHz(sample->targetCompressionType,
+                                                            (uint32_t)(sourceRate >> 16));
+                if (targetRate == 0)
+                {
+                    targetRate = (44100U << 16);
+                }
+                if (sourceRate != targetRate)
+                {
+                    result = PV_ResampleWaveformLinear(&writeWaveform,
+                                                       targetRate,
+                                                       &encodeWaveDataOwner);
+                    if (result != BAE_NO_ERROR)
+                    {
+                        XDisposePtr((XPTR)sampleSndIDs);
+                        XDisposePtr((XPTR)sampleInstIDs);
+                        return result;
+                    }
+                    BAE_STDERR("[RMF Save] Sample[%u] MPEG resampled %uHz -> %uHz (%u -> %u frames)\n",
+                               (unsigned)index,
+                               (unsigned)(sourceRate >> 16),
+                               (unsigned)(targetRate >> 16),
+                               (unsigned)sample->waveform->waveFrames,
+                               (unsigned)writeWaveform.waveFrames);
+                }
+            }
+
 #if USE_OPUS_ENCODER == TRUE || USE_OPUS_DECODER == TRUE
             /*
              * Opus encoder accepts multiple source rates; choose a codec-aware
@@ -8417,6 +8462,10 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                            (unsigned)index, (unsigned)(((uint32_t)roundTripWriteRate) >> 16));
             }
 #endif
+            if (isZmf && sampleAdvancedInterpolation && writeWaveform.endLoop > writeWaveform.startLoop)
+            {
+                XSetSoundAdvancedInterpolationFlag(sndResource, TRUE);
+            }
         }
         if (sndResource)
         {
@@ -8820,10 +8869,21 @@ static BAEResult PV_AddSampleResources(BAERmfEditorDocument *document, XFILE fil
                     headerMiscParam2 = leaderSample->splitVolume ? (int16_t)leaderSample->splitVolume : 100;
                 }
 
-                if (extForInst && TEST_FLAG_VALUE(writeFlags2, ZBF_useSoundModifierAsRootKey))
+                /* Only override header misc params when the instrument is explicitly
+                 * using miscParameter1/2 for sample-offset-start metadata. For normal
+                 * instruments, keep legacy root-key / split-volume behavior. */
+                if (extForInst && extForInst->dirty &&
+                    TEST_FLAG_VALUE(writeFlags2, ZBF_enableSampleOffsetStart))
                 {
-                    /* If the instrument declares miscParameter1 as root key, keep it
-                     * aligned to the edited sample root key. */
+                    headerMiscParam1 = extForInst->miscParameter1;
+                    headerMiscParam2 = extForInst->miscParameter2;
+                }
+
+                if (extForInst && TEST_FLAG_VALUE(writeFlags2, ZBF_useSoundModifierAsRootKey) &&
+                    !TEST_FLAG_VALUE(writeFlags2, ZBF_enableSampleOffsetStart))
+                {
+                    /* If the instrument declares miscParameter1 as root key (and is NOT
+                     * using it for sample offset), keep it aligned to the edited root. */
                     headerMiscParam1 = (int16_t)leaderSample->rootKey;
                 }
                 if (extForInst && (extForInst->hasExtendedData || extForInst->dirty))
@@ -11841,6 +11901,122 @@ BAEResult BAERmfEditorDocument_ReplaceSampleFromFile(BAERmfEditorDocument *docum
     return BAE_NO_ERROR;
 }
 
+BAEResult BAERmfEditorDocument_ReplaceSampleFromPCM(BAERmfEditorDocument *document,
+                                                    uint32_t sampleIndex,
+                                                    void const *pcmData,
+                                                    uint32_t frameCount,
+                                                    uint16_t bitSize,
+                                                    uint16_t channels,
+                                                    BAE_UNSIGNED_FIXED sampledRate,
+                                                    uint32_t startLoop,
+                                                    uint32_t endLoop,
+                                                    BAESampleInfo *outSampleInfo)
+{
+    BAERmfEditorSample *sample;
+    GM_Waveform *waveform;
+    XPTR pcmCopy;
+    uint32_t bytesPerFrame;
+    uint32_t waveSize;
+
+    if (!document || sampleIndex >= document->sampleCount || !pcmData || frameCount == 0)
+    {
+        return BAE_PARAM_ERR;
+    }
+    if (!((bitSize == 8) || (bitSize == 16)) || !((channels == 1) || (channels == 2)))
+    {
+        return BAE_PARAM_ERR;
+    }
+    if (sampledRate == 0)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    bytesPerFrame = (uint32_t)channels * ((uint32_t)bitSize / 8u);
+    if (bytesPerFrame == 0)
+    {
+        return BAE_PARAM_ERR;
+    }
+    waveSize = frameCount * bytesPerFrame;
+    if (waveSize / bytesPerFrame != frameCount)
+    {
+        return BAE_PARAM_ERR;
+    }
+
+    waveform = (GM_Waveform *)XNewPtr((int32_t)sizeof(GM_Waveform));
+    if (!waveform)
+    {
+        return BAE_MEMORY_ERR;
+    }
+    XSetMemory(waveform, sizeof(*waveform), 0);
+
+    pcmCopy = XNewPtr((int32_t)waveSize);
+    if (!pcmCopy)
+    {
+        XDisposePtr((XPTR)waveform);
+        return BAE_MEMORY_ERR;
+    }
+    XBlockMove(pcmData, pcmCopy, (int32_t)waveSize);
+
+    sample = &document->samples[sampleIndex];
+    waveform->theWaveform = (SBYTE *)pcmCopy;
+    waveform->waveFrames = frameCount;
+    waveform->waveSize = (int32_t)waveSize;
+    waveform->bitSize = bitSize;
+    waveform->channels = channels;
+    waveform->sampledRate = (int32_t)sampledRate;
+    waveform->baseMidiPitch = sample->rootKey;
+    waveform->compressionType = C_NONE;
+
+    if (startLoop < endLoop && endLoop <= frameCount)
+    {
+        waveform->startLoop = startLoop;
+        waveform->endLoop = endLoop;
+    }
+    else
+    {
+        waveform->startLoop = 0;
+        waveform->endLoop = 0;
+    }
+
+    if (sample->waveform)
+    {
+        GM_FreeWaveform(sample->waveform);
+    }
+    sample->waveform = waveform;
+
+    PV_FreeString(&sample->sourcePath);
+    sample->sourcePath = NULL;
+
+    if (sample->originalSndData)
+    {
+        XDisposePtr(sample->originalSndData);
+        sample->originalSndData = NULL;
+        sample->originalSndSize = 0;
+    }
+
+    sample->sourceCompressionType = C_NONE;
+    sample->sourceCompressionSubType = CS_DEFAULT;
+    sample->targetCompressionType = BAE_EDITOR_COMPRESSION_PCM;
+    sample->targetOpusMode = BAE_EDITOR_OPUS_MODE_AUDIO;
+
+    sample->sampleInfo.bitSize = waveform->bitSize;
+    sample->sampleInfo.channels = waveform->channels;
+    sample->sampleInfo.baseMidiPitch = sample->rootKey;
+    sample->sampleInfo.waveSize = (uint32_t)waveform->waveSize;
+    sample->sampleInfo.waveFrames = waveform->waveFrames;
+    sample->sampleInfo.startLoop = waveform->startLoop;
+    sample->sampleInfo.endLoop = waveform->endLoop;
+    sample->sampleInfo.sampledRate = (BAE_UNSIGNED_FIXED)waveform->sampledRate;
+
+    if (outSampleInfo)
+    {
+        *outSampleInfo = sample->sampleInfo;
+    }
+
+    PV_MarkDocumentDirty(document);
+    return BAE_NO_ERROR;
+}
+
 BAEResult BAERmfEditorDocument_PropagateReplacementToAsset(BAERmfEditorDocument *document,
                                                            uint32_t sourceSampleIndex)
 {
@@ -12274,6 +12450,7 @@ BAEResult BAERmfEditorDocument_GetInstrumentExtInfo(BAERmfEditorDocument const *
         outInfo->flags1 = ZBF_useSampleRate;
         outInfo->flags2 = ZBF_useSoundModifierAsRootKey;
         outInfo->midiRootKey = 60;
+        outInfo->miscParameter1 = 0;
         outInfo->miscParameter2 = 100;
         outInfo->volumeADSR.stageCount = 1;
         outInfo->volumeADSR.stages[0].level = VOLUME_RANGE;
@@ -12288,6 +12465,7 @@ BAEResult BAERmfEditorDocument_GetInstrumentExtInfo(BAERmfEditorDocument const *
     outInfo->flags2 = ext->flags2;
     outInfo->panPlacement = ext->panPlacement;
     outInfo->midiRootKey = ext->midiRootKey;
+    outInfo->miscParameter1 = ext->miscParameter1;
     outInfo->miscParameter2 = ext->miscParameter2;
     outInfo->hasDefaultMod = ext->hasDefaultMod;
     outInfo->LPF_frequency = ext->LPF_frequency;
@@ -12367,6 +12545,7 @@ BAEResult BAERmfEditorDocument_SetInstrumentExtInfo(BAERmfEditorDocument *docume
     ext->flags2 = info->flags2;
     ext->panPlacement = info->panPlacement;
     ext->midiRootKey = info->midiRootKey;
+    ext->miscParameter1 = info->miscParameter1;
     ext->miscParameter2 = info->miscParameter2;
     ext->hasDefaultMod = info->hasDefaultMod;
     ext->LPF_frequency = info->LPF_frequency;
@@ -12629,6 +12808,15 @@ BAE_BOOL BAERmfEditorDocument_RequiresZmf(BAERmfEditorDocument const *document)
                 break;
             default:
                 break;
+        }
+    }
+    for (i = 0; i < document->instrumentExtCount; ++i)
+    {
+        BAERmfEditorInstrumentExt const *ext = &document->instrumentExts[i];
+
+        if (TEST_FLAG_VALUE(ext->flags2, ZBF_advancedInterpolation))
+        {
+            return TRUE;
         }
     }
     if (document->engineConfigFlags != 0)

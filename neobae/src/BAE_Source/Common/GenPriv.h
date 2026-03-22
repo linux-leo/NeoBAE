@@ -570,6 +570,7 @@ struct GM_Voice
     XBYTE                   channels;               // mono or stereo data
     XBYTE                   sustainMode;            // sustain mode, for pedal controls
     XBYTE                   sampleAndHold;          // flag whether to sample & hold, or sample & release
+    XBYTE                   advancedInterpolation;  // use higher-resolution interpolation for this voice
     XBYTE                   processingSlice;        // if TRUE, then thread is processing slice of this instrument
     XBYTE                   avoidReverb;            // don't mix into reverb unit
     XDWORD                  largestPeak;
@@ -621,6 +622,7 @@ struct GM_SampleCacheEntry
     uint32_t   loopEnd;        // loop end frame
     char            bitSize;        // sample bit size; 8 or 16
     char            channels;       // mono or stereo; 1 or 2
+    XBYTE           sndFlags;       // XSoundHeader3 reserved2[0] flags
     int16_t       baseKey;        // base sample key
     int32_t            referenceCount; // how many references to this sample block
     void            *pSampleData;   // pointer to sample data. This may be an offset into the pMasterPtr
