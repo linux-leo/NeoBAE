@@ -33,6 +33,7 @@ ifneq ($(WASM),1)
 		DISABLE_BEATNIK_SF2_NRPN := 0
 		FIX_SPAN_DC := 1
 		CLASSIC_CHORUS := 1
+		LZMA_SUPPORT := 1
 		CREATION_API := 0
 	endif
 endif
@@ -323,11 +324,11 @@ ifeq ($(SF2_SUPPORT),1)
 		ifeq ($(WINDOWS),1)					
 			ifeq ($(BITS),32)
 				INC_PATH += -I../deps/win/FluidSynth/i686-w64-mingw32/include
-				BAE_LD_FLAGS := -L../deps/win/FluidSynth/i686-w64-mingw32/lib/
+				BAE_LD_FLAGS += -L../deps/win/FluidSynth/i686-w64-mingw32/lib/
 				BAE_LIBS += ../deps/win/FluidSynth/i686-w64-mingw32/lib/libfluidsynth-3.dll.a -Wl,-rpath,'$$ORIGIN'
 			else
 				INC_PATH += -I../deps/win/FluidSynth/x86_64-w64-mingw32/include
-				BAE_LD_FLAGS := -L../deps/win/FluidSynth/x86_64-w64-mingw32/lib/
+				BAE_LD_FLAGS += -L../deps/win/FluidSynth/x86_64-w64-mingw32/lib/
 				BAE_LIBS += ../deps/win/FluidSynth/x86_64-w64-mingw32/lib/libfluidsynth-3.dll.a -Wl,-rpath,'$$ORIGIN'
 			endif			
 		else
@@ -446,11 +447,11 @@ ifeq ($(LZMA_SUPPORT),1)
 		ifeq ($(WINDOWS),1)
 			ifeq ($(BITS),32)
 				INC_PATH += -I../deps/win/LZMA-$(LZMA_VERS)/i686-w64-mingw32/include
-				BAE_LD_FLAGS := -L../deps/win/LZMA-$(LZMA_VERS)/i686-w64-mingw32/lib/
+				BAE_LD_FLAGS += -L../deps/win/LZMA-$(LZMA_VERS)/i686-w64-mingw32/lib/
 				BAE_LIBS += ../deps/win/LZMA-$(LZMA_VERS)/i686-w64-mingw32/lib/liblzma-5.dll.a -Wl,-rpath,'$$ORIGIN'
 			else
 				INC_PATH += -I../deps/win/LZMA-$(LZMA_VERS)/x86_64-w64-mingw32/include
-				BAE_LD_FLAGS := -L../deps/win/LZMA-$(LZMA_VERS)/x86_64-w64-mingw32/lib/
+				BAE_LD_FLAGS += -L../deps/win/LZMA-$(LZMA_VERS)/x86_64-w64-mingw32/lib/
 				BAE_LIBS += ../deps/win/LZMA-$(LZMA_VERS)/x86_64-w64-mingw32/lib/liblzma-5.dll.a -Wl,-rpath,'$$ORIGIN'
 			endif	
 		else

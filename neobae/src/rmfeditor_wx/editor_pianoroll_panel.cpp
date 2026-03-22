@@ -2798,6 +2798,30 @@ private:
         int endX;
         int shadeLeft;
         int shadeRight;
+
+        if (!m_midiLoopEnabled || m_midiLoopEndTick <= m_midiLoopStartTick) {
+            return;
+        }
+        startX = TickToX(m_midiLoopStartTick);
+        endX = TickToX(m_midiLoopEndTick);
+        if (endX < visibleRect.GetLeft() - 2 || startX > visibleRect.GetRight() + 2) {
+            return;
+        }
+
+        shadeLeft = std::max(startX, kPianoRollLeftGutter);
+        shadeRight = std::max(shadeLeft + 1, endX);
+
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(wxColour(88, 180, 120, 26)));
+        dc.DrawRectangle(shadeLeft,
+                         kPianoRollTopGutter,
+                         shadeRight - shadeLeft,
+                         std::max(1, virtualSize.GetHeight() - kPianoRollTopGutter));
+    }
+
+    void DrawMidiLoopRulerOverlay(wxDC &dc, wxRect const &visibleRect, wxSize const &virtualSize) {
+        int startX;
+        int endX;
         int scrollPixelsX;
         int scrollPixelsY;
         int viewUnitsX;
@@ -2814,17 +2838,7 @@ private:
             return;
         }
 
-        shadeLeft = std::max(startX, kPianoRollLeftGutter);
-        shadeRight = std::max(shadeLeft + 1, endX);
-
-        dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.SetBrush(wxBrush(wxColour(88, 180, 120, 42)));
-        dc.DrawRectangle(shadeLeft,
-                         kPianoRollTopGutter,
-                         shadeRight - shadeLeft,
-                         std::max(1, virtualSize.GetHeight() - kPianoRollTopGutter));
-
-        dc.SetPen(wxPen(wxColour(72, 160, 105), 2));
+        dc.SetPen(wxPen(wxColour(72, 160, 105), 1));
         dc.DrawLine(startX, kPianoRollTopGutter, startX, virtualSize.GetHeight());
         dc.DrawLine(endX, kPianoRollTopGutter, endX, virtualSize.GetHeight());
 
@@ -2838,8 +2852,8 @@ private:
 
         dc.SetBrush(wxBrush(wxColour(72, 160, 105)));
         dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.DrawRectangle(startX - 3, rulerBottom - 12, 6, 10);
-        dc.DrawRectangle(endX - 3, rulerBottom - 12, 6, 10);
+        dc.DrawRectangle(startX - 4, rulerBottom - 12, 8, 10);
+        dc.DrawRectangle(endX - 4, rulerBottom - 12, 8, 10);
 
         dc.SetTextForeground(wxColour(46, 120, 79));
         dc.DrawText("Loop", std::max(kPianoRollLeftGutter + 4, startX + 6), rulerTop + 2);
@@ -3005,6 +3019,9 @@ private:
         dc.SetPen(wxPen(m_theme.gutterSeparator));
         dc.DrawLine(kPianoRollLeftGutter, visibleRect.GetTop(), kPianoRollLeftGutter, visibleRect.GetBottom());
 
+        /* Draw loop shading before notes so notes remain visually readable and editable. */
+        DrawMidiLoopOverlay(dc, visibleRect, clientSize);
+
         if (HasTrack()) {
             uint32_t noteCount;
             uint32_t noteIndex;
@@ -3082,7 +3099,7 @@ private:
             }
         }
         DrawStickyRuler(dc);
-        DrawMidiLoopOverlay(dc, visibleRect, clientSize);
+        DrawMidiLoopRulerOverlay(dc, visibleRect, clientSize);
     }
 
     void OnLeftDown(wxMouseEvent &event) {

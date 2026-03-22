@@ -9,6 +9,7 @@ VORBIS_DEC := 0
 VORBIS_ENC := 1
 FLAC_DEC := 0
 FLAC_ENC := 1
+ZMF_SUPPORT := 1
 CREATION_API := 1
 MOD2RMF := 1
 include inc/Makefile.common
