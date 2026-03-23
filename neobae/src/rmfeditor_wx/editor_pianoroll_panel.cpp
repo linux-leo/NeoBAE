@@ -66,7 +66,6 @@ struct AutomationLaneDescriptor {
     bool bipolar;
 };
 
-/* ---------- Theme palette for the piano roll grid area ---------- */
 struct PianoRollTheme {
     /* Note grid */
     wxColour whiteKeyFill;
@@ -3007,28 +3006,23 @@ private:
             laneVisibleLeft  = std::max(kPianoRollLeftGutter, visibleLeft);
             laneVisibleWidth = std::max(0, visibleRight - laneVisibleLeft);
 
-            // ---- Background (cached brush) --------------------------------
             dc.SetPen(*wxTRANSPARENT_PEN);
             dc.SetBrush(m_rc.brushAutomationBg);
             if (laneVisibleWidth > 0)
                 dc.DrawRectangle(laneVisibleLeft, laneTop,
                                  laneVisibleWidth, kAutomationLaneHeight);
 
-            // ---- Gutter background (cached brush) ------------------------
             dc.SetBrush(m_rc.brushAutomationGutter);
             dc.DrawRectangle(0, laneTop,
                              kPianoRollLeftGutter, kAutomationLaneHeight);
 
-            // ---- Bottom border (cached pen) -------------------------------
             dc.SetPen(m_rc.penAutomationBorder);
             dc.DrawLine(0, laneBottom, visibleRight, laneBottom);
 
-            // ---- Lane label ------------------------------------------------
             dc.SetTextForeground(m_theme.automationLaneLabel);
             dc.DrawText(lane.label, 8,
                         laneTop + (kAutomationLaneHeight / 2) - 8);
 
-            // ---- Center line for bipolar lanes ----------------------------
             if (lane.bipolar) {
                 dc.SetPen(wxPen(m_theme.automationLaneCenterLine));
                 dc.DrawLine(kPianoRollLeftGutter,
@@ -3500,11 +3494,9 @@ private:
         const int automGap   = kAutomationLaneGap;
         const int gutterW   = leftGutter;
 
-        // ----- Background (white‑key colour) ---------------------------------
         dc.SetBackground(m_rc.brushWhiteKey);
         dc.Clear();
 
-        // ----- Piano‑roll keys (white/black) --------------------------------
         const wxSize clientSize = GetVirtualSize();
         const int viewLeft   = GetViewStartX();
         const int viewTop    = GetViewStartY();
@@ -3539,7 +3531,6 @@ private:
             }
         }
 
-        // ----- Grid lines (quarter / sub‑beat) -----------------------------
         const uint32_t quarterTicks = tpq;
         const uint32_t stepTicks    = std::max<uint32_t>(1, quarterTicks / 4);
         const uint32_t tickStart    = (XToTick(viewLeft) / stepTicks) * stepTicks;
@@ -3556,16 +3547,13 @@ private:
             if (tickEnd - t < stepTicks) break;
         }
 
-        // ----- Gutter separator -------------------------------------------
         dc.SetPen(m_rc.penGutterSeparator);
         dc.DrawLine(gutterW, viewTop, gutterW, viewBottom);
 
-        // ----- MIDI‑loop shading (drawn before notes) ----------------------
         DrawMidiLoopOverlay(dc, wxRect(viewLeft, viewTop,
                                         viewRight - viewLeft, viewBottom - viewTop),
                             clientSize);
 
-        // ----- Notes -------------------------------------------------------
         if (HasTrack()) {
             const NoteTrackCache *cache = GetNoteTrackCache();
             if (cache) {
@@ -3593,12 +3581,10 @@ private:
             }
         }
 
-        // ----- Automation lanes --------------------------------------------
         DrawAutomationLanes(dc, clientSize,
                             wxRect(viewLeft, viewTop,
                                    viewRight - viewLeft, viewBottom - viewTop));
 
-        // ----- Play‑head ---------------------------------------------------
         if (m_showPlayhead) {
             const int phX = TickToX(m_playheadTick);
             if (phX >= viewLeft - 2 && phX <= viewRight + 2) {
@@ -3607,7 +3593,6 @@ private:
             }
         }
 
-        // ----- Selection box ------------------------------------------------
         if (m_selectBoxActive) {
             const wxRect sel = NormalizeRect(m_selectBoxStart, m_selectBoxCurrent);
             dc.SetBrush(m_rc.brushSelectionBox);
@@ -3615,7 +3600,6 @@ private:
             dc.DrawRectangle(sel);
         }
 
-        // ----- Timeline end marker -----------------------------------------
         {
             const uint32_t endTick = m_draggingTimelineEnd ? m_timelineEndDragTick
                                                            : GetDocumentEndTick();
