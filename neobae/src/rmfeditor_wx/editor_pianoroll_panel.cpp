@@ -66,6 +66,7 @@ struct AutomationLaneDescriptor {
     bool bipolar;
 };
 
+/* ---------- Theme palette for the piano roll grid area ---------- */
 struct PianoRollTheme {
     /* Note grid */
     wxColour whiteKeyFill;
