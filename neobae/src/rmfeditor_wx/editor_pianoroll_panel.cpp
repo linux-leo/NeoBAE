@@ -252,27 +252,22 @@ struct NoteTrackCache {
 };
 
 struct RenderCache {
-    // Notes
     wxPen   penNoteNormal;
     wxPen   penNoteSelected;
     wxBrush brushNoteNormal;
     wxBrush brushNoteSelected;
 
-    // Automation lanes
     wxPen   penAutomationBorder;
     wxPen   penAutomationSelectedBorder;
     wxBrush brushAutomationBg;
     wxBrush brushAutomationGutter;
 
-    // Timeline end marker
     wxPen   penTimelineEnd;
     wxBrush brushTimelineEnd;
 
-    // MIDI‑loop overlay
     wxPen   penLoopLine;
     wxBrush brushLoopFill;
 
-    // ---- NEW cached objects -------------------------------------------------
     wxBrush brushWhiteKey;
     wxBrush brushBlackKey;
     wxPen   penNoteSeparator;
@@ -3651,10 +3646,7 @@ private:
             }
         }
 
-        // ----- Sticky ruler ------------------------------------------------
         DrawStickyRuler(dc);
-
-        // ----- MIDI‑loop ruler overlay --------------------------------------
         DrawMidiLoopRulerOverlay(dc,
                                  wxRect(viewLeft, viewTop,
                                         viewRight - viewLeft, viewBottom - viewTop),
